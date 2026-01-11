@@ -1,0 +1,8 @@
+if(USE_INTERNAL_LIBS)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/thirdparty/yaml-cpp)
+    set(YAML_CPP_LIBRARIES yaml-cpp)
+    set(YAML_CPP_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/thirdparty/yaml-cpp/include)
+else()
+    find_package(yaml-cpp REQUIRED)
+    set(YAML_CPP_LIBRARIES yaml-cpp)
+endif()
