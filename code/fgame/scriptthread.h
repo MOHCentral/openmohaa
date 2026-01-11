@@ -334,9 +334,7 @@ public:
     void StringBytesCopy(Event *ev);
     void Md5File(Event *ev);
     void Md5String(Event *ev);
-    void Md5String2(Event *ev);
     void Sha256String(Event *ev);
-    void FileChecksum(Event *ev);
     void RegisterEvent(Event *ev);
     void RestoreSound(Event *ev);
     void RemoveArchivedClass(Event *ev);
