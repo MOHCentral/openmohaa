@@ -712,9 +712,22 @@ void G_ScriptCommand_f(void)
 
     if (label) {
         Event *ev = new Event(cmd);
+
+        ScriptVariable array;
+        ScriptVariable ref;
+        ref.setRefValue(&array);
+
         for (int i = 1; i < argc; i++) {
-            ev->AddToken(gi.Argv(i));
+            ScriptVariable index;
+            ScriptVariable value;
+
+            index.setIntValue(i);
+            value.setStringValue(gi.Argv(i));
+
+            ref.setArrayAt(index, value);
         }
+
+        ev->AddValue(array);
 
         label->Execute(NULL, ev);
         delete ev;
