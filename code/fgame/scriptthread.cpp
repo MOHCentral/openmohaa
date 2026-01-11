@@ -45,6 +45,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "slre.h"
 
 #include "md5.h"
+#include "../qcommon/crypto/picosha2.h"
 
 #ifdef WIN32
 #    include <direct.h>
@@ -2012,6 +2013,33 @@ Event EV_ScriptThread_Md5String
     "generates MD5 hash of given text",
     EV_RETURN
 );
+Event EV_ScriptThread_Md5String2
+(
+    "md5_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates MD5 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_Sha256String
+(
+    "sha256_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates SHA256 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_FileChecksum
+(
+    "file_checksum",
+    EV_DEFAULT,
+    "ss",
+    "path algorithm",
+    "generates hash checksum of given file. algorithm can be 'md5' or 'sha256'",
+    EV_RETURN
+);
 Event EV_ScriptThread_GetEntity
 (
     "getentity",
@@ -2275,6 +2303,9 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetTanH,                 &ScriptThread::EventTanH               },
     {&EV_ScriptThread_strncpy,                 &ScriptThread::StringBytesCopy         },
     {&EV_ScriptThread_Md5String,               &ScriptThread::Md5String               },
+    {&EV_ScriptThread_Md5String2,              &ScriptThread::Md5String2              },
+    {&EV_ScriptThread_Sha256String,            &ScriptThread::Sha256String            },
+    {&EV_ScriptThread_FileChecksum,            &ScriptThread::FileChecksum            },
     {&EV_ScriptThread_GetEntity,               &ScriptThread::GetEntByEntnum          },
     {&EV_ScriptThread_TypeOf,                  &ScriptThread::TypeOfVariable          },
     {&EV_ScriptThread_RegisterEv,              &ScriptThread::RegisterEvent           },
@@ -7077,6 +7108,101 @@ void ScriptThread::Md5String(Event *ev)
     }
 
     ev->AddString(hash);
+}
+
+void ScriptThread::Md5String2(Event *ev)
+{
+    md5_state_t state;
+    md5_byte_t  digest[16];
+    char hash[33];
+    int di;
+    str text;
+
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for md5_string!\n");
+    }
+
+    text = ev->GetString(1);
+
+    md5_init(&state);
+    md5_append(&state, (const md5_byte_t *)text.c_str(), text.length());
+    md5_finish(&state, digest);
+
+    for (di = 0; di < 16; ++di) {
+        Com_sprintf(hash + di * 2, sizeof(hash) - di * 2, "%02x", digest[di]);
+    }
+
+    ev->AddString(hash);
+}
+
+void ScriptThread::Sha256String(Event *ev)
+{
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for sha256_string!\n");
+    }
+
+    std::string text = ev->GetString(1);
+    std::string hash;
+
+    picosha2::hash256_hex_string(text, hash);
+
+    ev->AddString(hash.c_str());
+}
+
+void ScriptThread::FileChecksum(Event *ev)
+{
+    if (ev->NumArgs() != 2) {
+        throw ScriptException("Usage: file_checksum <path> <algorithm>");
+    }
+
+    str path = ev->GetString(1);
+    str algorithm = ev->GetString(2);
+
+    fileHandle_t f;
+    long len = gi.FS_FOpenFile(path, &f, qfalse, qtrue); // Not Unique (allow PK3), Quiet
+
+    if (!f || len == -1) {
+        throw ScriptException("Could not open file %s for checksum\n", path.c_str());
+    }
+
+    byte buffer[4096];
+    size_t bytesRead;
+
+    if (algorithm == "md5") {
+        md5_state_t state;
+        md5_byte_t digest[16];
+        char hash[33];
+        int di;
+
+        md5_init(&state);
+
+        while ((bytesRead = gi.FS_Read(buffer, sizeof(buffer), f)) > 0) {
+            md5_append(&state, (const md5_byte_t *)buffer, bytesRead);
+        }
+
+        md5_finish(&state, digest);
+        gi.FS_FCloseFile(f);
+
+        for (di = 0; di < 16; ++di) {
+            Com_sprintf(hash + di * 2, sizeof(hash) - di * 2, "%02x", digest[di]);
+        }
+        ev->AddString(hash);
+    } else if (algorithm == "sha256") {
+        picosha2::hash256_one_by_one hasher;
+
+        while ((bytesRead = gi.FS_Read(buffer, sizeof(buffer), f)) > 0) {
+            hasher.process(buffer, buffer + bytesRead);
+        }
+        hasher.finish();
+
+        gi.FS_FCloseFile(f);
+
+        std::string hash = picosha2::get_hash_hex_string(hasher);
+        ev->AddString(hash.c_str());
+    } else {
+        gi.FS_FCloseFile(f);
+        throw ScriptException("Unknown algorithm '%s'. Supported: md5, sha256", algorithm.c_str());
+    }
 }
 
 scriptedEvType_t EventNameToType(const char *eventname, char *fullname)
