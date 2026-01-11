@@ -762,6 +762,7 @@ void ScriptMaster::Reset(qboolean samemap)
 
         CloseGameScript();
         StringDict.clear();
+        m_scriptCmds.clear();
         InitConstStrings();
     }
 
