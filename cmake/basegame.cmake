@@ -91,6 +91,14 @@ if(BUILD_GAME_LIBRARIES)
     target_compile_definitions( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE GAME_DLL WITH_SCRIPT_ENGINE ARCHIVE_SUPPORTED)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE RecastNavigation::Detour RecastNavigation::DetourCrowd RecastNavigation::Recast)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${COMMON_LIBRARIES})
+
+    if(USE_HTTP)
+        find_package(CURL REQUIRED)
+        target_link_libraries(${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${CURL_LIBRARIES})
+        target_include_directories(${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${CURL_INCLUDE_DIRS})
+        target_compile_definitions(${GAME_MODULE_BINARY_BASEGAME} PRIVATE USE_HTTP)
+    endif()
+
     set_target_properties(      ${GAME_MODULE_BINARY_BASEGAME} PROPERTIES OUTPUT_NAME ${GAME_MODULE_BINARY})
     set_output_dirs(            ${GAME_MODULE_BINARY_BASEGAME} SUBDIRECTORY ${BASEGAME})
 

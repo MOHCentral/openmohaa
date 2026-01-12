@@ -83,6 +83,11 @@ protected:
     void        RegisterAliasAndCache(Event *ev);
     void        RegisterAlias(Event *ev);
 
+#ifdef USE_HTTP
+    void        CurlGet(Event *ev);
+    void        CurlPost(Event *ev);
+#endif
+
 public:
     CLASS_PROTOTYPE(ScriptMaster);
 
