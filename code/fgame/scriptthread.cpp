@@ -29,6 +29,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "g_spawn.h"
 #include "level.h"
 #include "game.h"
+#include "gamecmds.h"
 #include "camera.h"
 #include "dm_manager.h"
 #include "hud.h"
@@ -4810,10 +4811,14 @@ void ScriptThread::SetTimer(Event *ev)
 void ScriptThread::EventRegisterCommand(Event *ev)
 {
     ScriptThreadLabel scriptLabel;
+    str commandName;
 
     scriptLabel.SetThread(ev->GetValue(2));
 
-    m_scriptCmds.addKeyValue(ev->GetString(1)) = scriptLabel;
+    commandName = ev->GetString(1);
+    m_scriptCmds.addKeyValue(commandName) = scriptLabel;
+
+    gi.AddCommand(commandName.c_str(), G_ScriptCommand_f);
 }
 
 void ScriptThread::CreateHUD(Event *ev)

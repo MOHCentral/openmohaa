@@ -35,6 +35,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "playerbot.h"
 #include "consoleevent.h"
 #include "g_bot.h"
+#include "scriptmaster.h"
 
 typedef struct {
     const char *command;
@@ -697,6 +698,40 @@ qboolean G_RemoveBotCommand(gentity_t *ent)
 
     gi.cvar_set("sv_numbots", va("%d", totalnumbots));
     return qtrue;
+}
+
+void G_ScriptCommand_f(void)
+{
+    int argc = gi.Argc();
+    if (argc < 1) {
+        return;
+    }
+
+    const char *cmd = gi.Argv(0);
+    ScriptThreadLabel *label = m_scriptCmds.findKeyValue(cmd);
+
+    if (label) {
+        Event *ev = new Event(cmd);
+
+        ScriptVariable array;
+        ScriptVariable ref;
+        ref.setRefValue(&array);
+
+        for (int i = 1; i < argc; i++) {
+            ScriptVariable index;
+            ScriptVariable value;
+
+            index.setIntValue(i);
+            value.setStringValue(gi.Argv(i));
+
+            ref.setArrayAt(index, value);
+        }
+
+        ev->AddValue(array);
+
+        label->Execute(NULL, ev);
+        delete ev;
+    }
 }
 
 #ifdef _DEBUG
