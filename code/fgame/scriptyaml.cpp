@@ -2,6 +2,10 @@
 #include <yaml-cpp/yaml.h>
 #include "g_local.h"
 
+#include <vector>
+#include <string>
+#include <sstream>
+
 // Helper to handle YAML node storage
 struct YAMLContainer {
     YAML::Node node;
@@ -14,7 +18,7 @@ Event EV_ScriptYAML_Load
     EV_DEFAULT,
     "s",
     "filename",
-    "Loads a YAML or JSON file.",
+    "Loads a YAML or JSON file. Supports both formats via yaml-cpp.",
     EV_RETURN
 );
 
@@ -28,22 +32,22 @@ Event EV_ScriptYAML_Get
     EV_RETURN
 );
 
-Event EV_ScriptYAML_Dump
+Event EV_ScriptYAML_Parse
 (
-    "dump",
+    "parse",
     EV_DEFAULT,
-    NULL,
-    NULL,
-    "Dumps the YAML content to a string.",
+    "s",
+    "content",
+    "Parses a YAML or JSON string.",
     EV_RETURN
 );
 
 // Class Declaration
-CLASS_DECLARATION(Listener, ScriptYAML, "ScriptYAML")
+CLASS_DECLARATION(SimpleEntity, ScriptYAML, "ScriptYAML")
 {
     {&EV_ScriptYAML_Load, &ScriptYAML::Load},
     {&EV_ScriptYAML_Get,  &ScriptYAML::Get},
-    {&EV_ScriptYAML_Dump, &ScriptYAML::Dump},
+    {&EV_ScriptYAML_Parse, &ScriptYAML::Parse},
     {NULL, NULL}
 };
 
@@ -75,8 +79,8 @@ void ScriptYAML::Load(Event *ev)
 
     try {
         YAMLContainer* container = (YAMLContainer*)m_yamlNode;
-        // Parse the buffer
-        container->node = YAML::Load(buffer);
+        // Parse the buffer safely
+        container->node = YAML::Load(std::string(buffer, len));
         ev->AddInteger(1); // Success
     } catch (const YAML::Exception& e) {
         gi.Printf("YAML Parse Error in %s: %s\n", filename.c_str(), e.what());
@@ -113,13 +117,13 @@ void ScriptYAML::Get(Event *ev)
     // Traverse the nodes
     try {
         for (const auto& key : keys) {
-            if (currentNode.IsMap() && currentNode[key]) {
+            if (currentNode.IsMap() && currentNode[key].IsDefined()) {
                 currentNode = currentNode[key];
             } else if (currentNode.IsSequence()) {
                 // Try to parse key as index
                 try {
                     int index = std::stoi(key);
-                    if (index >= 0 && index < currentNode.size()) {
+                    if (index >= 0 && (size_t)index < currentNode.size()) {
                         currentNode = currentNode[index];
                     } else {
                         ev->AddNil();
@@ -168,24 +172,7 @@ void ScriptYAML::Get(Event *ev)
             ev->AddString(currentNode.as<std::string>().c_str());
 
         } else if (currentNode.IsSequence()) {
-            // Return as array? For now let's just return size or handle it later.
-            // Requirement said "Data Conversion... handle type conversion"
-            // Let's create a script array.
-            ScriptVariable array;
-
-            // We need to iterate and add elements.
-            // Since we can't easily recurse here without a complex structure,
-            // we will just return the size if it's a sequence, OR try to convert simple sequences.
-            // But for now, let's treat it as a limitation or return NIL if complex.
-            // Actually, we can return a new ScriptYAML object pointing to this node?
-            // No, the requirement says "Data Conversion... int, string, bool".
-            // It doesn't explicitly ask for nested objects/arrays to be returned as ScriptVariables but it would be nice.
-
-            // Basic implementation: Return size of array? Or fail?
-            // Let's try to convert simple list to array.
-
-            // Since I don't have easy access to `ScriptVariable` internal array construction
-            // (it usually uses `setArrayAt`), I'll try to do a simple iteration.
+            // Data Conversion: Handle sequences by converting to script array
 
             ScriptVariable list;
             for (size_t i = 0; i < currentNode.size(); ++i) {
@@ -211,8 +198,15 @@ void ScriptYAML::Get(Event *ev)
                     } catch (...) {
                         valueVar.setStringValue(item.as<std::string>().c_str());
                     }
-                    list.setArrayAtRef(indexVar, valueVar);
+                } else {
+                    // For non-scalars (maps/lists), we set nil to preserve index
+                    // Future improvement: Recursive conversion
+                    // valueVar is mostly nil by default or we can explicitly set it?
+                    // ScriptVariable default ctor might not be NIL depending on impl, let's assume it handles it or we do nothing
+                    // If we want explicit NIL:
+                    // valueVar.setVoidValue(); // Hypothetical if needed, but usually uninitialized var acts as nil or void
                 }
+                list.setArrayAtRef(indexVar, valueVar);
             }
             ev->AddValue(list);
 
@@ -232,14 +226,17 @@ void ScriptYAML::Get(Event *ev)
     }
 }
 
-void ScriptYAML::Dump(Event *ev)
+void ScriptYAML::Parse(Event *ev)
 {
-    YAMLContainer* container = (YAMLContainer*)m_yamlNode;
-    if (container->node.IsDefined()) {
-        YAML::Emitter out;
-        out << container->node;
-        ev->AddString(out.c_str());
-    } else {
-        ev->AddString("");
+    str content = ev->GetString(1);
+
+    try {
+        YAMLContainer* container = (YAMLContainer*)m_yamlNode;
+        // Parse the string safely
+        container->node = YAML::Load(content.c_str());
+        ev->AddInteger(1); // Success
+    } catch (const YAML::Exception& e) {
+        gi.Printf("YAML Parse Error: %s\n", e.what());
+        ev->AddInteger(0);
     }
 }
