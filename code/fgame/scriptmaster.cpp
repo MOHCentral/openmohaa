@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "g_local.h"
 #include "scriptmaster.h"
+#include "dapserver.h"
 #include "scriptthread.h"
 #include "scriptclass.h"
 #include "gamescript.h"
@@ -441,6 +442,7 @@ ScriptMaster::~ScriptMaster()
     g_CurlWorker.Stop();
     curl_global_cleanup();
 #endif
+    g_DAPServer.Stop();
     Reset(false);
 }
 
@@ -803,6 +805,7 @@ ScriptMaster::ScriptMaster()
     curl_global_init(CURL_GLOBAL_ALL);
     g_CurlWorker.Start();
 #endif
+    g_DAPServer.Start(4711);
 }
 
 void ScriptMaster::Reset(qboolean samemap)
@@ -845,6 +848,8 @@ void ScriptMaster::ExecuteRunning(void)
     int startMs;
     str fileName;
     str sourcePosString;
+
+    g_DAPServer.RunFrame();
 
 #ifdef USE_HTTP
     // Process Curl Results

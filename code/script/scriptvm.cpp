@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../fgame/g_local.h"
 #include "../fgame/scriptmaster.h"
+#include "../fgame/dapserver.h"
 #include "../fgame/scriptthread.h"
 #include "scriptclass.h"
 #include "scriptvm.h"
@@ -355,6 +356,8 @@ ScriptVM::ScriptVM(ScriptClass *scriptClass, unsigned char *pCodePos, ScriptThre
 */
 ScriptVM::~ScriptVM()
 {
+    g_DAPServer.UnregisterVM(this);
+
     fastEvent.data     = m_pOldData;
     fastEvent.dataSize = m_OldDataSize;
 
@@ -1100,6 +1103,11 @@ void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
 					break;
 				}
 				*/
+            }
+
+            if (g_DAPServer.CheckDebugHook(this)) {
+                // Execution paused by debugger
+                return;
             }
 
             opcode = m_CodePos++;
