@@ -2123,6 +2123,27 @@ Event EV_ScriptThread_FS_OpenAppend
     EV_RETURN
 );
 
+#ifdef USE_HTTP
+Event EV_ScriptThread_CurlGet
+(
+    "curl_get",
+    EV_DEFAULT,
+    "ss",
+    "url callback_label",
+    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code).",
+    EV_NORMAL
+);
+Event EV_ScriptThread_CurlPost
+(
+    "curl_post",
+    EV_DEFAULT,
+    "sss",
+    "url post_data callback_label",
+    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code).",
+    EV_NORMAL
+);
+#endif
+
 CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetCvar,                 &ScriptThread::Getcvar                 },
     {&EV_ScriptThread_GetRandomFloat,          &ScriptThread::GetRandomFloat          },
@@ -2358,6 +2379,10 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_FS_OpenRead,             &ScriptThread::FS_OpenRead             },
     {&EV_ScriptThread_FS_OpenWrite,            &ScriptThread::FS_OpenWrite            },
     {&EV_ScriptThread_FS_OpenAppend,           &ScriptThread::FS_OpenAppend           },
+#ifdef USE_HTTP
+    {&EV_ScriptThread_CurlGet,                 &ScriptThread::CurlGet                 },
+    {&EV_ScriptThread_CurlPost,                &ScriptThread::CurlPost                },
+#endif
     {NULL,                                     NULL                                   }
 };
 
@@ -4810,15 +4835,19 @@ void ScriptThread::SetTimer(Event *ev)
 
 void ScriptThread::EventRegisterCommand(Event *ev)
 {
-    ScriptThreadLabel scriptLabel;
+    ScriptThreadLabel label;
     str commandName;
 
-    scriptLabel.SetThread(ev->GetValue(2));
-
     commandName = ev->GetString(1);
-    m_scriptCmds.addKeyValue(commandName) = scriptLabel;
-
-    gi.AddCommand(commandName.c_str(), G_ScriptCommand_f);
+    
+    // Set the script label using current script context
+    label.SetThread(ev->GetValue(2));
+    
+    // Store in ScriptMaster's command map
+    Director.m_scriptCmds.addKeyValue(commandName) = label;
+    
+    // Register command so it's recognized by the engine
+    gi.AddCommand(commandName.c_str(), NULL);
 }
 
 void ScriptThread::CreateHUD(Event *ev)
@@ -7490,6 +7519,27 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
     file = new FSFile(f);
     ev->AddListener(file);
 }
+
+#ifdef USE_HTTP
+void ScriptThread::CurlGet(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
+    newEvent->AddString(ev->GetString(1));
+    newEvent->AddString(ev->GetString(2));
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::CurlPost(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
+    newEvent->AddString(ev->GetString(1));
+    newEvent->AddString(ev->GetString(2));
+    newEvent->AddString(ev->GetString(3));
+    Director.ProcessEvent(newEvent);
+}
+#endif
 
 CLASS_DECLARATION(Listener, OSFile, NULL) {
     {NULL, NULL}

@@ -336,6 +336,11 @@ dtiki_t *TIKI_LoadTikiModel(dtikianim_t *tikianim, const char *name, con_map<str
         return NULL;
     }
 
+    if (temp_tiki->numMeshes < 0 || temp_tiki->num_surfaces < 0) {
+        TIKI_Error("TIKI_LoadTikiModel: invalid mesh or surface count in %s\n", name);
+        return NULL;
+    }
+
     defsize = sizeof(dtiki_t) - sizeof(tiki->mesh);
     defsize += temp_tiki->numMeshes * sizeof(short);
     defsize += strlen(name) + 1;
@@ -343,6 +348,9 @@ dtiki_t *TIKI_LoadTikiModel(dtikianim_t *tikianim, const char *name, con_map<str
     defsize += temp_tiki->num_surfaces * sizeof(dtikisurface_t);
 
     tiki = (dtiki_t *)TIKI_Alloc(defsize);
+    if (!tiki) {
+        return NULL;
+    }
     memset(tiki, 0, defsize);
 
     start_ptr = (byte *)tiki;

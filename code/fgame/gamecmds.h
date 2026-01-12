@@ -34,7 +34,6 @@ qboolean G_ProcessClientCommand(gentity_t *ent);
 // Added in OPM
 void G_CreateMaster(const char* prefix, class Listener* master);
 Listener* G_FindMaster(const char* command);
-void G_ScriptCommand_f(void);
 //===============
 
 void     G_Say(gentity_t *ent, qboolean team, qboolean arg0);

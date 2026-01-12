@@ -880,6 +880,23 @@ bool GameScript::ScriptCheck(void)
     return false;
 }
 
+const char* GameScript::GetLocalVarName(unsigned char* codePos, int stackOffset)
+{
+    // Search debug symbol table for matching variable
+    for (int i = 1; i <= m_DebugLocalVars.NumObjects(); i++) {
+        const DebugLocalVar& var = m_DebugLocalVars.ObjectAt(i);
+        
+        if (var.stackOffset == stackOffset) {
+            // Check if codePos is within the variable's scope
+            if (codePos >= var.startPos && (var.endPos == nullptr || codePos < var.endPos)) {
+                return Director.GetString(var.name);
+            }
+        }
+    }
+    
+    return nullptr; // Not found
+}
+
 ScriptThreadLabel::ScriptThreadLabel()
 {
     m_Script = NULL;

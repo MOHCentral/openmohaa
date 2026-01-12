@@ -54,6 +54,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "portableturret.h"
 #include "fixedturret.h"
 #include "clientvote.h"
+#include "g_scriptevents.h"
 
 const Vector power_color(0.0, 1.0, 0.0);
 const Vector acolor(1.0, 1.0, 1.0);
@@ -2050,6 +2051,12 @@ Player::Player()
 
     m_iInstantMessageTime = 0;
     m_iTextChatTime       = 0;
+
+    // Distance tracking initialization
+    m_fDistanceWalked   = 0.0f;
+    m_fDistanceSprinted = 0.0f;
+    m_fDistanceSwam     = 0.0f;
+    m_fDistanceDriven   = 0.0f;
 
     voteUpload = NULL;
     //====
@@ -9845,7 +9852,10 @@ void Player::ArmorDamage(Event *ev)
     scriptDelegate_damage.Trigger(this, *event);
     scriptedEvents[SE_DAMAGE].Trigger(event);
 
-    G_ScriptEvent("player_damage", this, "efi", attacker, damage, mod);
+    // Extract attacker and damage for G_ScriptEvent
+    Entity *scriptEventAttacker = ev->GetEntity(1);
+    float scriptEventDamage = ev->GetFloat(2);
+    G_ScriptEvent("player_damage", this, "efi", scriptEventAttacker, scriptEventDamage, mod);
 }
 
 void Player::Disconnect(void)

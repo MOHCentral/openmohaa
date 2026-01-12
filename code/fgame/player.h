@@ -391,6 +391,12 @@ public:
 private:
     int m_iInstantMessageTime;
     int m_iTextChatTime;
+    
+    // Distance tracking for player statistics
+    float m_fDistanceWalked;
+    float m_fDistanceSprinted;
+    float m_fDistanceSwam;
+    float m_fDistanceDriven;
 
 public:
     qboolean CondTrue(Conditional& condition);

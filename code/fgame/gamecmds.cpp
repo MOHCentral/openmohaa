@@ -36,6 +36,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "consoleevent.h"
 #include "g_bot.h"
 #include "scriptmaster.h"
+#include "scriptthread.h"
+#include "../script/scriptvariable.h"
 
 typedef struct {
     const char *command;
@@ -193,6 +195,41 @@ qboolean G_ProcessClientCommand(gentity_t *ent)
         if (!Q_stricmp(cmd, cmds->command)) {
             return cmds->func(ent);
         }
+    }
+
+    // Check for custom commands registered via registercmd
+    ScriptThreadLabel *label = Director.m_scriptCmds.findKeyValue(cmd);
+    if (label && label->IsSet()) {
+        ScriptThread *thread;
+        ScriptVariable *parms;
+        int parmCount;
+        
+        // Create thread from the registered label
+        thread = label->Create(ent->entity);
+        if (!thread) {
+            gi.DPrintf("Failed to create thread for command '%s'\n", cmd);
+            return qtrue;
+        }
+        
+        // Build parameter array: [player_entity, arg1, arg2, ...]
+        n = gi.Argc();
+        parmCount = n; // Total: entity + (n-1) args
+        parms = new ScriptVariable[parmCount];
+        
+        // First parameter: player entity
+        parms[0].setListenerValue(ent->entity);
+        
+        // Remaining parameters: command arguments
+        for (i = 1; i < n; i++) {
+            parms[i].setStringValue(gi.Argv(i));
+        }
+        
+        // Execute thread with parameters
+        thread->Execute(parms, parmCount);
+        
+        // Cleanup
+        delete[] parms;
+        return qtrue;
     }
 
     if (Event::Exists(cmd)) {
@@ -698,40 +735,6 @@ qboolean G_RemoveBotCommand(gentity_t *ent)
 
     gi.cvar_set("sv_numbots", va("%d", totalnumbots));
     return qtrue;
-}
-
-void G_ScriptCommand_f(void)
-{
-    int argc = gi.Argc();
-    if (argc < 1) {
-        return;
-    }
-
-    const char *cmd = gi.Argv(0);
-    ScriptThreadLabel *label = m_scriptCmds.findKeyValue(cmd);
-
-    if (label) {
-        Event *ev = new Event(cmd);
-
-        ScriptVariable array;
-        ScriptVariable ref;
-        ref.setRefValue(&array);
-
-        for (int i = 1; i < argc; i++) {
-            ScriptVariable index;
-            ScriptVariable value;
-
-            index.setIntValue(i);
-            value.setStringValue(gi.Argv(i));
-
-            ref.setArrayAt(index, value);
-        }
-
-        ev->AddValue(array);
-
-        label->Execute(NULL, ev);
-        delete ev;
-    }
 }
 
 #ifdef _DEBUG

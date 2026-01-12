@@ -356,6 +356,11 @@ public:
     void FS_OpenRead(Event *ev);
     void FS_OpenWrite(Event *ev);
     void FS_OpenAppend(Event *ev);
+
+#ifdef USE_HTTP
+    void CurlGet(Event *ev);
+    void CurlPost(Event *ev);
+#endif
 };
 
 class OSFile : public Listener

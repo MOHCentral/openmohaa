@@ -791,12 +791,19 @@ void DAPServer::HandleScopes(const json& req) {
         return;
     }
 
+    // Get frameId from request
+    int frameId = 0;
+    if (req["arguments"].contains("frameId")) {
+        frameId = req["arguments"]["frameId"];
+    }
+
     json scopes = json::array();
 
     {
         json scope;
         scope["name"] = "Locals";
-        scope["variablesReference"] = 1; // Locals
+        // Encode frameId into the variablesReference: 1000 + frameId
+        scope["variablesReference"] = 1000 + frameId; 
         scope["expensive"] = false;
         scopes.push_back(scope);
     }
@@ -830,12 +837,12 @@ void DAPServer::HandleScopes(const json& req) {
 int DAPServer::GetVariableReference(ScriptVariable* var) {
     std::lock_guard<std::mutex> lock(m_VarLock);
     m_VariableReferences.push_back(var);
-    return m_VariableReferences.size() + 1000; // Offset dynamic refs
+    return m_VariableReferences.size() + 2000; // Offset dynamic refs (2000+ for arrays/objects)
 }
 
 ScriptVariable* DAPServer::GetVariableFromReference(int ref) {
     std::lock_guard<std::mutex> lock(m_VarLock);
-    int idx = ref - 1000 - 1;
+    int idx = ref - 2000 - 1;
     if (idx >= 0 && idx < (int)m_VariableReferences.size()) {
         return m_VariableReferences[idx];
     }
@@ -854,13 +861,87 @@ void DAPServer::HandleVariables(const json& req) {
         }
     }
 
-    if (!pausedVM && variablesReference <= 4) {
+    if (!pausedVM && variablesReference <= 2000) {
         SendResponse(req, json::object(), false, "No paused thread");
         return;
     }
 
-    if (variablesReference > 1000) {
-        // Variable inspection
+    // Handle local variables (1000-1999 range encodes frameId)
+    if (variablesReference >= 1000 && variablesReference < 2000) {
+        int frameId = variablesReference - 1000;
+        
+        ScriptVariable* localStart = nullptr;
+        ScriptVariable* localEnd = nullptr;
+        
+        if (frameId == 0) {
+            // Current frame - use current stack
+            localStart = pausedVM->m_VMStack.localStack;
+            localEnd = pausedVM->m_VMStack.pTop;
+        } else {
+            // Previous frame - use call stack
+            int callStackIdx = pausedVM->callStack.NumObjects() - frameId + 1;
+            if (callStackIdx >= 1 && callStackIdx <= pausedVM->callStack.NumObjects()) {
+                ScriptCallStack* call = pausedVM->callStack.ObjectAt(callStackIdx);
+                localStart = call->localStack;
+                localEnd = call->pTop;
+            }
+        }
+        
+        if (localStart && localEnd) {
+            int idx = 0;
+            ScriptVariable* current = localStart;
+            GameScript* script = pausedVM->GetScript();
+            unsigned char* codePos = (frameId == 0) ? pausedVM->m_CodePos : 
+                                      pausedVM->callStack.ObjectAt(pausedVM->callStack.NumObjects() - frameId + 1)->codePos;
+            
+            while (current < localEnd) {
+                json var;
+                
+                // Try to get variable name from debug symbol table
+                const char* varName = nullptr;
+                if (script && codePos) {
+                    varName = script->GetLocalVarName(codePos, idx);
+                }
+                
+                if (varName) {
+                    var["name"] = varName;
+                } else {
+                    var["name"] = "local_" + std::to_string(idx);
+                }
+                
+                // Get serialized variable with type info
+                json ser = SerializeVariable(current);
+                var["value"] = ser["value"];
+                
+                // Add type information
+                std::string typeStr = "";
+                switch (current->type) {
+                    case VARIABLE_NONE: typeStr = "none"; break;
+                    case VARIABLE_STRING: typeStr = "string"; break;
+                    case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
+                    case VARIABLE_INTEGER: typeStr = "int"; break;
+                    case VARIABLE_FLOAT: typeStr = "float"; break;
+                    case VARIABLE_VECTOR: typeStr = "vector"; break;
+                    case VARIABLE_ARRAY: typeStr = "array"; break;
+                    case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
+                    case VARIABLE_LISTENER: typeStr = "listener"; break;
+                    default: typeStr = "type_" + std::to_string(current->type); break;
+                }
+                var["type"] = typeStr;
+                
+                if (ser.contains("variablesReference")) {
+                    var["variablesReference"] = ser["variablesReference"];
+                } else {
+                    var["variablesReference"] = 0;
+                }
+                
+                variables.push_back(var);
+                current++;
+                idx++;
+            }
+        }
+    } else if (variablesReference > 2000) {
+        // Variable inspection (arrays, etc.)
         ScriptVariable* var = GetVariableFromReference(variablesReference);
         if (var) {
             if (var->type == VARIABLE_ARRAY && var->m_data.arrayValue) {
@@ -902,70 +983,6 @@ void DAPServer::HandleVariables(const json& req) {
                 }
             }
         }
-    } else if (variablesReference == 1 && pausedVM) { // Locals
-        ScriptVMStack& stack = pausedVM->m_VMStack;
-        
-        // Show all local variables from localStack to pTop
-        ScriptVariable* current = stack.localStack;
-        int idx = 0;
-        int stackSize = stack.pTop - stack.localStack;
-        
-        // Add a summary entry
-        {
-            json summary;
-            summary["name"] = "[Stack Info]";
-            summary["value"] = "Total variables: " + std::to_string(stackSize) + 
-                              ", Stack depth: " + std::to_string(pausedVM->callStack.NumObjects());
-            summary["variablesReference"] = 0;
-            summary["presentationHint"] = {"kind", "data"};
-            variables.push_back(summary);
-        }
-        
-        while (current < stack.pTop) {
-            json var;
-            var["name"] = "local_" + std::to_string(idx);
-            
-            // Get serialized variable with type info
-            json ser = SerializeVariable(current);
-            var["value"] = ser["value"];
-            
-            // Add type information
-            std::string typeStr = "";
-            switch (current->type) {
-                case VARIABLE_NONE: typeStr = "none"; break;
-                case VARIABLE_STRING: typeStr = "string"; break;
-                case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
-                case VARIABLE_INTEGER: typeStr = "int"; break;
-                case VARIABLE_FLOAT: typeStr = "float"; break;
-                case VARIABLE_VECTOR: typeStr = "vector"; break;
-                case VARIABLE_ARRAY: typeStr = "array"; break;
-                case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
-                case VARIABLE_LISTENER: typeStr = "listener"; break;
-                default: typeStr = "type_" + std::to_string(current->type); break;
-            }
-            var["type"] = typeStr;
-            
-            if (ser.contains("variablesReference")) {
-                var["variablesReference"] = ser["variablesReference"];
-            } else {
-                var["variablesReference"] = 0;
-            }
-            
-            variables.push_back(var);
-            current++;
-            idx++;
-        }
-        
-        // Add the top variable separately for reference
-        {
-            json var;
-            var["name"] = "[Top of Stack]";
-            var["value"] = SerializeVariable(stack.pTop)["value"];
-            var["variablesReference"] = 0;
-            var["presentationHint"] = {"kind", "data"};
-            variables.push_back(var);
-        }
-
     } else if (variablesReference == 2 && pausedVM && pausedVM->m_ScriptClass) { // Globals (Group)
         ScriptVariableList* list = pausedVM->m_ScriptClass->Vars();
         if (list) {
@@ -976,6 +993,23 @@ void DAPServer::HandleVariables(const json& req) {
                 var["name"] = Director.GetString(entry->GetKey());
                 json ser = SerializeVariable(&entry->value);
                 var["value"] = ser["value"];
+                
+                // Add type information
+                std::string typeStr = "";
+                switch (entry->value.type) {
+                    case VARIABLE_NONE: typeStr = "none"; break;
+                    case VARIABLE_STRING: typeStr = "string"; break;
+                    case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
+                    case VARIABLE_INTEGER: typeStr = "int"; break;
+                    case VARIABLE_FLOAT: typeStr = "float"; break;
+                    case VARIABLE_VECTOR: typeStr = "vector"; break;
+                    case VARIABLE_ARRAY: typeStr = "array"; break;
+                    case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
+                    case VARIABLE_LISTENER: typeStr = "listener"; break;
+                    default: typeStr = "type_" + std::to_string(entry->value.type); break;
+                }
+                var["type"] = typeStr;
+                
                 if (ser.contains("variablesReference")) {
                     var["variablesReference"] = ser["variablesReference"];
                 } else {
@@ -994,6 +1028,23 @@ void DAPServer::HandleVariables(const json& req) {
                 var["name"] = Director.GetString(entry->GetKey());
                 json ser = SerializeVariable(&entry->value);
                 var["value"] = ser["value"];
+                
+                // Add type information
+                std::string typeStr = "";
+                switch (entry->value.type) {
+                    case VARIABLE_NONE: typeStr = "none"; break;
+                    case VARIABLE_STRING: typeStr = "string"; break;
+                    case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
+                    case VARIABLE_INTEGER: typeStr = "int"; break;
+                    case VARIABLE_FLOAT: typeStr = "float"; break;
+                    case VARIABLE_VECTOR: typeStr = "vector"; break;
+                    case VARIABLE_ARRAY: typeStr = "array"; break;
+                    case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
+                    case VARIABLE_LISTENER: typeStr = "listener"; break;
+                    default: typeStr = "type_" + std::to_string(entry->value.type); break;
+                }
+                var["type"] = typeStr;
+                
                 if (ser.contains("variablesReference")) {
                     var["variablesReference"] = ser["variablesReference"];
                 } else {
@@ -1010,8 +1061,30 @@ void DAPServer::HandleVariables(const json& req) {
             for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
                 json var;
                 var["name"] = Director.GetString(entry->GetKey());
-                var["value"] = SerializeVariable(&entry->value)["value"];
-                var["variablesReference"] = 0;
+                json ser = SerializeVariable(&entry->value);
+                var["value"] = ser["value"];
+                
+                // Add type information
+                std::string typeStr = "";
+                switch (entry->value.type) {
+                    case VARIABLE_NONE: typeStr = "none"; break;
+                    case VARIABLE_STRING: typeStr = "string"; break;
+                    case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
+                    case VARIABLE_INTEGER: typeStr = "int"; break;
+                    case VARIABLE_FLOAT: typeStr = "float"; break;
+                    case VARIABLE_VECTOR: typeStr = "vector"; break;
+                    case VARIABLE_ARRAY: typeStr = "array"; break;
+                    case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
+                    case VARIABLE_LISTENER: typeStr = "listener"; break;
+                    default: typeStr = "type_" + std::to_string(entry->value.type); break;
+                }
+                var["type"] = typeStr;
+                
+                if (ser.contains("variablesReference")) {
+                    var["variablesReference"] = ser["variablesReference"];
+                } else {
+                    var["variablesReference"] = 0;
+                }
                 variables.push_back(var);
             }
         }
@@ -1297,6 +1370,12 @@ void DAPServer::HandleEvaluate(const json& req) {
     if (req["arguments"].contains("frameId")) {
         frameId = req["arguments"]["frameId"];
     }
+    
+    // Check the context - if it's "hover", we want to evaluate for hover tooltip
+    std::string context = "";
+    if (req["arguments"].contains("context")) {
+        context = req["arguments"]["context"];
+    }
 
     ScriptVM* pausedVM = nullptr;
     for (auto& pair : m_ThreadStates) {
@@ -1312,35 +1391,73 @@ void DAPServer::HandleEvaluate(const json& req) {
     }
 
     ScriptVariable* foundVar = nullptr;
-    std::string resultValue;
-    int variablesRef = 0;
-
-    // 1. Search Locals
-    // Note: frameId logic is simplified here; strict DAP uses unique frame IDs. 
-    // We assume we are looking at the top frame if frameId is not specified or 0 (top) for simplicity,
-    // or if the client provides the correct stack depth index.
-    // However, our StackTrace handler returned IDs 0, 1, 2... which maps to simple depth in VMStack?
-    // Let's assume frameId maps to call stack depth. 0 is current.
-
-    // Access local variables
-    ScriptVMStack& stack = pausedVM->m_VMStack;
-    ScriptVariable* current = stack.localStack; // This iterates ALL locals in the stack, we need to be careful about current scope.
-    // The current implementation of variables (ref 1) iterates from localStack to pTop.
-    // It names them "local_0", "local_1" etc. which is internal names, not source names.
-    // If the expression matches "local_X", we can look it up.
-    // BUT, 'evaluate' usually sends the variable name from source code (e.g. "myVar").
-    // We lack a robust symbol table mapping source names to stack offsets at runtime in this VM implementation?
-    // Looking at ScriptVariable, it doesn't store its name.
-    // The Compiler maps names to stack offsets. The VM just executes ops on stack.
-    // So resolving "myVar" to a value requires either:
-    // a) Debug symbols that map "myVar" -> stack index for current PC.
-    // b) Or we only support evaluating what we can find by name (Globals, Level, Game).
-    
-    // For now, let's implement Globals, Level, and Game lookup, as those are named maps.
-    
     bool found = false;
+    GameScript* script = pausedVM->GetScript();
+    
+    // Try to find local variable by name first (if we have debug symbols)
+    if (!found && script) {
+        ScriptVariable* localStart = nullptr;
+        ScriptVariable* localEnd = nullptr;
+        unsigned char* codePos = nullptr;
+        
+        if (frameId == 0) {
+            localStart = pausedVM->m_VMStack.localStack;
+            localEnd = pausedVM->m_VMStack.pTop;
+            codePos = pausedVM->m_CodePos;
+        } else {
+            int callStackIdx = pausedVM->callStack.NumObjects() - frameId + 1;
+            if (callStackIdx >= 1 && callStackIdx <= pausedVM->callStack.NumObjects()) {
+                ScriptCallStack* call = pausedVM->callStack.ObjectAt(callStackIdx);
+                localStart = call->localStack;
+                localEnd = call->pTop;
+                codePos = call->codePos;
+            }
+        }
+        
+        if (localStart && localEnd && codePos) {
+            int idx = 0;
+            ScriptVariable* current = localStart;
+            while (current < localEnd) {
+                const char* varName = script->GetLocalVarName(codePos, idx);
+                if (varName && expression == varName) {
+                    foundVar = current;
+                    found = true;
+                    break;
+                }
+                current++;
+                idx++;
+            }
+        }
+    }
+    
+    // Try local_N syntax for unnamed variables
+    if (!found && expression.rfind("local_", 0) == 0) {
+        try {
+            int idx = std::stoi(expression.substr(6));
+            
+            ScriptVariable* localStart = nullptr;
+            ScriptVariable* localEnd = nullptr;
+            
+            if (frameId == 0) {
+                localStart = pausedVM->m_VMStack.localStack;
+                localEnd = pausedVM->m_VMStack.pTop;
+            } else {
+                int callStackIdx = pausedVM->callStack.NumObjects() - frameId + 1;
+                if (callStackIdx >= 1 && callStackIdx <= pausedVM->callStack.NumObjects()) {
+                    ScriptCallStack* call = pausedVM->callStack.ObjectAt(callStackIdx);
+                    localStart = call->localStack;
+                    localEnd = call->pTop;
+                }
+            }
+            
+            if (localStart && localStart + idx < localEnd) {
+                foundVar = localStart + idx;
+                found = true;
+            }
+        } catch (...) {}
+    }
 
-    // 2. Globals (ScriptClass)
+    // Search Globals (ScriptClass)
     if (!found && pausedVM->m_ScriptClass) {
         ScriptVariableList* list = pausedVM->m_ScriptClass->Vars();
         if (list) {
