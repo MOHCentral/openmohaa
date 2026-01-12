@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "player.h"
 #include "scriptmaster.h"
+#include "dapserver.h"
 #include "scriptexception.h"
 #include "lightstyleclass.h"
 #include "lodthing.h"
@@ -307,6 +308,10 @@ void G_InitGame(int levelTime, int randomSeed)
         //  This frees alias list to avoid filling up memory
         gi.GlobalAlias_Clear();
     }
+    
+    gi.Printf("===== ABOUT TO START DAP SERVER =====\n");
+    g_DAPServer.Start(4711);
+    gi.Printf("===== DAP SERVER START() RETURNED =====\n");
 }
 
 /*
@@ -358,6 +363,7 @@ void G_ShutdownGame()
     L_ShutdownEvents();
 
     G_DeAllocGameData();
+    g_DAPServer.Stop();
 }
 
 //===================================================================
@@ -941,6 +947,16 @@ void G_RegisterSounds(void)
 
 void G_Restart(void)
 {
+    gi.Printf("===== G_Restart() called =====\n");
+    
+    // Ensure DAP server is running for debugging
+    if (!g_DAPServer.IsRunning()) {
+        gi.Printf("DAP: Server not running, starting it now...\n");
+        g_DAPServer.Start(4711);
+    } else {
+        gi.Printf("DAP: Server already running\n");
+    }
+    
     G_InitWorldSession();
 
     // Added in 2.0

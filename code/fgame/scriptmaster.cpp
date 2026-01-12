@@ -442,7 +442,6 @@ ScriptMaster::~ScriptMaster()
     g_CurlWorker.Stop();
     curl_global_cleanup();
 #endif
-    g_DAPServer.Stop();
     Reset(false);
 }
 
@@ -805,7 +804,6 @@ ScriptMaster::ScriptMaster()
     curl_global_init(CURL_GLOBAL_ALL);
     g_CurlWorker.Start();
 #endif
-    g_DAPServer.Start(4711);
 }
 
 void ScriptMaster::Reset(qboolean samemap)
@@ -894,20 +892,41 @@ void ScriptMaster::ExecuteRunning(void)
     }
 #endif
 
+    static int execRunningCount = 0;
+    execRunningCount++;
+    if (execRunningCount % 100 == 1) {  // Log every 100th call to avoid spam
+        gi.Printf("ScriptMaster: ExecuteRunning #%d - stackCount=%d\n", execRunningCount, stackCount);
+    }
+    
     if (stackCount) {
+        if (execRunningCount % 100 == 1) {
+            gi.Printf("ScriptMaster: Returning early - stackCount=%d (non-zero!)\n", stackCount);
+        }
         return;
     }
 
     if (!timerList.IsDirty()) {
+        if (execRunningCount % 100 == 1) {
+            gi.Printf("ScriptMaster: Returning early - timerList not dirty\n");
+        }
         return;
+    }
+    
+    if (execRunningCount % 100 == 1) {
+        gi.Printf("ScriptMaster: Processing timerList... (current time=%d)\n", level.svsTime);
     }
 
     cmdTime   = 0;
     cmdCount  = 0;
     startTime = level.svsTime;
 
+    int threadCount = 0;
     try {
         while ((m_CurrentThread = (ScriptThread *)timerList.GetNextElement(i))) {
+            threadCount++;
+            if (execRunningCount % 100 == 1) {
+                gi.Printf("ScriptMaster: Found thread #%d at time %d\n", threadCount, i);
+            }
             if (g_timescripts->integer) {
                 fileName        = m_CurrentThread->FileName();
                 sourcePosString = m_CurrentThread->m_ScriptVM->GetSourcePos();
@@ -917,6 +936,10 @@ void ScriptMaster::ExecuteRunning(void)
             level.setTime(level.svsStartTime + i);
 
             m_CurrentThread->m_ScriptVM->m_ThreadState = THREAD_RUNNING;
+            if (execRunningCount % 100 == 1) {
+                gi.Printf("ScriptMaster: Calling Execute() for thread %p, state=%d\n", 
+                          m_CurrentThread->m_ScriptVM, m_CurrentThread->m_ScriptVM->state);
+            }
             m_CurrentThread->m_ScriptVM->Execute();
 
             if (g_timescripts->integer) {

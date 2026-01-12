@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 // scriptvm.cpp : Script virtual machine, interprets and execute scripts
 
+#include <unistd.h>  // For usleep
 #include "../fgame/g_local.h"
 #include "../fgame/scriptmaster.h"
 #include "../fgame/dapserver.h"
@@ -385,7 +386,7 @@ void ScriptVM::Archive(Archiver& arc)
     } else {
         arc.ArchiveInteger(&stack);
 
-        if (stack) {
+        if (stack > 0) {
             m_Stack          = new ScriptStack;
             m_Stack->m_Array = new ScriptVariable[stack];
             m_Stack->m_Count = stack;
@@ -1020,6 +1021,11 @@ Executes a program
 */
 void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
 {
+    static int execCount = 0;
+    execCount++;
+    gi.Printf("VM: ►►► Execute called #%d - script='%s' label='%s' INITIAL state=%d ◄◄◄\n", 
+              execCount, Filename().c_str(), label.c_str(), state);
+    
     unsigned char *opcode;
 
     ScriptVariable *a;
@@ -1064,7 +1070,30 @@ void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
         SetFastData(data, dataSize);
     }
 
-    state = STATE_RUNNING;
+    // Don't override state if we're waiting for debugger
+    static int stateCheckCount = 0;
+    stateCheckCount++;
+    if (stateCheckCount <= 10) {
+        gi.Printf("VM: Execute state check #%d - current state=%d, STATE_DEBUG_WAIT=%d, STATE_RUNNING=%d\n",
+                  stateCheckCount, state, STATE_DEBUG_WAIT, STATE_RUNNING);
+    }
+    
+    if (state != STATE_DEBUG_WAIT) {
+        if (stateCheckCount <= 10) {
+            gi.Printf("VM: Setting state to STATE_RUNNING\n");
+        }
+        state = STATE_RUNNING;
+    } else {
+        if (stateCheckCount <= 10) {
+            gi.Printf("VM: NOT changing state - keeping STATE_DEBUG_WAIT\n");
+        }
+    }
+    
+    static int loopCount = 0;
+    loopCount++;
+    if (loopCount <= 5) {
+        gi.Printf("VM: About to check loop condition - state=%d\n", state);
+    }
 
     while (state == STATE_RUNNING) {
         if (g_scripttrace->integer && CanScriptTracePrint()) {
@@ -1106,8 +1135,36 @@ void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
             }
 
             if (g_DAPServer.CheckDebugHook(this)) {
-                // Execution paused by debugger
-                return;
+                // Execution paused by debugger - wait in a loop until resumed
+                Director.stackCount--;  // Must decrement before entering wait loop!
+                
+                gi.Printf("VM: Debugger paused - entering wait loop\n");
+                
+                // Wait until debugger resumes us
+                while (state == STATE_DEBUG_WAIT && g_DAPServer.IsAttached()) {
+                    // Process DAP messages while paused
+                    g_DAPServer.RunFrame();
+                    
+                    // Small sleep to avoid busy-waiting (1ms)
+                    usleep(1000);
+                    
+                    // Check if we've been resumed
+                    if (!g_DAPServer.IsPaused(this)) {
+                        state = STATE_RUNNING;
+                        gi.Printf("VM: Debugger resumed - continuing execution\n");
+                        break;
+                    }
+                }
+                
+                Director.stackCount++;  // Increment back since we're continuing
+                
+                // If debugger disconnected, resume execution
+                if (!g_DAPServer.IsAttached()) {
+                    state = STATE_RUNNING;
+                    gi.Printf("VM: Debugger disconnected - resuming execution\n");
+                }
+                
+                // Continue execution (don't return)
             }
 
             opcode = m_CodePos++;
@@ -1973,7 +2030,7 @@ void ScriptVM::SetFastData(ScriptVariable *data, int dataSize)
         m_OldDataSize = 0;
     }
 
-    if (dataSize) {
+    if (dataSize > 0) {
         fastEvent.data     = new ScriptVariable[dataSize];
         fastEvent.dataSize = dataSize;
 

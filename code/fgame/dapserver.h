@@ -57,13 +57,19 @@ public:
 
     void Start(int port);
     void Stop();
+    bool IsRunning() const { return m_Running; }
     void RunFrame();
 
     // Hook called from ScriptVM::Execute
     // Returns true if the VM should pause execution (yield)
     bool CheckDebugHook(ScriptVM* vm);
 
+    // Called when a script is loaded - may verify pending breakpoints
+    void OnScriptLoaded(GameScript* script);
+
     bool IsActive() const { return m_DebuggerAttached.load(std::memory_order_relaxed); }
+    bool IsAttached() const { return m_DebuggerAttached.load(std::memory_order_relaxed); }
+    bool IsPaused(ScriptVM* vm);
 
     // Registry management
     int RegisterVM(ScriptVM* vm);
@@ -91,6 +97,7 @@ private:
     void HandleStepIn(const json& req);
     void HandleStepOut(const json& req);
     void HandlePause(const json& req);
+    void HandleEvaluate(const json& req);
 
     // Helpers
     void UpdateBreakpoints();

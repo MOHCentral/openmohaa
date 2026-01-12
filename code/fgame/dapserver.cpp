@@ -20,6 +20,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 
+#include <algorithm>
+#include <cctype>
 #include "g_local.h"
 #include "dapserver.h"
 #include "scriptmaster.h"
@@ -32,6 +34,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <iostream>
 #include <sstream>
 #include <chrono>
+#include <sys/stat.h>
+#include <dirent.h>
 
 #ifdef _WIN32
 #include <ws2tcpip.h>
@@ -44,6 +48,76 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define INVALID_SOCKET -1
 #define SOCKET_ERROR -1
 #endif
+
+// Helper function to resolve script path case-insensitively
+static std::string ResolveScriptPath(const std::string& scriptPath) {
+    // Build the full base path
+    const char* homedir = getenv("HOME");
+    if (!homedir) {
+        homedir = "/home/elgan";  // fallback
+    }
+    
+    std::string basePath = std::string(homedir) + "/.local/share/openmohaa/main/";
+    std::string fullPath = basePath + scriptPath;
+    
+    // Quick check if exact path exists
+    struct stat statbuf;
+    if (stat(fullPath.c_str(), &statbuf) == 0) {
+        return fullPath;
+    }
+    
+    // Case-insensitive path resolution
+    std::string result = basePath;
+    std::istringstream pathStream(scriptPath);
+    std::string component;
+    
+    while (std::getline(pathStream, component, '/')) {
+        if (component.empty()) continue;
+        
+        // Try to find this component case-insensitively
+        DIR* dir = opendir(result.c_str());
+        if (!dir) {
+            // Directory doesn't exist, return best guess
+            return fullPath;
+        }
+        
+        bool found = false;
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            // Skip . and ..
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            
+            // Case-insensitive comparison
+            std::string entryName = entry->d_name;
+            std::string lowerEntry = entryName;
+            std::string lowerComponent = component;
+            std::transform(lowerEntry.begin(), lowerEntry.end(), lowerEntry.begin(), ::tolower);
+            std::transform(lowerComponent.begin(), lowerComponent.end(), lowerComponent.begin(), ::tolower);
+            
+            if (lowerEntry == lowerComponent) {
+                // Found it with the correct case
+                result += entryName + "/";
+                found = true;
+                break;
+            }
+        }
+        closedir(dir);
+        
+        if (!found) {
+            // Component not found, return best guess
+            return fullPath;
+        }
+    }
+    
+    // Remove trailing slash
+    if (!result.empty() && result[result.length() - 1] == '/') {
+        result = result.substr(0, result.length() - 1);
+    }
+    
+    return result;
+}
 
 DAPServer g_DAPServer;
 DAPServer* DAPServer::s_Instance = &g_DAPServer;
@@ -65,7 +139,14 @@ DAPServer::~DAPServer() {
 }
 
 void DAPServer::Start(int port) {
-    if (m_Running) return;
+    if (m_Running) {
+        gi.Printf("DAP: Server already running, skipping Start()\n");
+        return;
+    }
+
+    gi.Printf("====================================\n");
+    gi.Printf("DAP: Starting Debug Adapter Protocol server on port %d\n", port);
+    gi.Printf("====================================\n");
 
     m_Running = true;
     m_NetworkThread = std::thread([this, port]() {
@@ -76,7 +157,7 @@ void DAPServer::Start(int port) {
 
         m_ServerSocket = socket(AF_INET, SOCK_STREAM, 0);
         if (m_ServerSocket == INVALID_SOCKET) {
-            gi.DPrintf("DAP: Failed to create socket\n");
+            gi.Printf("DAP: ERROR - Failed to create socket\n");
             return;
         }
 
@@ -89,18 +170,18 @@ void DAPServer::Start(int port) {
         address.sin_port = htons(port);
 
         if (bind(m_ServerSocket, (struct sockaddr*)&address, sizeof(address)) == SOCKET_ERROR) {
-            gi.DPrintf("DAP: Failed to bind to port %d\n", port);
+            gi.Printf("DAP: ERROR - Failed to bind to port %d\n", port);
             closesocket(m_ServerSocket);
             return;
         }
 
         if (listen(m_ServerSocket, 1) == SOCKET_ERROR) {
-            gi.DPrintf("DAP: Failed to listen\n");
+            gi.Printf("DAP: ERROR - Failed to listen\n");
             closesocket(m_ServerSocket);
             return;
         }
 
-        gi.Printf("DAP Server listening on port %d\n", port);
+        gi.Printf("DAP: Server listening on port %d - Ready for VSCode connection\n", port);
 
         NetworkLoop();
 
@@ -166,6 +247,13 @@ ScriptVM* DAPServer::GetVM(int id) {
     return nullptr;
 }
 
+bool DAPServer::IsPaused(ScriptVM* vm) {
+    if (!vm) return false;
+    auto it = m_ThreadStates.find(vm);
+    if (it == m_ThreadStates.end()) return false;
+    return it->second.paused;
+}
+
 void DAPServer::NetworkLoop() {
     while (m_Running) {
         struct sockaddr_in clientAddr;
@@ -180,7 +268,7 @@ void DAPServer::NetworkLoop() {
             continue;
         }
 
-        gi.Printf("DAP: Debugger connected\n");
+        gi.Printf("DAP: ✓ VSCode debugger connected!\n");
         m_ClientSocket = client;
 
         // Set non-blocking for client socket if needed, but blocking is fine for simple loop
@@ -213,10 +301,22 @@ void DAPServer::NetworkLoop() {
             if (activity > 0 && FD_ISSET(m_ClientSocket, &readfds)) {
                 int bytesRead = recv(m_ClientSocket, tempBuf, sizeof(tempBuf) - 1, 0);
                 if (bytesRead <= 0) {
-                    gi.Printf("DAP: Debugger disconnected\n");
+                    gi.Printf("DAP: VSCode debugger disconnected - resuming all paused scripts\n");
                     closesocket(m_ClientSocket);
                     m_ClientSocket = INVALID_SOCKET;
                     m_DebuggerAttached = false;
+                    
+                    // Resume all paused VMs when debugger disconnects
+                    for (auto& pair : m_ThreadStates) {
+                        ScriptVM* vm = pair.first;
+                        if (pair.second.paused && vm) {
+                            gi.Printf("DAP:   Resuming paused VM for script '%s'\n", vm->Filename().c_str());
+                            vm->state = STATE_RUNNING;
+                            pair.second.paused = false;
+                            pair.second.stepMode = STEP_NONE;
+                        }
+                    }
+                    
                     break;
                 }
 
@@ -249,7 +349,7 @@ void DAPServer::NetworkLoop() {
                         std::lock_guard<std::mutex> lock(m_QueueLock);
                         m_IncomingQueue.push(j);
                     } catch (const std::exception& e) {
-                        gi.DPrintf("DAP: JSON Parse Error: %s\n", e.what());
+                        // gi.Printf("DAP: JSON Parse Error: %s\n", e.what());
                     }
                 }
             }
@@ -291,6 +391,7 @@ void DAPServer::ProcessMessage(const json& msg) {
     else if (command == "stepIn") HandleStepIn(msg);
     else if (command == "stepOut") HandleStepOut(msg);
     else if (command == "pause") HandlePause(msg);
+    else if (command == "evaluate") HandleEvaluate(msg);
     else {
         // Unknown request
         SendResponse(msg, json::object(), false, "Unknown command");
@@ -336,7 +437,7 @@ void DAPServer::HandleInitialize(const json& req) {
     body["supportsFunctionBreakpoints"] = false;
     body["supportsConditionalBreakpoints"] = false;
     body["supportsHitConditionBreakpoints"] = false;
-    body["supportsEvaluateForHovers"] = false;
+    body["supportsEvaluateForHovers"] = true;
     body["exceptionBreakpointFilters"] = json::array();
 
     SendResponse(req, body);
@@ -345,11 +446,13 @@ void DAPServer::HandleInitialize(const json& req) {
 }
 
 void DAPServer::HandleLaunch(const json& req) {
+    gi.Printf("DAP: ★★★ DEBUGGER LAUNCHING - m_DebuggerAttached = true ★★★\n");
     m_DebuggerAttached = true;
     SendResponse(req);
 }
 
 void DAPServer::HandleAttach(const json& req) {
+    gi.Printf("DAP: ★★★ DEBUGGER ATTACHING - m_DebuggerAttached = true ★★★\n");
     m_DebuggerAttached = true;
     SendResponse(req);
 }
@@ -362,9 +465,11 @@ void DAPServer::HandleConfigurationDone(const json& req) {
 void DAPServer::HandleSetBreakpoints(const json& req) {
     std::string file = req["arguments"]["source"]["path"];
 
-    // Normalize file path (basic)
-    // In real usage we might need better path normalization to match game script paths
-    // For now assume user sends paths that match what we return or relative paths
+    // Normalize file path
+    std::replace(file.begin(), file.end(), '\\', '/');
+    std::transform(file.begin(), file.end(), file.begin(), ::tolower);
+
+    gi.Printf("DAP: SetBreakpoints request for file: '%s'\n", file.c_str());
 
     m_RequestedBreakpoints[file].clear();
 
@@ -383,22 +488,25 @@ void DAPServer::HandleSetBreakpoints(const json& req) {
 
             m_RequestedBreakpoints[file].push_back(info);
 
-            json resBp;
-            resBp["verified"] = false; // Will be verified in UpdateBreakpoints
-            resBp["line"] = line;
-            breakpoints.push_back(resBp);
+            gi.Printf("DAP: Breakpoint requested at '%s:%d'\n", file.c_str(), line);
         }
     }
 
+    // Try to verify breakpoints immediately
     UpdateBreakpoints();
 
-    // Re-verify breakpoints for response
+    // Build response with verification status
     json responseBody;
     json actualBreakpoints = json::array();
     for (const auto& bp : m_RequestedBreakpoints[file]) {
         json resBp;
         resBp["verified"] = bp.verified;
         resBp["line"] = bp.line;
+        if (bp.verified) {
+            gi.Printf("DAP: Breakpoint VERIFIED at '%s:%d'\n", file.c_str(), bp.line);
+        } else {
+            gi.Printf("DAP: Breakpoint UNVERIFIED at '%s:%d' (script may not be loaded yet)\n", file.c_str(), bp.line);
+        }
         actualBreakpoints.push_back(resBp);
     }
     responseBody["breakpoints"] = actualBreakpoints;
@@ -409,6 +517,9 @@ void DAPServer::HandleSetBreakpoints(const json& req) {
 void DAPServer::UpdateBreakpoints() {
     m_ActiveBreakpoints.clear();
 
+    gi.Printf("DAP: UpdateBreakpoints called. Checking %zu requested breakpoint files\n", 
+               m_RequestedBreakpoints.size());
+
     // Iterate all loaded scripts and try to match breakpoints
     // This is expensive so we do it only when breakpoints change or scripts load
     // For now we do it when requested.
@@ -416,10 +527,20 @@ void DAPServer::UpdateBreakpoints() {
     con_map_enum<const_str, GameScript *> en(Director.m_GameScripts);
     GameScript **g;
 
+    int scriptCount = 0;
     for (g = en.NextValue(); g != NULL; g = en.NextValue()) {
+        scriptCount++;
         GameScript* script = *g;
+        if (!script) {
+            gi.Printf("DAP: Skipping NULL script at index %d\n", scriptCount);
+            continue;
+        }
+        gi.Printf("DAP: Checking script %d: '%s'\n", scriptCount, script->Filename().c_str());
         MapBreakpointsForScript(script);
     }
+    
+    gi.Printf("DAP: UpdateBreakpoints complete. Found %zu active breakpoint(s)\n", 
+               m_ActiveBreakpoints.size());
 }
 
 void DAPServer::MapBreakpointsForScript(GameScript* script) {
@@ -428,41 +549,107 @@ void DAPServer::MapBreakpointsForScript(GameScript* script) {
     str filename = script->Filename();
     std::string scriptFile = filename.c_str();
 
-    // Find matching requested breakpoints
-    // We need fuzzy matching because IDE path might be full path, game path is relative
+    // Normalize scriptFile path: convert backslashes to forward slashes
+    std::replace(scriptFile.begin(), scriptFile.end(), '\\', '/');
+    std::transform(scriptFile.begin(), scriptFile.end(), scriptFile.begin(), ::tolower);
 
+    // Find matching requested breakpoints
+    // Try to match by file extension and filename patterns
     std::vector<BreakpointInfo>* requested = nullptr;
 
     for (auto& pair : m_RequestedBreakpoints) {
         std::string reqFile = pair.first;
-        // Simple check: does reqFile end with scriptFile?
-        // Or convert both to unified separators and check
         std::replace(reqFile.begin(), reqFile.end(), '\\', '/');
-        std::replace(scriptFile.begin(), scriptFile.end(), '\\', '/');
+        std::transform(reqFile.begin(), reqFile.end(), reqFile.begin(), ::tolower);
 
-        if (reqFile.find(scriptFile) != std::string::npos || scriptFile.find(reqFile) != std::string::npos) {
+        // Improved matching:
+        // 1. If reqFile ends with scriptFile, it's a match (e.g., "/full/path/maps/test.scr" matches "maps/test.scr")
+        // 2. If they are identical
+        // 3. If reqFile contains scriptFile as a path component (better than simple substring)
+        
+        bool matches = false;
+        
+        // Exact match
+        if (reqFile == scriptFile) {
+            matches = true;
+        }
+        // reqFile ends with scriptFile (full path matches relative path)
+        else if (reqFile.length() > scriptFile.length() && 
+                 reqFile.substr(reqFile.length() - scriptFile.length()) == scriptFile &&
+                 (scriptFile[0] != '/' && (reqFile[reqFile.length() - scriptFile.length() - 1] == '/' || 
+                                           reqFile[reqFile.length() - scriptFile.length() - 1] == '\\'))) {
+            matches = true;
+        }
+        // scriptFile ends with reqFile (relative matches relative)
+        else if (scriptFile.length() > reqFile.length() &&
+                 scriptFile.substr(scriptFile.length() - reqFile.length()) == reqFile &&
+                 (reqFile[0] != '/' && (scriptFile[scriptFile.length() - reqFile.length() - 1] == '/' ||
+                                        scriptFile[scriptFile.length() - reqFile.length() - 1] == '\\'))) {
+            matches = true;
+        }
+        // Check if both filenames match (after "main/" or similar prefixes)
+        else {
+            size_t reqSlash = reqFile.rfind('/');
+            size_t scriptSlash = scriptFile.rfind('/');
+            if (reqSlash != std::string::npos && scriptSlash != std::string::npos) {
+                std::string reqName = reqFile.substr(reqSlash);
+                std::string scriptName = scriptFile.substr(scriptSlash);
+                if (reqName == scriptName) {
+                    matches = true;
+                }
+            }
+        }
+
+        if (matches) {
             requested = &pair.second;
+            gi.Printf("DAP: Breakpoint file match found: Requested='%s' Script='%s'\n", reqFile.c_str(), scriptFile.c_str());
             break;
         }
     }
 
-    if (!requested) return;
+    if (!requested) {
+        gi.Printf("DAP: No breakpoint match for script: '%s'\n", scriptFile.c_str());
+        return;
+    }
 
-    // Iterate script source map
-    if (script->m_ProgToSource) {
-        con_set_enum<const uchar *, sourceinfo_t> en(*script->m_ProgToSource);
-        con_set<const uchar *, sourceinfo_t>::Entry *entry;
+    // Verify that the script has a valid source map
+    if (!script->m_ProgToSource) {
+        gi.Printf("DAP: Script '%s' has no source map (m_ProgToSource is null)\n", scriptFile.c_str());
+        return;
+    }
 
-        for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
-            int line = entry->value.line;
-            unsigned char* code = (unsigned char*)entry->GetKey();
+    gi.Printf("DAP: Script '%s' HAS source map, iterating entries...\n", scriptFile.c_str());
+    
+    con_set_enum<const uchar*, sourceinfo_t> en(*script->m_ProgToSource);
+    con_set<const uchar *, sourceinfo_t>::Entry *entry;
+    
+    int sourceMapEntries = 0;
+    int matched = 0;
+    for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+        sourceMapEntries++;
+        int line = entry->value.line;
+        unsigned char* code = (unsigned char*)entry->GetKey();
 
-            for (auto& bp : *requested) {
-                if (bp.line == line) {
-                    m_ActiveBreakpoints[code] = bp.id;
-                    bp.verified = true;
-                }
+        gi.Printf("DAP:   SourceMap entry %d: line=%d, codePtr=%p\n", sourceMapEntries, line, code);
+
+        for (auto& bp : *requested) {
+            if (bp.line == line) {
+                m_ActiveBreakpoints[code] = bp.id;
+                bp.verified = true;
+                matched++;
+                gi.Printf("DAP:     ✓ MATCHED breakpoint! Added to m_ActiveBreakpoints[%p]\n", code);
             }
+        }
+    }
+    
+    gi.Printf("DAP: Script '%s' source map had %d entries, matched %d breakpoint(s)\n", 
+               scriptFile.c_str(), sourceMapEntries, matched);
+    
+    // Log unverified breakpoints for this file
+    for (const auto& bp : *requested) {
+        if (!bp.verified) {
+            gi.Printf("DAP: ✗ Could not verify breakpoint at '%s:%d' - line not in source map\n", 
+                      scriptFile.c_str(), bp.line);
         }
     }
 }
@@ -508,6 +695,25 @@ void DAPServer::HandleStackTrace(const json& req) {
 
     json stackFrames = json::array();
 
+    // Get the script filename and resolve to full path with case-insensitive lookup
+    std::string scriptPath = vm->Filename().c_str();
+    std::string fullPath = ResolveScriptPath(scriptPath);
+    
+    // Extract the workspace-relative path (strip the base directory)
+    // The resolved path is like: /home/user/.local/share/openmohaa/main/maps/DM/mohdm1.scr
+    // We want to extract: maps/DM/mohdm1.scr (with corrected case)
+    const char* homedir = getenv("HOME");
+    if (!homedir) homedir = "/home/elgan";
+    std::string basePath = std::string(homedir) + "/.local/share/openmohaa/main/";
+    
+    std::string workspaceRelativePath = fullPath;
+    if (fullPath.find(basePath) == 0) {
+        workspaceRelativePath = fullPath.substr(basePath.length());
+    }
+    
+    gi.Printf("DAP: Resolved script path: '%s' -> '%s' (workspace-relative: '%s')\n", 
+              scriptPath.c_str(), fullPath.c_str(), workspaceRelativePath.c_str());
+
     // Current frame
     {
         json frame;
@@ -515,7 +721,8 @@ void DAPServer::HandleStackTrace(const json& req) {
         frame["name"] = vm->Label().c_str();
 
         json source;
-        source["path"] = vm->Filename().c_str();
+        source["path"] = workspaceRelativePath;  // Send workspace-relative path with corrected case
+        source["name"] = scriptPath; // Short name for display
         frame["source"] = source;
 
         // Get line number
@@ -538,11 +745,12 @@ void DAPServer::HandleStackTrace(const json& req) {
 
         json frame;
         frame["id"] = i;
-        frame["name"] = "Called from..."; // We don't easily know the function name of caller without reverse lookup
+        frame["name"] = "Called from...";
 
         // Use codePos to find source
         json source;
-        source["path"] = vm->Filename().c_str(); // Assumption: same file.
+        source["path"] = workspaceRelativePath;
+        source["name"] = scriptPath;
 
         frame["source"] = source;
 
@@ -696,21 +904,67 @@ void DAPServer::HandleVariables(const json& req) {
         }
     } else if (variablesReference == 1 && pausedVM) { // Locals
         ScriptVMStack& stack = pausedVM->m_VMStack;
+        
+        // Show all local variables from localStack to pTop
         ScriptVariable* current = stack.localStack;
         int idx = 0;
+        int stackSize = stack.pTop - stack.localStack;
+        
+        // Add a summary entry
+        {
+            json summary;
+            summary["name"] = "[Stack Info]";
+            summary["value"] = "Total variables: " + std::to_string(stackSize) + 
+                              ", Stack depth: " + std::to_string(pausedVM->callStack.NumObjects());
+            summary["variablesReference"] = 0;
+            summary["presentationHint"] = {"kind", "data"};
+            variables.push_back(summary);
+        }
+        
         while (current < stack.pTop) {
             json var;
-            var["name"] = "local_" + std::to_string(idx++);
-            var["value"] = SerializeVariable(current)["value"];
-            var["variablesReference"] = 0;
+            var["name"] = "local_" + std::to_string(idx);
+            
+            // Get serialized variable with type info
+            json ser = SerializeVariable(current);
+            var["value"] = ser["value"];
+            
+            // Add type information
+            std::string typeStr = "";
+            switch (current->type) {
+                case VARIABLE_NONE: typeStr = "none"; break;
+                case VARIABLE_STRING: typeStr = "string"; break;
+                case VARIABLE_CONSTSTRING: typeStr = "conststring"; break;
+                case VARIABLE_INTEGER: typeStr = "int"; break;
+                case VARIABLE_FLOAT: typeStr = "float"; break;
+                case VARIABLE_VECTOR: typeStr = "vector"; break;
+                case VARIABLE_ARRAY: typeStr = "array"; break;
+                case VARIABLE_CONSTARRAY: typeStr = "constarray"; break;
+                case VARIABLE_LISTENER: typeStr = "listener"; break;
+                default: typeStr = "type_" + std::to_string(current->type); break;
+            }
+            var["type"] = typeStr;
+            
+            if (ser.contains("variablesReference")) {
+                var["variablesReference"] = ser["variablesReference"];
+            } else {
+                var["variablesReference"] = 0;
+            }
+            
             variables.push_back(var);
             current++;
+            idx++;
         }
-        json var;
-        var["name"] = "Top";
-        var["value"] = SerializeVariable(stack.pTop)["value"];
-        var["variablesReference"] = 0;
-        variables.push_back(var);
+        
+        // Add the top variable separately for reference
+        {
+            json var;
+            var["name"] = "[Top of Stack]";
+            var["value"] = SerializeVariable(stack.pTop)["value"];
+            var["variablesReference"] = 0;
+            var["presentationHint"] = {"kind", "data"};
+            variables.push_back(var);
+        }
 
     } else if (variablesReference == 2 && pausedVM && pausedVM->m_ScriptClass) { // Globals (Group)
         ScriptVariableList* list = pausedVM->m_ScriptClass->Vars();
@@ -719,9 +973,14 @@ void DAPServer::HandleVariables(const json& req) {
             con_set<short3, ScriptVariable>::Entry *entry;
             for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
                 json var;
-                var["name"] = Director.GetString(entry->GetKey()); // Assuming short3 can be resolved to string if it's an index
-                var["value"] = SerializeVariable(&entry->value)["value"];
-                var["variablesReference"] = 0;
+                var["name"] = Director.GetString(entry->GetKey());
+                json ser = SerializeVariable(&entry->value);
+                var["value"] = ser["value"];
+                if (ser.contains("variablesReference")) {
+                    var["variablesReference"] = ser["variablesReference"];
+                } else {
+                    var["variablesReference"] = 0;
+                }
                 variables.push_back(var);
             }
         }
@@ -733,8 +992,13 @@ void DAPServer::HandleVariables(const json& req) {
             for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
                 json var;
                 var["name"] = Director.GetString(entry->GetKey());
-                var["value"] = SerializeVariable(&entry->value)["value"];
-                var["variablesReference"] = 0;
+                json ser = SerializeVariable(&entry->value);
+                var["value"] = ser["value"];
+                if (ser.contains("variablesReference")) {
+                    var["variablesReference"] = ser["variablesReference"];
+                } else {
+                    var["variablesReference"] = 0;
+                }
                 variables.push_back(var);
             }
         }
@@ -815,10 +1079,12 @@ void DAPServer::HandleContinue(const json& req) {
     ScriptVM* vm = GetVM((int)threadId);
 
     if (vm) {
+        gi.Printf("DAP: HandleContinue - Setting paused=false and state=STATE_RUNNING for VM %p\n", vm);
         m_ThreadStates[vm].paused = false;
         m_ThreadStates[vm].stepMode = STEP_NONE;
         m_ThreadStates[vm].ignoreBreakpointAddr = vm->m_CodePos;
         vm->state = STATE_RUNNING;
+        gi.Printf("DAP: HandleContinue - DONE. VM state is now %d (should be %d for STATE_RUNNING)\n", vm->state, STATE_RUNNING);
     }
 
     SendResponse(req);
@@ -913,6 +1179,16 @@ void DAPServer::HandleStepOut(const json& req) {
 }
 
 bool DAPServer::CheckDebugHook(ScriptVM* vm) {
+    static int callCount = 0;
+    callCount++;
+    
+    // Log first 5 calls to confirm this function is being called
+    if (callCount <= 5) {
+        gi.Printf("DAP: CheckDebugHook called #%d - codePos=%p, attached=%d, activeBreakpoints=%lu\n", 
+                  callCount, vm->m_CodePos, m_DebuggerAttached.load(std::memory_order_relaxed), 
+                  m_ActiveBreakpoints.size());
+    }
+    
     if (!m_DebuggerAttached.load(std::memory_order_relaxed)) return false;
 
     // Register VM if not known (lazy registration)
@@ -920,16 +1196,19 @@ bool DAPServer::CheckDebugHook(ScriptVM* vm) {
 
     // Check for paused state
     if (m_ThreadStates[vm].paused) {
+        gi.Printf("DAP: CheckDebugHook - VM %p is paused, setting state to STATE_DEBUG_WAIT\n", vm);
         vm->state = STATE_DEBUG_WAIT;
         return true;
     }
 
-    // Check breakpoints
+    // Check breakpoints - log if we're near a breakpoint
     auto it = m_ActiveBreakpoints.find(vm->m_CodePos);
     if (it != m_ActiveBreakpoints.end()) {
+        gi.Printf("DAP: ★★★ BREAKPOINT HIT at %p (breakpoint id: %d) ★★★\n", vm->m_CodePos, it->second);
         if (m_ThreadStates[vm].ignoreBreakpointAddr == vm->m_CodePos) {
             // We just resumed from this breakpoint, so ignore it once
             m_ThreadStates[vm].ignoreBreakpointAddr = nullptr;
+            gi.Printf("DAP:   But ignoring (just resumed from here)\n");
         } else {
             m_ThreadStates[vm].paused = true;
             m_ThreadStates[vm].pauseReason = "breakpoint";
@@ -940,6 +1219,7 @@ bool DAPServer::CheckDebugHook(ScriptVM* vm) {
             body["threadId"] = m_VMToID[vm];
             SendEvent("stopped", body);
         vm->state = STATE_DEBUG_WAIT;
+            gi.Printf("DAP:   VM paused. Notified client.\n");
             return true;
         }
     } else {
@@ -961,11 +1241,22 @@ bool DAPServer::CheckDebugHook(ScriptVM* vm) {
         // Only stop if line changed (except StepOut)
         bool lineChanged = (currentLine != m_ThreadStates[vm].startLine);
 
+        static int stepCount = 0;
+        stepCount++;
+        if (stepCount <= 10) {
+            gi.Printf("DAP: STEP CHECK #%d - mode=%d, currentLine=%d, startLine=%d, lineChanged=%d, currentDepth=%d, stepDepth=%d\n",
+                      stepCount, mode, currentLine, m_ThreadStates[vm].startLine, lineChanged, currentDepth, m_ThreadStates[vm].stepDepth);
+        }
+
         if (mode == STEP_IN) {
             if (lineChanged) stop = true;
         } else if (mode == STEP_OVER) {
             // Stop if depth is same or less AND line changed
-            if (currentDepth <= m_ThreadStates[vm].stepDepth && lineChanged) stop = true;
+            if (currentDepth <= m_ThreadStates[vm].stepDepth && lineChanged) {
+                gi.Printf("DAP: STEP OVER should stop - currentDepth=%d, stepDepth=%d, lineChanged=%d\n",
+                          currentDepth, m_ThreadStates[vm].stepDepth, lineChanged);
+                stop = true;
+            }
         } else if (mode == STEP_OUT) {
             // Stop if depth is less
             if (currentDepth < m_ThreadStates[vm].stepDepth) stop = true;
@@ -986,4 +1277,155 @@ bool DAPServer::CheckDebugHook(ScriptVM* vm) {
     }
 
     return false;
+}
+
+void DAPServer::OnScriptLoaded(GameScript* script) {
+    if (!m_DebuggerAttached.load(std::memory_order_relaxed)) return;
+    if (!script) return;
+
+    // Try to verify breakpoints for this newly loaded script
+    gi.Printf("DAP: Script loaded: '%s', attempting to verify breakpoints...\n", script->Filename().c_str());
+    
+    MapBreakpointsForScript(script);
+}
+
+void DAPServer::HandleEvaluate(const json& req) {
+    std::string expression = req["arguments"]["expression"];
+    
+    // Optional frameId for context
+    int frameId = 0;
+    if (req["arguments"].contains("frameId")) {
+        frameId = req["arguments"]["frameId"];
+    }
+
+    ScriptVM* pausedVM = nullptr;
+    for (auto& pair : m_ThreadStates) {
+        if (pair.second.paused) {
+            pausedVM = pair.first;
+            break;
+        }
+    }
+
+    if (!pausedVM) {
+        SendResponse(req, json::object(), false, "No paused thread");
+        return;
+    }
+
+    ScriptVariable* foundVar = nullptr;
+    std::string resultValue;
+    int variablesRef = 0;
+
+    // 1. Search Locals
+    // Note: frameId logic is simplified here; strict DAP uses unique frame IDs. 
+    // We assume we are looking at the top frame if frameId is not specified or 0 (top) for simplicity,
+    // or if the client provides the correct stack depth index.
+    // However, our StackTrace handler returned IDs 0, 1, 2... which maps to simple depth in VMStack?
+    // Let's assume frameId maps to call stack depth. 0 is current.
+
+    // Access local variables
+    ScriptVMStack& stack = pausedVM->m_VMStack;
+    ScriptVariable* current = stack.localStack; // This iterates ALL locals in the stack, we need to be careful about current scope.
+    // The current implementation of variables (ref 1) iterates from localStack to pTop.
+    // It names them "local_0", "local_1" etc. which is internal names, not source names.
+    // If the expression matches "local_X", we can look it up.
+    // BUT, 'evaluate' usually sends the variable name from source code (e.g. "myVar").
+    // We lack a robust symbol table mapping source names to stack offsets at runtime in this VM implementation?
+    // Looking at ScriptVariable, it doesn't store its name.
+    // The Compiler maps names to stack offsets. The VM just executes ops on stack.
+    // So resolving "myVar" to a value requires either:
+    // a) Debug symbols that map "myVar" -> stack index for current PC.
+    // b) Or we only support evaluating what we can find by name (Globals, Level, Game).
+    
+    // For now, let's implement Globals, Level, and Game lookup, as those are named maps.
+    
+    bool found = false;
+
+    // 2. Globals (ScriptClass)
+    if (!found && pausedVM->m_ScriptClass) {
+        ScriptVariableList* list = pausedVM->m_ScriptClass->Vars();
+        if (list) {
+            // list is con_set<short3, ScriptVariable>
+            // We need to resolve 'expression' string to short3 or find entry by string match.
+            // Using Director.GetString to reverse map short3 is slow if we have to iterate all.
+            // Instead, we can try to look up key index if StringDict supports it.
+            // Assuming StringDict.findKeyIndex(expression) works.
+            
+            // Note: StringDict.findKeyIndex returns 0 if not found, usually.
+            // Let's iterate linearly for now as it's safer without deep knowledge of string system details.
+            con_set_enum<short3, ScriptVariable> en(list->list);
+            con_set<short3, ScriptVariable>::Entry *entry;
+            for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+                const char* name = Director.GetString(entry->GetKey());
+                if (name && expression == name) {
+                    foundVar = &entry->value;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 3. Level
+    if (!found) {
+        ScriptVariableList* list = level.Vars();
+        if (list) {
+             con_set_enum<short3, ScriptVariable> en(list->list);
+            con_set<short3, ScriptVariable>::Entry *entry;
+            for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+                 const char* name = Director.GetString(entry->GetKey());
+                 if (name && expression == name) {
+                     foundVar = &entry->value;
+                     found = true;
+                     break;
+                 }
+            }
+        }
+    }
+
+    // 4. Game
+    if (!found) {
+        ScriptVariableList* list = game.Vars();
+        if (list) {
+             con_set_enum<short3, ScriptVariable> en(list->list);
+             con_set<short3, ScriptVariable>::Entry *entry;
+            for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+                 const char* name = Director.GetString(entry->GetKey());
+                 if (name && expression == name) {
+                     foundVar = &entry->value;
+                     found = true;
+                     break;
+                 }
+            }
+        }
+    }
+    
+    // 5. Special keyword 'local'
+    // If we want to inspect local stack by index? e.g. "local_0"
+    if (!found && expression.rfind("local_", 0) == 0) {
+        try {
+            int idx = std::stoi(expression.substr(6));
+             ScriptVMStack& stack = pausedVM->m_VMStack;
+             if (stack.localStack + idx < stack.pTop) {
+                 foundVar = stack.localStack + idx;
+                 found = true;
+             }
+        } catch (...) {}
+    }
+
+    json body;
+    if (found && foundVar) {
+        json ser = SerializeVariable(foundVar);
+        body["result"] = ser["value"];
+        if (ser.contains("variablesReference")) {
+            body["variablesReference"] = ser["variablesReference"];
+        } else {
+             body["variablesReference"] = 0;
+        }
+    } else {
+        // Not found
+        body["result"] = "undefined";
+        body["variablesReference"] = 0;
+    }
+
+    SendResponse(req, body);
 }
