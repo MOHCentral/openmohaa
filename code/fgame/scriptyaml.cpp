@@ -42,12 +42,34 @@ Event EV_ScriptYAML_Parse
     EV_RETURN
 );
 
+Event EV_ScriptYAML_Save
+(
+    "save",
+    EV_DEFAULT,
+    "sS",
+    "filename format",
+    "Saves the YAML/JSON content to a file. Format can be 'yaml' or 'json' (default: yaml).",
+    EV_NORMAL
+);
+
+Event EV_ScriptYAML_Serialize
+(
+    "serialize",
+    EV_DEFAULT,
+    "S",
+    "format",
+    "Serializes the content to a string. Format can be 'yaml' or 'json' (default: yaml).",
+    EV_RETURN
+);
+
 // Class Declaration
 CLASS_DECLARATION(SimpleEntity, ScriptYAML, "ScriptYAML")
 {
     {&EV_ScriptYAML_Load, &ScriptYAML::Load},
     {&EV_ScriptYAML_Get,  &ScriptYAML::Get},
     {&EV_ScriptYAML_Parse, &ScriptYAML::Parse},
+    {&EV_ScriptYAML_Save, &ScriptYAML::Save},
+    {&EV_ScriptYAML_Serialize, &ScriptYAML::Serialize},
     {NULL, NULL}
 };
 
@@ -239,4 +261,65 @@ void ScriptYAML::Parse(Event *ev)
         gi.Printf("YAML Parse Error: %s\n", e.what());
         ev->AddInteger(0);
     }
+}
+
+void ScriptYAML::Save(Event *ev)
+{
+    str filename = ev->GetString(1);
+    str format = "yaml";
+    if (ev->NumArgs() > 1) {
+        format = ev->GetString(2);
+    }
+
+    YAMLContainer* container = (YAMLContainer*)m_yamlNode;
+    if (!container->node.IsDefined()) {
+        gi.Printf("YAML Save Error: Node is undefined\n");
+        return;
+    }
+
+    YAML::Emitter out;
+    if (format == "json") {
+        out << YAML::Json;
+        out << YAML::Flow;
+    }
+
+    out << container->node;
+
+    if (!out.good()) {
+        gi.Printf("YAML Emitter Error: %s\n", out.GetLastError());
+        return;
+    }
+
+    std::string output = out.c_str();
+    gi.FS_WriteFile(filename.c_str(), output.c_str(), output.length());
+}
+
+void ScriptYAML::Serialize(Event *ev)
+{
+    str format = "yaml";
+    if (ev->NumArgs() > 0) {
+        format = ev->GetString(1);
+    }
+
+    YAMLContainer* container = (YAMLContainer*)m_yamlNode;
+    if (!container->node.IsDefined()) {
+        ev->AddString("");
+        return;
+    }
+
+    YAML::Emitter out;
+    if (format == "json") {
+        out << YAML::Json;
+        out << YAML::Flow;
+    }
+
+    out << container->node;
+
+    if (!out.good()) {
+        gi.Printf("YAML Emitter Error: %s\n", out.GetLastError());
+        ev->AddString("");
+        return;
+    }
+
+    ev->AddString(out.c_str());
 }

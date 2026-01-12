@@ -20,6 +20,8 @@ public:
     void Load(Event *ev);
     void Get(Event *ev);
     void Parse(Event *ev);
+    void Save(Event *ev);
+    void Serialize(Event *ev);
 };
 
 #endif /* __SCRIPTYAML_H__ */
