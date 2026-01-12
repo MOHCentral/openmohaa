@@ -696,6 +696,16 @@ void Sentient::ChangeWeapon(Weapon *weapon, weaponhand_t hand)
         return;
     }
 
+    // weapon_change hook
+    if (IsSubclassOfPlayer() && weapon) {
+        Weapon *oldWeapon = activeWeaponList[hand];
+        if (oldWeapon) {
+            G_ScriptEvent("weapon_change", this, "ss", oldWeapon->getName().c_str(), weapon->getName().c_str());
+        } else {
+            G_ScriptEvent("weapon_change", this, "ss", "none", weapon->getName().c_str());
+        }
+    }
+
     ActivateWeapon(weapon, hand);
 }
 

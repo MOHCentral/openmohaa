@@ -40,6 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "vehicleturret.h"
 #include "debuglines.h"
 #include "g_spawn.h"
+#include "g_scriptevents.h"
 
 Event EV_Weapon_Shoot("shoot", EV_DEFAULT, "S", "mode", "Shoot the weapon", EV_NORMAL);
 Event EV_Weapon_DoneRaising(
@@ -1384,6 +1385,11 @@ void Weapon::Shoot(Event *ev)
         return;
     }
 
+    // HOOK: weapon_fire
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_fire", owner, "si", getName().c_str(), AmmoAvailable(mode));
+    }
+
     GetMuzzlePosition(pos, vBarrel, forward, right, up);
     ApplyFireKickback(forward, 1000.0);
 
@@ -2542,6 +2548,10 @@ void Weapon::PickupWeapon(Event *ev)
         iGiveAmmo = startammo[FIRE_PRIMARY];
 
         Sound(sPickupSound);
+
+        if (sen->IsSubclassOfPlayer()) {
+            G_ScriptEvent("item_pickup", sen, "si", item_name.c_str(), iGiveAmmo);
+        }
     } else {
         bool bSameAmmo[MAX_FIREMODES] = {false};
 
@@ -2925,6 +2935,11 @@ void Weapon::StartReloading(void)
 {
     if (!ammo_clip_size[0] || !owner) {
         return;
+    }
+
+    // HOOK: weapon_reload
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_reload", owner, "s", getName().c_str());
     }
 
     if (SetWeaponAnim("reload", EV_Weapon_DoneReloading)) {

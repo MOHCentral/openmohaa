@@ -2204,6 +2204,9 @@ Player::Player()
         speed_multiplier[i] = 1.0f;
     }
 
+    old_pm_flags = 0;
+    wasOnGround  = false;
+
 #ifdef OPM_FEATURES
     m_fpsTiki  = NULL;
     animDoneVM = true;
@@ -3231,6 +3234,9 @@ void Player::Killed(Event *ev)
     scriptDelegate_kill.Trigger(this, *event);
     scriptedEvents[SE_KILL].Trigger(event);
 
+    G_ScriptEvent("player_kill", attacker, "eesii", attacker, this, inflictor, location, meansofdeath);
+    G_ScriptEvent("player_death", this, "e", inflictor);
+
     Unregister(STRING_DEATH);
 }
 
@@ -3505,6 +3511,8 @@ void Player::DoUse(Event *ev)
             event->AddListener(this);
 
             hit->entity->ProcessEvent(event);
+
+            G_ScriptEvent("player_use", this, "e", hit->entity);
 
             if (m_pVehicle || m_pTurret) {
                 break;
@@ -4184,6 +4192,36 @@ void Player::ClientMove(usercmd_t *ucmd)
     m_fLastDeltaTime = level.time;
 
     TouchStuff(&pm);
+
+    //
+    // Movement Hooks
+    //
+    // player_land
+    if (!wasOnGround && groundentity) {
+        G_ScriptEvent("player_land", this, "f", oldvelocity.z);
+    }
+    wasOnGround = (groundentity != NULL);
+
+    // player_crouch
+    if (!(old_pm_flags & PMF_DUCKED) && (client->ps.pm_flags & PMF_DUCKED)) {
+        G_ScriptEvent("player_crouch", this, "");
+    }
+
+    // player_prone
+    if (!(old_pm_flags & PMF_VIEW_PRONE) && (client->ps.pm_flags & PMF_VIEW_PRONE)) {
+        G_ScriptEvent("player_prone", this, "");
+    }
+
+    old_pm_flags = client->ps.pm_flags;
+
+    // Periodic stats
+    static int last_stats_time = 0;
+    if (level.inttime > last_stats_time + 60000) {
+        last_stats_time = level.inttime;
+        // Fire player_distance for all players?
+        // Actually this is ClientMove so it runs for this player
+        G_ScriptEvent("player_distance", this, "ffff", m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
+    }
 }
 
 void Player::VehicleMove(usercmd_t *ucmd)
@@ -7930,6 +7968,9 @@ void Player::Jump(Event *ev)
     maxheight = ev->GetFloat(1);
 
     if (maxheight > 16) {
+        // HOOK: player_jump
+        G_ScriptEvent("player_jump", this, "");
+
         // v^2 = 2ad
         velocity[2] += sqrt(2 * sv_gravity->integer * maxheight);
 
@@ -8547,10 +8588,15 @@ void Player::AttachToLadder(Event *ev)
     pLadder->PositionOnLadder(this);
 
     SetViewAngles(Vector(v_angle[0], angles[1], v_angle[2]));
+
+    G_ScriptEvent("ladder_mount", this, "e", pLadder);
 }
 
 void Player::UnattachFromLadder(Event *ev)
 {
+    if (m_pLadder) {
+        G_ScriptEvent("ladder_dismount", this, "e", m_pLadder);
+    }
     m_pLadder = NULL;
 }
 
@@ -9569,6 +9615,12 @@ void Player::Join_DM_Team(Event *ev)
     }
 
     m_fTeamSelectTime = level.time;
+    // HOOK: team_join
+    // We should probably pass the old team and new team.
+    // team is the new team.
+    // GetTeam() returns the current (old) team before SetTeam is called.
+    G_ScriptEvent("team_join", this, "ii", GetTeam(), team);
+
     SetTeam(team);
     // Make sure to remove player from turret
     RemoveFromVehiclesAndTurrets();
@@ -9792,12 +9844,19 @@ void Player::ArmorDamage(Event *ev)
 
     scriptDelegate_damage.Trigger(this, *event);
     scriptedEvents[SE_DAMAGE].Trigger(event);
+
+    G_ScriptEvent("player_damage", this, "efi", attacker, damage, mod);
 }
 
 void Player::Disconnect(void)
 {
     Event *ev = new Event;
     ev->AddListener(this);
+
+    // Fire final distance event
+    G_ScriptEvent("player_distance", this, "ffff", m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
+
+    G_ScriptEvent("client_disconnect", this, "");
 
     scriptDelegate_disconnecting.Trigger(this, *ev);
     scriptedEvents[SE_DISCONNECTED].Trigger(ev);
@@ -11163,6 +11222,8 @@ void Player::EventDMMessage(Event *ev)
         } else {
             G_PrintfClient(edict, "says @#%d: %s\n", iMode - 1, pStartMessage);
         }
+
+        G_ScriptEvent("player_say", this, "s", pStartMessage);
 
         gi.SendServerCommand(iMode - 1, "%s\n", szPrintString);
 
