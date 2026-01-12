@@ -47,6 +47,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "md5.h"
 
+#ifdef USE_HTTP
+#include "curlworker.h"
+#endif
+
 #ifdef WIN32
 #    include <direct.h>
 #else
@@ -2123,6 +2127,32 @@ Event EV_ScriptThread_FS_OpenAppend
     EV_RETURN
 );
 
+#ifdef USE_HTTP
+Event EV_ScriptThread_CurlGet(
+    "curl_get",
+    EV_DEFAULT,
+    "ss",
+    "url callback_label",
+    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
+);
+
+Event EV_ScriptThread_CurlPost(
+    "curl_post",
+    EV_DEFAULT,
+    "sss",
+    "url post_data callback_label",
+    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
+);
+
+Event EV_ScriptThread_CurlPut(
+    "curl_put",
+    EV_DEFAULT,
+    "sss",
+    "url put_data callback_label",
+    "Performs an HTTP PUT request asynchronously and calls the label with the result (success, data, http_code)."
+);
+#endif
+
 CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetCvar,                 &ScriptThread::Getcvar                 },
     {&EV_ScriptThread_GetRandomFloat,          &ScriptThread::GetRandomFloat          },
@@ -2358,6 +2388,11 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_FS_OpenRead,             &ScriptThread::FS_OpenRead             },
     {&EV_ScriptThread_FS_OpenWrite,            &ScriptThread::FS_OpenWrite            },
     {&EV_ScriptThread_FS_OpenAppend,           &ScriptThread::FS_OpenAppend           },
+#ifdef USE_HTTP
+    {&EV_ScriptThread_CurlGet,                 &ScriptThread::CurlGet                 },
+    {&EV_ScriptThread_CurlPost,                &ScriptThread::CurlPost                },
+    {&EV_ScriptThread_CurlPut,                 &ScriptThread::CurlPut                 },
+#endif
     {NULL,                                     NULL                                   }
 };
 
@@ -7490,6 +7525,58 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
     file = new FSFile(f);
     ev->AddListener(file);
 }
+
+#ifdef USE_HTTP
+void ScriptThread::CurlGet(Event *ev)
+{
+    str url = ev->GetString(1);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        gi.DPrintf("CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        return;
+    }
+
+    CurlTask task;
+    task.url = url.c_str();
+    task.callbackLabel = ev->GetString(2).c_str();
+    task.method = 0; // GET
+
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptThread::CurlPost(Event *ev)
+{
+    str url = ev->GetString(1);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        gi.DPrintf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        return;
+    }
+
+    CurlTask task;
+    task.url = url.c_str();
+    task.postData = ev->GetString(2).c_str();
+    task.callbackLabel = ev->GetString(3).c_str();
+    task.method = 1; // POST
+
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptThread::CurlPut(Event *ev)
+{
+    str url = ev->GetString(1);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        gi.DPrintf("CurlPut: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        return;
+    }
+
+    CurlTask task;
+    task.url = url.c_str();
+    task.postData = ev->GetString(2).c_str();
+    task.callbackLabel = ev->GetString(3).c_str();
+    task.method = 2; // PUT
+
+    g_CurlWorker.AddTask(task);
+}
+#endif
 
 CLASS_DECLARATION(Listener, OSFile, NULL) {
     {NULL, NULL}

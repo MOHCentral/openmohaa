@@ -84,8 +84,9 @@ protected:
     void        RegisterAlias(Event *ev);
 
 #ifdef USE_HTTP
-    void        CurlGet(Event *ev);
-    void        CurlPost(Event *ev);
+//    void        CurlGet(Event *ev);
+//    void        CurlPost(Event *ev);
+//    void        CurlPut(Event *ev);
 #endif
 
 public:

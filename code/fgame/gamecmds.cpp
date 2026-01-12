@@ -74,6 +74,7 @@ consolecmd_t G_ConsoleCmds[] = {
     {"addbot",          G_AddBotCommand,      qfalse},
     {"addbotnamed",     G_AddBotNamedCommand, qfalse},
     {"removebot",       G_RemoveBotCommand,   qfalse},
+    {"login",           G_LoginCmd,           qtrue },
 #ifdef _DEBUG
     {"bot",             G_BotCommand,         qfalse},
 #endif
@@ -697,6 +698,25 @@ qboolean G_RemoveBotCommand(gentity_t *ent)
     totalnumbots = sv_numbots->integer - Q_min(numbots, sv_numbots->integer);
 
     gi.cvar_set("sv_numbots", va("%d", totalnumbots));
+    return qtrue;
+}
+
+qboolean G_LoginCmd(gentity_t *ent)
+{
+    if (gi.Argc() < 3) {
+        gi.SendServerCommand(ent - g_entities, "print \"Usage: login <client_id> <client_secret>\\n\"");
+        return qtrue;
+    }
+
+    if (!ent || !ent->entity) {
+        return qtrue;
+    }
+
+    Event *ev = new Event("login");
+    ev->AddString(gi.Argv(1));
+    ev->AddString(gi.Argv(2));
+    ent->entity->PostEvent(ev, 0.0f);
+
     return qtrue;
 }
 

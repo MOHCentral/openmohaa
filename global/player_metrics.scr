@@ -1,0 +1,148 @@
+// global/player_metrics.scr
+
+main:
+    // Register global event listeners
+    registerev "connected" "global/player_metrics.scr::player_connected"
+    registerev "disconnected" "global/player_metrics.scr::player_disconnected"
+    registerev "kill" "global/player_metrics.scr::player_killed"
+    registerev "spawn" "global/player_metrics.scr::player_spawned"
+    registerev "damage" "global/player_metrics.scr::player_damaged"
+end
+
+player_connected:
+    local.player = parm.other
+
+    // Start a thread to handle logic for this player (specifically login)
+    if (local.player)
+    {
+        local.player thread player_logic
+    }
+end
+
+player_disconnected:
+    local.player = parm.other
+    if (local.player && local.player.client_id)
+    {
+        local.data = "{"
+        local.data += "\"event\": \"disconnected\","
+        local.data += "\"client_id\": \"" + local.player.client_id + "\","
+        local.data += "\"timestamp\": " + level.time
+        local.data += "}"
+
+        // Use global command
+        curl_put "https://api.example.com/events" local.data "global/player_metrics.scr::api_callback"
+    }
+end
+
+player_logic:
+    local.player = self
+
+    // Wait for the login event triggered by the 'login' console command
+    local.player waittill login local.client_id local.client_secret
+
+    local.player.client_id = local.client_id
+    local.player.client_secret = local.client_secret
+
+    local.player iprint ("Logged in as Client ID: " + local.client_id)
+
+    // Send a login event to the API
+    local.data = "{"
+    local.data += "\"event\": \"login\","
+    local.data += "\"client_id\": \"" + local.client_id + "\","
+    local.data += "\"client_secret\": \"" + local.client_secret + "\"," // Be careful with secrets!
+    local.data += "\"timestamp\": " + level.time
+    local.data += "}"
+
+    curl_put "https://api.example.com/login" local.data "global/player_metrics.scr::api_callback"
+end
+
+player_spawned:
+    local.player = parm.other
+    if (local.player && local.player.client_id)
+    {
+        local.data = "{"
+        local.data += "\"event\": \"spawned\","
+        local.data += "\"client_id\": \"" + local.player.client_id + "\","
+        local.data += "\"timestamp\": " + level.time
+        local.data += "}"
+
+        curl_put "https://api.example.com/events" local.data "global/player_metrics.scr::api_callback"
+    }
+end
+
+player_killed:
+    // parm.other is the victim (self in C++)? No, in registerev "kill", the event is global.
+    // However, the C++ code passes: attacker, damage, inflictor, direction, position, ... and victim as last arg?
+    // Let's check `Player::Killed` in `player.cpp`.
+    // event->AddEntity(this); // The victim is added last.
+
+    local.attacker = parm.arg[1]
+    local.victim = parm.arg[11]
+
+    if (local.victim && local.victim.client_id)
+    {
+        local.data = "{"
+        local.data += "\"event\": \"killed\","
+        local.data += "\"client_id\": \"" + local.victim.client_id + "\","
+        local.data += "\"timestamp\": " + level.time
+
+        if (local.attacker && local.attacker.client_id)
+        {
+            local.data += ",\"attacker_id\": \"" + local.attacker.client_id + "\""
+        }
+
+        local.data += "}"
+
+        curl_put "https://api.example.com/events" local.data "global/player_metrics.scr::api_callback"
+    }
+
+    if (local.attacker && local.attacker.client_id && local.attacker != local.victim)
+    {
+        local.data = "{"
+        local.data += "\"event\": \"kill\","
+        local.data += "\"client_id\": \"" + local.attacker.client_id + "\","
+        local.data += "\"victim_id\": \"" + local.victim.client_id + "\"," // Might be null if victim not logged in
+        local.data += "\"timestamp\": " + level.time
+        local.data += "}"
+
+        curl_put "https://api.example.com/events" local.data "global/player_metrics.scr::api_callback"
+    }
+end
+
+player_damaged:
+    // Player::ArmorDamage
+    // event = new Event(0, 11);
+    // ... same structure as Killed roughly, but passed arguments might differ slightly in source.
+    // event->AddEntity(this); // victim is last.
+
+    local.victim = parm.arg[11]
+    local.attacker = parm.arg[1]
+    local.damage = parm.arg[2]
+
+    if (local.victim && local.victim.client_id)
+    {
+        local.data = "{"
+        local.data += "\"event\": \"damage\","
+        local.data += "\"client_id\": \"" + local.victim.client_id + "\","
+        local.data += "\"amount\": " + local.damage + ","
+        local.data += "\"timestamp\": " + level.time
+        local.data += "}"
+
+        curl_put "https://api.example.com/events" local.data "global/player_metrics.scr::api_callback"
+    }
+end
+
+api_callback:
+    local.success = parm.arg[1]
+    local.data = parm.arg[2]
+    local.http_code = parm.arg[3]
+
+    if (local.success)
+    {
+        // dprintln ("API Call Successful: " + local.http_code)
+    }
+    else
+    {
+        dprintln ("API Call Failed: " + local.http_code)
+    }
+end

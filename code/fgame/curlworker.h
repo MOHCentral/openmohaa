@@ -35,7 +35,7 @@ struct CurlTask {
     std::string url;
     std::string postData;
     std::string callbackLabel;
-    bool isPost;
+    int method; // 0=GET, 1=POST, 2=PUT
 };
 
 struct CurlResult {

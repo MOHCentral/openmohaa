@@ -129,7 +129,11 @@ void CurlWorker::WorkLoop() {
                 // Follow redirects
                 curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
-                if (task.isPost) {
+                if (task.method == 1) { // POST
+                    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+                    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, task.postData.c_str());
+                } else if (task.method == 2) { // PUT
+                    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
                     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, task.postData.c_str());
                 }
 

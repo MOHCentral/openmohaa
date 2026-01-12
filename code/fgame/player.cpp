@@ -388,6 +388,15 @@ Event EV_Player_UpdatePowerupTimer
     "Called once a second to decrement powerup time.",
     EV_NORMAL
 );
+Event EV_Player_Login
+(
+    "login",
+    EV_DEFAULT,
+    "ss",
+    "client_id client_secret",
+    "Logs the player in.",
+    EV_NORMAL
+);
 Event EV_Player_ResetState
 (
     "resetstate",

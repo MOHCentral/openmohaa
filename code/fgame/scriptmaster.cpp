@@ -121,21 +121,29 @@ Event EV_Cache
 );
 
 #ifdef USE_HTTP
-Event EV_ScriptMaster_CurlGet(
-    "curl_get",
-    EV_DEFAULT,
-    "ss",
-    "url callback_label",
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
-);
-
-Event EV_ScriptMaster_CurlPost(
-    "curl_post",
-    EV_DEFAULT,
-    "sss",
-    "url post_data callback_label",
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
-);
+//Event EV_ScriptMaster_CurlGet(
+//    "curl_get",
+//    EV_DEFAULT,
+//    "ss",
+//    "url callback_label",
+//    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
+//);
+//
+//Event EV_ScriptMaster_CurlPost(
+//    "curl_post",
+//    EV_DEFAULT,
+//    "sss",
+//    "url post_data callback_label",
+//    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
+//);
+//
+//Event EV_ScriptMaster_CurlPut(
+//    "curl_put",
+//    EV_DEFAULT,
+//    "sss",
+//    "url put_data callback_label",
+//    "Performs an HTTP PUT request asynchronously and calls the label with the result (success, data, http_code)."
+//);
 #endif
 
 CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
@@ -143,8 +151,9 @@ CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
     {&EV_RegisterAlias,         &ScriptMaster::RegisterAlias        },
     {&EV_Cache,                 &ScriptMaster::Cache                },
 #ifdef USE_HTTP
-    {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
-    {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
+//    {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
+//    {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
+//    {&EV_ScriptMaster_CurlPut,  &ScriptMaster::CurlPut              },
 #endif
     {NULL,                      NULL                                }
 };
@@ -606,38 +615,55 @@ void ScriptMaster::Cache(Event *ev)
 }
 
 #ifdef USE_HTTP
-void ScriptMaster::CurlGet(Event *ev)
-{
-    str url = ev->GetString(1);
-    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
-        return;
-    }
-
-    CurlTask task;
-    task.url = url.c_str();
-    task.callbackLabel = ev->GetString(2).c_str();
-    task.isPost = false;
-
-    g_CurlWorker.AddTask(task);
-}
-
-void ScriptMaster::CurlPost(Event *ev)
-{
-    str url = ev->GetString(1);
-    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
-        return;
-    }
-
-    CurlTask task;
-    task.url = url.c_str();
-    task.postData = ev->GetString(2).c_str();
-    task.callbackLabel = ev->GetString(3).c_str();
-    task.isPost = true;
-
-    g_CurlWorker.AddTask(task);
-}
+//void ScriptMaster::CurlGet(Event *ev)
+//{
+//    str url = ev->GetString(1);
+//    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+//        gi.DPrintf("CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+//        return;
+//    }
+//
+//    CurlTask task;
+//    task.url = url.c_str();
+//    task.callbackLabel = ev->GetString(2).c_str();
+//    task.method = 0; // GET
+//
+//    g_CurlWorker.AddTask(task);
+//}
+//
+//void ScriptMaster::CurlPost(Event *ev)
+//{
+//    str url = ev->GetString(1);
+//    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+//        gi.DPrintf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+//        return;
+//    }
+//
+//    CurlTask task;
+//    task.url = url.c_str();
+//    task.postData = ev->GetString(2).c_str();
+//    task.callbackLabel = ev->GetString(3).c_str();
+//    task.method = 1; // POST
+//
+//    g_CurlWorker.AddTask(task);
+//}
+//
+//void ScriptMaster::CurlPut(Event *ev)
+//{
+//    str url = ev->GetString(1);
+//    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+//        gi.DPrintf("CurlPut: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+//        return;
+//    }
+//
+//    CurlTask task;
+//    task.url = url.c_str();
+//    task.postData = ev->GetString(2).c_str();
+//    task.callbackLabel = ev->GetString(3).c_str();
+//    task.method = 2; // PUT
+//
+//    g_CurlWorker.AddTask(task);
+//}
 #endif
 
 void ScriptMaster::InitConstStrings(void)
