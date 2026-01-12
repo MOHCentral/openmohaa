@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "g_spawn.h"
 #include "g_bot.h"
+#include "g_scriptevents.h"
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -960,6 +961,23 @@ const char *G_ClientConnect(int clientNum, qboolean firstTime, qboolean differen
 
         G_PrintToAllClients(va("%s is preparing for deployment\n", client->pers.netname), 2);
     }
+
+    if (firstTime) {
+        // HOOK: client_connect
+        // Note: ent->entity might be null here, so we might need to pass just the name or index if entity is not available.
+        // But for G_ScriptEvent we usually need an Entity*.
+        // If ent->entity is null, we can't pass it.
+        // However, we can fire a global event with arguments.
+        // Let's see if we can get a temporary entity wrapper or just wait for ClientBegin.
+        // ClientBegin is where the player entity is spawned.
+        // But client_connect is often desired before spawn.
+        // In this system, script events are triggered on entities.
+        // If we don't have an entity, we can't trigger on it.
+        // We can pass NULL as entity to G_ScriptEvent, which triggers on the Director/World.
+        // We can pass client number as argument.
+        G_ScriptEvent("client_connect", NULL, "i", clientNum);
+    }
+
     return NULL;
 }
 
@@ -1024,6 +1042,12 @@ void G_ClientBegin(gentity_t *ent, usercmd_t *cmd)
         if (ent->entity) {
             ent->entity->EndFrame();
         }
+
+        // HOOK: client_begin
+        if (ent->entity) {
+            G_ScriptEvent("client_begin", ent->entity, "");
+        }
+
     } catch (const char *error) {
         G_ExitWithError(error);
     }

@@ -32,6 +32,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "health.h"
 #include "game.h"
+#include "g_scriptevents.h"
 
 typedef struct {
     str  name;
@@ -594,6 +595,15 @@ Item *Item::ItemPickup(Entity *other, qboolean add_to_inventory)
     // we put this here so we can transfer information from the original item we picked up
     //
     sent->ReceivedItem(item);
+
+    // HOOK: item_pickup
+    // Exclude weapons as they are handled in weapon.cpp, unless we want double events?
+    // Weapons inherit from Item. Weapon::PickupWeapon calls Item::ItemPickup?
+    // Weapon::PickupWeapon does NOT call Item::ItemPickup. It has its own logic.
+    // So this is for non-weapon items (health, ammo, etc)
+    if (sent->IsSubclassOfPlayer()) {
+        G_ScriptEvent("item_pickup", sent, "si", item->getName().c_str(), item->getAmount());
+    }
 
     Sound(sPickupSound);
 
