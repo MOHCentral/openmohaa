@@ -267,6 +267,8 @@ cvar_t *g_obituarylocation;
 
 cvar_t *sv_scriptfiles;
 
+cvar_t *sv_auth_url;
+
 // The maximum number of allocated bot clients
 cvar_t *sv_maxbots;
 // The number of bots that should be spawned
@@ -672,6 +674,7 @@ void CVAR_Init(void)
     }
 
     sv_scriptfiles = gi.Cvar_Get("sv_scriptfiles", "0", 0);
+    sv_auth_url    = gi.Cvar_Get("sv_auth_url", "", CVAR_ARCHIVE);
     sv_maxbots     = gi.Cvar_Get("sv_maxbots", "0", CVAR_LATCH);
     sv_sharedbots  = gi.Cvar_Get("sv_sharedbots", "0", CVAR_LATCH);
     sv_numbots     = gi.Cvar_Get("sv_numbots", "0", 0);

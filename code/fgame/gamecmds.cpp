@@ -38,6 +38,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "scriptthread.h"
 #include "../script/scriptvariable.h"
+#include "curlworker.h"
+#include "../qcommon/json.hpp"
 
 typedef struct {
     const char *command;
@@ -76,6 +78,7 @@ consolecmd_t G_ConsoleCmds[] = {
     {"addbot",          G_AddBotCommand,      qfalse},
     {"addbotnamed",     G_AddBotNamedCommand, qfalse},
     {"removebot",       G_RemoveBotCommand,   qfalse},
+    {"login",           G_LoginCmd,           qfalse},
 #ifdef _DEBUG
     {"bot",             G_BotCommand,         qfalse},
 #endif
@@ -117,6 +120,7 @@ void G_InitConsoleCommands(void)
     gi.AddCommand("primarydmweapon", NULL);
     gi.AddCommand("secondarydmweapon", NULL);
     gi.AddCommand("dmmessage", NULL);
+    gi.AddCommand("login", NULL);
 
     for (cmds = G_ConsoleCmds; cmds->command != NULL; cmds++) {
         gi.AddCommand(cmds->command, NULL);
@@ -342,6 +346,11 @@ void G_Say(gentity_t *ent, qboolean team, qboolean arg0)
     gentity_t  *other;
     const char *p;
     char        text[2048];
+
+    if (sv_auth_url->string[0] && ent->entity && !((Player *)ent->entity)->IsAuthenticated()) {
+        gi.centerprintf(ent, "You must be logged in to chat.");
+        return;
+    }
 
     if (gi.Argc() < 2 && !arg0) {
         return;
@@ -734,6 +743,39 @@ qboolean G_RemoveBotCommand(gentity_t *ent)
     totalnumbots = sv_numbots->integer - Q_min(numbots, sv_numbots->integer);
 
     gi.cvar_set("sv_numbots", va("%d", totalnumbots));
+    return qtrue;
+}
+
+qboolean G_LoginCmd(gentity_t *ent) {
+#ifdef USE_HTTP
+    if (!sv_auth_url->string[0]) {
+        gi.Printf("Authentication server not configured.\n");
+        return qtrue;
+    }
+
+    if (gi.Argc() < 3) {
+        gi.Printf("Usage: login <username> <password>\n");
+        return qtrue;
+    }
+
+    const char* username = gi.Argv(1);
+    const char* password = gi.Argv(2);
+    const char* ip = Info_ValueForKey(ent->client->pers.userinfo, "ip");
+
+    nlohmann::json j;
+    j["username"] = username;
+    j["password"] = password;
+    j["ip"] = ip ? ip : "";
+
+    CurlTask task;
+    task.url = sv_auth_url->string;
+    task.postData = j.dump();
+    task.isPost = true;
+    task.callbackLabel = "login_" + std::to_string(ent - g_entities);
+
+    g_CurlWorker.AddTask(task);
+    gi.centerprintf(ent, "Authenticating...");
+#endif
     return qtrue;
 }
 

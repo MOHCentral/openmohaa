@@ -2048,6 +2048,7 @@ Player::Player()
     // Added in OPM
     //====
     m_bConnected = false;
+    m_authenticated = false;
 
     m_iInstantMessageTime = 0;
     m_iTextChatTime       = 0;
@@ -4527,6 +4528,18 @@ void Player::ClientThink(void)
     }
 
     if ((current_ucmd->serverTime - client->ps.commandTime) < 1) {
+        return;
+    }
+
+    if (sv_auth_url->string[0] && !m_authenticated) {
+        client->ps.pm_type = PM_SPECTATOR;
+        client->ps.pm_flags |= PMF_FROZEN;
+
+        static int lastPrint = 0;
+        if (level.inttime > lastPrint + 5000) {
+            lastPrint = level.inttime;
+            gi.centerprintf(edict, "Please login with /login <username> <password>");
+        }
         return;
     }
 

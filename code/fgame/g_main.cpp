@@ -40,6 +40,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "playerbot.h"
 #include "g_bot.h"
 #include "navigation_recast_load.h"
+#include "curlworker.h"
+#include "../qcommon/json.hpp"
 
 #include "../corepp/tiki.h"
 
@@ -312,6 +314,10 @@ void G_InitGame(int levelTime, int randomSeed)
     gi.Printf("===== ABOUT TO START DAP SERVER =====\n");
     g_DAPServer.Start(4711);
     gi.Printf("===== DAP SERVER START() RETURNED =====\n");
+
+#ifdef USE_HTTP
+    g_CurlWorker.Start();
+#endif
 }
 
 /*
@@ -364,6 +370,10 @@ void G_ShutdownGame()
 
     G_DeAllocGameData();
     g_DAPServer.Stop();
+
+#ifdef USE_HTTP
+    g_CurlWorker.Stop();
+#endif
 }
 
 //===================================================================
@@ -489,6 +499,36 @@ void G_RunFrame(int levelTime, int frameTime)
     static int         processedFrameID         = 0;
 
     try {
+#ifdef USE_HTTP
+        CurlResult res;
+        while (g_CurlWorker.GetResult(res)) {
+            if (res.callbackLabel.substr(0, 6) == "login_") {
+                try {
+                    int clientNum = std::stoi(res.callbackLabel.substr(6));
+                    if (clientNum >= 0 && clientNum < game.maxclients) {
+                        gentity_t *ent = &g_entities[clientNum];
+                        if (ent->inuse && ent->entity && ent->entity->IsSubclassOfPlayer()) {
+                            Player *player = (Player *)ent->entity;
+                            if (res.success) {
+                                nlohmann::json j = nlohmann::json::parse(res.data);
+                                if (j.contains("success") && j["success"].get<bool>()) {
+                                    player->m_authenticated = true;
+                                    gi.centerprintf(ent, "Login successful!");
+                                } else {
+                                    gi.centerprintf(ent, "Login failed: Invalid credentials.");
+                                }
+                            } else {
+                                gi.centerprintf(ent, "Login failed: Server error.");
+                            }
+                        }
+                    }
+                } catch (...) {
+                    // Ignore parsing errors
+                }
+            }
+        }
+#endif
+
         g_iInThinks = 0;
 
         if (g_showmem->integer) {

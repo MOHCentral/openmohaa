@@ -367,6 +367,7 @@ public:
     float             speed_multiplier[MAX_SPEED_MULTIPLIERS];
     ScriptThreadLabel m_killedLabel;
     bool              m_bConnected;
+    bool              m_authenticated;
     str               m_lastcommand;
 
     // For event hooks
@@ -1014,6 +1015,7 @@ public:
 #endif
 
     bool IsPrimaryWeaponValid() const;
+    bool IsAuthenticated() const { return m_authenticated; }
 
     void     PostAnimate() override;
     void     Postthink() override;
