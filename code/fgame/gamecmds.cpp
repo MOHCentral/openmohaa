@@ -79,6 +79,7 @@ consolecmd_t G_ConsoleCmds[] = {
     {"addbotnamed",     G_AddBotNamedCommand, qfalse},
     {"removebot",       G_RemoveBotCommand,   qfalse},
     {"login",           G_LoginCmd,           qfalse},
+    {"logout",          G_LogoutCmd,          qfalse},
 #ifdef _DEBUG
     {"bot",             G_BotCommand,         qfalse},
 #endif
@@ -121,6 +122,7 @@ void G_InitConsoleCommands(void)
     gi.AddCommand("secondarydmweapon", NULL);
     gi.AddCommand("dmmessage", NULL);
     gi.AddCommand("login", NULL);
+    gi.AddCommand("logout", NULL);
 
     for (cmds = G_ConsoleCmds; cmds->command != NULL; cmds++) {
         gi.AddCommand(cmds->command, NULL);
@@ -753,19 +755,35 @@ qboolean G_LoginCmd(gentity_t *ent) {
         return qtrue;
     }
 
-    if (gi.Argc() < 3) {
-        gi.Printf("Usage: login <username> <password>\n");
+    if (ent->client->pers.authenticated) {
+        gi.centerprintf(ent, "You are already logged in.");
         return qtrue;
     }
 
-    const char* username = gi.Argv(1);
-    const char* password = gi.Argv(2);
-    const char* ip = Info_ValueForKey(ent->client->pers.userinfo, "ip");
+    if (gi.Argc() < 2) {
+        gi.Printf("Usage: login <token> OR login <username> <password>\n");
+        return qtrue;
+    }
 
     nlohmann::json j;
-    j["username"] = username;
-    j["password"] = password;
+    const char* ip = Info_ValueForKey(ent->client->pers.userinfo, "ip");
     j["ip"] = ip ? ip : "";
+
+    if (gi.Argc() == 2) {
+        // Token login
+        j["token"] = gi.Argv(1);
+    } else {
+        if (!sv_auth_allow_password->integer) {
+            gi.Printf("Password login is disabled by server security policy. Use a token.\n");
+            return qtrue;
+        }
+        // User/Pass login
+        j["username"] = gi.Argv(1);
+        j["password"] = gi.Argv(2);
+
+        // Warning about cleartext
+        gi.centerprintf(ent, "Authenticating... (Warning: Password sent in cleartext)");
+    }
 
     CurlTask task;
     task.url = sv_auth_url->string;
@@ -774,8 +792,20 @@ qboolean G_LoginCmd(gentity_t *ent) {
     task.callbackLabel = "login_" + std::to_string(ent - g_entities);
 
     g_CurlWorker.AddTask(task);
-    gi.centerprintf(ent, "Authenticating...");
+    if (gi.Argc() == 2) {
+        gi.centerprintf(ent, "Authenticating with token...");
+    }
 #endif
+    return qtrue;
+}
+
+qboolean G_LogoutCmd(gentity_t *ent) {
+    if (ent->client->pers.authenticated) {
+        ent->client->pers.authenticated = qfalse;
+        gi.centerprintf(ent, "Logged out.");
+    } else {
+        gi.centerprintf(ent, "You are not logged in.");
+    }
     return qtrue;
 }
 

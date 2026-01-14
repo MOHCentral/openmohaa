@@ -2048,10 +2048,10 @@ Player::Player()
     // Added in OPM
     //====
     m_bConnected = false;
-    m_authenticated = false;
 
     m_iInstantMessageTime = 0;
     m_iTextChatTime       = 0;
+    m_iAuthReminderTime   = 0;
 
     // Distance tracking initialization
     m_fDistanceWalked   = 0.0f;
@@ -4531,14 +4531,13 @@ void Player::ClientThink(void)
         return;
     }
 
-    if (sv_auth_url->string[0] && !m_authenticated) {
+    if (sv_auth_url->string[0] && !client->pers.authenticated) {
         client->ps.pm_type = PM_SPECTATOR;
         client->ps.pm_flags |= PMF_FROZEN;
 
-        static int lastPrint = 0;
-        if (level.inttime > lastPrint + 5000) {
-            lastPrint = level.inttime;
-            gi.centerprintf(edict, "Please login with /login <username> <password>");
+        if (level.inttime > m_iAuthReminderTime) {
+            m_iAuthReminderTime = level.inttime + 5000;
+            gi.centerprintf(edict, "Please login with /login <token> or /login <username> <password>");
         }
         return;
     }

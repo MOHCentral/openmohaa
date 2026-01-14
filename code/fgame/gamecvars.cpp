@@ -268,6 +268,7 @@ cvar_t *g_obituarylocation;
 cvar_t *sv_scriptfiles;
 
 cvar_t *sv_auth_url;
+cvar_t *sv_auth_allow_password;
 
 // The maximum number of allocated bot clients
 cvar_t *sv_maxbots;
@@ -673,9 +674,10 @@ void CVAR_Init(void)
         g_obituarylocation = gi.Cvar_Get("g_obituarylocation", "1", 0);
     }
 
-    sv_scriptfiles = gi.Cvar_Get("sv_scriptfiles", "0", 0);
-    sv_auth_url    = gi.Cvar_Get("sv_auth_url", "", CVAR_ARCHIVE);
-    sv_maxbots     = gi.Cvar_Get("sv_maxbots", "0", CVAR_LATCH);
+    sv_scriptfiles         = gi.Cvar_Get("sv_scriptfiles", "0", 0);
+    sv_auth_url            = gi.Cvar_Get("sv_auth_url", "", CVAR_ARCHIVE);
+    sv_auth_allow_password = gi.Cvar_Get("sv_auth_allow_password", "0", CVAR_ARCHIVE);
+    sv_maxbots             = gi.Cvar_Get("sv_maxbots", "0", CVAR_LATCH);
     sv_sharedbots  = gi.Cvar_Get("sv_sharedbots", "0", CVAR_LATCH);
     sv_numbots     = gi.Cvar_Get("sv_numbots", "0", 0);
     sv_minPlayers  = gi.Cvar_Get("sv_minPlayers", "0", 0);

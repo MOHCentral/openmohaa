@@ -46,9 +46,10 @@ Called on game shutdown
 void G_WriteClientSessionData( gclient_t *client )
 {
 	gi.cvar_set( va( "session%i", ( int )( client - game.clients ) ),
-		va( "%s %i %i", client->pers.dm_primary[ 0 ] ? client->pers.dm_primary : "-",
+		va( "%s %i %i %i", client->pers.dm_primary[ 0 ] ? client->pers.dm_primary : "-",
 		client->pers.teamnum,
-		client->pers.round_kills) );
+		client->pers.round_kills,
+        (int)client->pers.authenticated) );
 }
 
 /*
@@ -69,12 +70,14 @@ void G_ReadClientSessionData( gclient_t *client )
 
 	session = gi.Cvar_Get(va("session%zi", client - game.clients), "", 0);
 	
-	sscanf( session->string, "%s %i %i", client->pers.dm_primary, &teamnum, &client->pers.round_kills);
+    int auth = 0;
+	sscanf( session->string, "%s %i %i %i", client->pers.dm_primary, &teamnum, &client->pers.round_kills, &auth);
 	if( client->pers.dm_primary[ 0 ] == '-' )
 	{
 		client->pers.dm_primary[ 0 ] = 0;
 	}
     client->pers.teamnum = (teamtype_t)teamnum;
+    client->pers.authenticated = (qboolean)auth;
 }
 
 
@@ -95,6 +98,8 @@ void G_InitClientPersistant( gclient_t *client, const char *userinfo )
 	//  This fixes some bugs like the player getting score
 	//  from previous maps
 	G_WriteClientSessionData( client );
+
+    client->pers.authenticated = qfalse;
 }
 
 

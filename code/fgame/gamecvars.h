@@ -269,6 +269,7 @@ extern cvar_t *g_obituarylocation;
 extern cvar_t *sv_scriptfiles;
 
 extern cvar_t *sv_auth_url;
+extern cvar_t *sv_auth_allow_password;
 
 extern cvar_t *sv_maxbots;
 extern cvar_t *sv_numbots;

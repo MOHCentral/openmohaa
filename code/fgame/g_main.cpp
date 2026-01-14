@@ -512,7 +512,7 @@ void G_RunFrame(int levelTime, int frameTime)
                             if (res.success) {
                                 nlohmann::json j = nlohmann::json::parse(res.data);
                                 if (j.contains("success") && j["success"].get<bool>()) {
-                                    player->m_authenticated = true;
+                                    ent->client->pers.authenticated = qtrue;
                                     gi.centerprintf(ent, "Login successful!");
                                 } else {
                                     gi.centerprintf(ent, "Login failed: Invalid credentials.");
