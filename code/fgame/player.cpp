@@ -3241,8 +3241,8 @@ void Player::Killed(Event *ev)
     scriptDelegate_kill.Trigger(this, *event);
     scriptedEvents[SE_KILL].Trigger(event);
 
-    G_ScriptEvent("player_kill", attacker, "eesii", attacker, this, inflictor, location, meansofdeath);
-    G_ScriptEvent("player_death", this, "e", inflictor);
+    G_ScriptEvent("player_kill", attacker, attacker, this, inflictor, location, meansofdeath);
+    G_ScriptEvent("player_death", this, inflictor);
 
     Unregister(STRING_DEATH);
 }
@@ -3519,7 +3519,7 @@ void Player::DoUse(Event *ev)
 
             hit->entity->ProcessEvent(event);
 
-            G_ScriptEvent("player_use", this, "e", hit->entity);
+            G_ScriptEvent("player_use", this, hit->entity);
 
             if (m_pVehicle || m_pTurret) {
                 break;
@@ -4205,18 +4205,18 @@ void Player::ClientMove(usercmd_t *ucmd)
     //
     // player_land
     if (!wasOnGround && groundentity) {
-        G_ScriptEvent("player_land", this, "f", oldvelocity.z);
+        G_ScriptEvent("player_land", this, oldvelocity.z);
     }
     wasOnGround = (groundentity != NULL);
 
     // player_crouch
     if (!(old_pm_flags & PMF_DUCKED) && (client->ps.pm_flags & PMF_DUCKED)) {
-        G_ScriptEvent("player_crouch", this, "");
+        G_ScriptEvent("player_crouch", this);
     }
 
     // player_prone
     if (!(old_pm_flags & PMF_VIEW_PRONE) && (client->ps.pm_flags & PMF_VIEW_PRONE)) {
-        G_ScriptEvent("player_prone", this, "");
+        G_ScriptEvent("player_prone", this);
     }
 
     old_pm_flags = client->ps.pm_flags;
@@ -4227,7 +4227,7 @@ void Player::ClientMove(usercmd_t *ucmd)
         last_stats_time = level.inttime;
         // Fire player_distance for all players?
         // Actually this is ClientMove so it runs for this player
-        G_ScriptEvent("player_distance", this, "ffff", m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
+        G_ScriptEvent("player_distance", this, m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
     }
 }
 
@@ -7976,7 +7976,7 @@ void Player::Jump(Event *ev)
 
     if (maxheight > 16) {
         // HOOK: player_jump
-        G_ScriptEvent("player_jump", this, "");
+        G_ScriptEvent("player_jump", this);
 
         // v^2 = 2ad
         velocity[2] += sqrt(2 * sv_gravity->integer * maxheight);
@@ -8596,13 +8596,13 @@ void Player::AttachToLadder(Event *ev)
 
     SetViewAngles(Vector(v_angle[0], angles[1], v_angle[2]));
 
-    G_ScriptEvent("ladder_mount", this, "e", pLadder);
+    G_ScriptEvent("ladder_mount", this, pLadder);
 }
 
 void Player::UnattachFromLadder(Event *ev)
 {
     if (m_pLadder) {
-        G_ScriptEvent("ladder_dismount", this, "e", m_pLadder);
+        G_ScriptEvent("ladder_dismount", this, m_pLadder);
     }
     m_pLadder = NULL;
 }
@@ -9626,7 +9626,7 @@ void Player::Join_DM_Team(Event *ev)
     // We should probably pass the old team and new team.
     // team is the new team.
     // GetTeam() returns the current (old) team before SetTeam is called.
-    G_ScriptEvent("team_join", this, "ii", GetTeam(), team);
+    G_ScriptEvent("team_join", this, GetTeam(), team);
 
     SetTeam(team);
     // Make sure to remove player from turret
@@ -9855,7 +9855,7 @@ void Player::ArmorDamage(Event *ev)
     // Extract attacker and damage for G_ScriptEvent
     Entity *scriptEventAttacker = ev->GetEntity(1);
     float scriptEventDamage = ev->GetFloat(2);
-    G_ScriptEvent("player_damage", this, "efi", scriptEventAttacker, scriptEventDamage, mod);
+    G_ScriptEvent("player_damage", this, scriptEventAttacker, scriptEventDamage, mod);
 }
 
 void Player::Disconnect(void)
@@ -9864,9 +9864,9 @@ void Player::Disconnect(void)
     ev->AddListener(this);
 
     // Fire final distance event
-    G_ScriptEvent("player_distance", this, "ffff", m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
+    G_ScriptEvent("player_distance", this, m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
 
-    G_ScriptEvent("client_disconnect", this, "");
+    G_ScriptEvent("client_disconnect", this);
 
     scriptDelegate_disconnecting.Trigger(this, *ev);
     scriptedEvents[SE_DISCONNECTED].Trigger(ev);
@@ -11233,7 +11233,7 @@ void Player::EventDMMessage(Event *ev)
             G_PrintfClient(edict, "says @#%d: %s\n", iMode - 1, pStartMessage);
         }
 
-        G_ScriptEvent("player_say", this, "s", pStartMessage);
+        G_ScriptEvent("player_say", this, pStartMessage);
 
         gi.SendServerCommand(iMode - 1, "%s\n", szPrintString);
 

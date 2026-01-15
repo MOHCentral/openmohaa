@@ -975,7 +975,7 @@ const char *G_ClientConnect(int clientNum, qboolean firstTime, qboolean differen
         // If we don't have an entity, we can't trigger on it.
         // We can pass NULL as entity to G_ScriptEvent, which triggers on the Director/World.
         // We can pass client number as argument.
-        G_ScriptEvent("client_connect", NULL, "i", clientNum);
+        G_ScriptEvent("client_connect", NULL, clientNum);
     }
 
     return NULL;
@@ -1045,7 +1045,7 @@ void G_ClientBegin(gentity_t *ent, usercmd_t *cmd)
 
         // HOOK: client_begin
         if (ent->entity) {
-            G_ScriptEvent("client_begin", ent->entity, "");
+            G_ScriptEvent("client_begin", ent->entity);
         }
 
     } catch (const char *error) {

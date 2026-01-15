@@ -898,7 +898,7 @@ void Projectile::Explode(Event *ev)
     // Spawn an explosion model
     if (explosionmodel.length()) {
         if (owner && owner->IsSubclassOfPlayer()) {
-            G_ScriptEvent("grenade_explode", owner, "e", this);
+            G_ScriptEvent("grenade_explode", owner, this);
         }
 
         // Move the projectile back off the surface a bit so we can see
@@ -1269,7 +1269,7 @@ void Projectile::Touch(Event *ev)
 
         // HOOK: weapon_hit (projectile)
         if (owner && owner->IsSubclassOfPlayer()) {
-            G_ScriptEvent("weapon_hit", owner, "es", other, "projectile");
+            G_ScriptEvent("weapon_hit", owner, other, "projectile");
         }
 
         if (g_gametype->integer == GT_SINGLE_PLAYER && weap) {
@@ -1948,7 +1948,7 @@ Projectile *ProjectileAttack(
     proj->SetOwner(owner);
 
     if (owner && owner->IsSubclassOfPlayer()) {
-        G_ScriptEvent("grenade_throw", owner, "e", proj);
+        G_ScriptEvent("grenade_throw", owner, proj);
     }
     proj->angles          = dir.toAngles();
     proj->charge_fraction = fraction;
@@ -2069,7 +2069,7 @@ void BulletAttack_Stat(Entity *owner, Entity *target, trace_t *trace, Weapon *we
     case HITLOC_NECK:
         weap->m_iNumHeadShots++;
         if (owner && owner->IsSubclassOfPlayer()) {
-            G_ScriptEvent("player_headshot", owner, "es", target, weap->getName().c_str());
+            G_ScriptEvent("player_headshot", owner, target, weap->getName().c_str());
         }
         break;
     case HITLOC_TORSO_UPPER:
@@ -2366,7 +2366,7 @@ float BulletAttack(
 
                         // HOOK: weapon_hit (bullet)
                         if (owner && owner->IsSubclassOfPlayer()) {
-                            G_ScriptEvent("weapon_hit", owner, "ei", ent, trace.location);
+                            G_ScriptEvent("weapon_hit", owner, ent, trace.location);
                         }
 
                         ent->Damage(
