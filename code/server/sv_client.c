@@ -2042,7 +2042,7 @@ void SV_UserVoip(client_t *cl, msg_t *msg, qboolean ignoreData)
 			continue;  // client is ignoring everyone.
 		else if (client->ignoreVoipFromClient[sender])
 			continue;  // client is ignoring this talker.
-		else if (*cl->downloadName)   // !!! FIXME: possible to DoS?
+		else if (*client->downloadName)
 			continue;  // no VoIP allowed if downloading, to save bandwidth.
 
 		if(Com_IsVoipTarget(recips, sizeof(recips), i))
