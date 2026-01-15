@@ -1318,6 +1318,9 @@ void TriggerSecret::FoundSecret(Event *ev)
     // it.  This is to prevent a secret from becoming undiscoverable.
     //
     level.found_secrets++;
+
+    // HOOK: secret_found
+    G_ScriptEvent("secret_found", ev->GetEntity(1), "e", this);
 }
 
 /*****************************************************************************/

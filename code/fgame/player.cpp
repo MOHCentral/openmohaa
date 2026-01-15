@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "entity.h"
 #include "consoleevent.h"
 #include "player.h"
+#include "g_scriptevents.h"
 #include "worldspawn.h"
 #include "weapon.h"
 #include "trigger.h"
@@ -2206,6 +2207,12 @@ Player::Player()
 
     old_pm_flags = 0;
     wasOnGround  = false;
+    m_lastStatsTime = 0;
+
+    m_fDistanceWalked = 0;
+    m_fDistanceSprinted = 0;
+    m_fDistanceSwam = 0;
+    m_fDistanceDriven = 0;
 
 #ifdef OPM_FEATURES
     m_fpsTiki  = NULL;
@@ -3234,7 +3241,7 @@ void Player::Killed(Event *ev)
     scriptDelegate_kill.Trigger(this, *event);
     scriptedEvents[SE_KILL].Trigger(event);
 
-    G_ScriptEvent("player_kill", attacker, "eesii", attacker, this, inflictor, location, meansofdeath);
+    G_ScriptEvent("player_kill", attacker, "eeeii", attacker, this, inflictor, location, meansofdeath);
     G_ScriptEvent("player_death", this, "e", inflictor);
 
     Unregister(STRING_DEATH);
@@ -3398,6 +3405,20 @@ void Player::Pain(Event *ev)
 
     pain_type     = (meansOfDeath_t)meansofdeath;
     pain_location = iLocation;
+
+    if (attacker == this && meansofdeath == MOD_SUICIDE) {
+        G_ScriptEvent("player_suicide", this, "");
+    } else if (meansofdeath == MOD_SLIME || meansofdeath == MOD_LAVA) {
+        // Assuming Lava/Slime counts as environmental/drown-like
+        if (meansofdeath == MOD_LAVA) G_ScriptEvent("player_lava", this, "");
+        else G_ScriptEvent("player_slime", this, "");
+    } else if (meansofdeath == MOD_FALLING) {
+        G_ScriptEvent("player_fall_death", this, "");
+    } else if (meansofdeath == MOD_TELEFRAG) {
+        G_ScriptEvent("player_telefrag", this, "");
+    } else if (meansofdeath == MOD_CRUSH) {
+        G_ScriptEvent("player_crush", this, "");
+    }
 
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
@@ -4214,12 +4235,21 @@ void Player::ClientMove(usercmd_t *ucmd)
 
     old_pm_flags = client->ps.pm_flags;
 
+    // Calculate distance
+    float dist = (origin - oldorigin).length();
+    if (m_pVehicle) {
+        m_fDistanceDriven += dist;
+    } else if (waterlevel > 1) {
+        m_fDistanceSwam += dist;
+    } else if (client->ps.speed > 250) { // Assuming sprint speed threshold
+        m_fDistanceSprinted += dist;
+    } else {
+        m_fDistanceWalked += dist;
+    }
+
     // Periodic stats
-    static int last_stats_time = 0;
-    if (level.inttime > last_stats_time + 60000) {
-        last_stats_time = level.inttime;
-        // Fire player_distance for all players?
-        // Actually this is ClientMove so it runs for this player
+    if (level.inttime > m_lastStatsTime + 60000) {
+        m_lastStatsTime = level.inttime;
         G_ScriptEvent("player_distance", this, "ffff", m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
     }
 }
@@ -8101,12 +8131,20 @@ void Player::EnterVehicle(Event *ev)
             setMoveType(MOVETYPE_NOCLIP);
         }
 
+        // HOOK: vehicle_enter
+        G_ScriptEvent("vehicle_enter", this, "e", ent);
+
         SafeHolster(true);
     }
 }
 
 void Player::ExitVehicle(Event *ev)
 {
+    // HOOK: vehicle_exit
+    if (m_pVehicle) {
+        G_ScriptEvent("vehicle_exit", this, "e", m_pVehicle);
+    }
+
     flags &= ~FL_PARTIAL_IMMOBILE;
     setMoveType(MOVETYPE_WALK);
     m_pVehicle = NULL;
@@ -8138,6 +8176,9 @@ void Player::EnterTurret(TurretGun *ent)
         setMoveType(MOVETYPE_TURRET);
     }
 
+    // HOOK: turret_enter
+    G_ScriptEvent("turret_enter", this, "e", ent);
+
     SafeHolster(true);
 }
 
@@ -8158,6 +8199,11 @@ void Player::EnterTurret(Event *ev)
 
 void Player::ExitTurret(void)
 {
+    // HOOK: turret_exit
+    if (m_pTurret) {
+        G_ScriptEvent("turret_exit", this, "e", m_pTurret);
+    }
+
     if (m_pTurret->inheritsFrom(PortableTurret::classinfostatic())) {
         StopPartAnimating(torso);
         SetPartAnim("mg42tripod_aim_straight_straight");
@@ -8528,6 +8574,9 @@ void Player::ToggleZoom(int iZoom)
         SetFov(iZoom);
         m_iInZoomMode = -1;
     }
+
+    // HOOK: weapon_zoom
+    G_ScriptEvent("weapon_zoom", this, "i", m_iInZoomMode == -1);
 }
 
 void Player::ZoomOff(void)
@@ -10182,6 +10231,9 @@ void Player::CallVote(Event *ev)
     votecount++;
 
     m_fAllowVoteTime = level.time + 60;
+
+    // HOOK: vote_called
+    G_ScriptEvent("vote_called", this, "ss", arg1.c_str(), arg2.c_str());
 
     if (g_protocol >= protocol_e::PROTOCOL_MOHTA_MIN) {
         //

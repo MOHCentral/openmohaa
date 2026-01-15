@@ -41,6 +41,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptthread.h"
 #include "scriptvariable.h"
 #include "scriptexception.h"
+#include "g_scriptevents.h"
 
 #include <cfloat>
 
@@ -2009,16 +2010,28 @@ void Level::CheckVote(void)
 
     if ((svsFloatTime - svsStartFloatTime) * 1000 - m_voteTime >= 30000) {
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Failed"), m_voteName.c_str()));
+
+        // HOOK: vote_failed
+        G_ScriptEvent("vote_failed", NULL, "s", m_voteName.c_str());
+
         m_voteTime = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else if (m_voteYes > m_numVoters / 2) {
         // Pass arguments to console
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Passed"), m_voteName.c_str()));
+
+        // HOOK: vote_passed
+        G_ScriptEvent("vote_passed", NULL, "s", m_voteName.c_str());
+
         m_nextVoteTime = level.inttime + 3000;
         m_voteTime     = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else if (m_voteNo >= m_numVoters / 2) {
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Failed"), m_voteName.c_str()));
+
+        // HOOK: vote_failed
+        G_ScriptEvent("vote_failed", NULL, "s", m_voteName.c_str());
+
         m_voteTime = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else {

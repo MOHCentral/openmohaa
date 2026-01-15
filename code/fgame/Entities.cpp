@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "game.h"
 #include "weapon.h"
 #include "weaputils.h"
+#include "g_scriptevents.h"
 #include "actor.h"
 #include "sentient.h"
 #include "player.h"
@@ -1857,6 +1858,11 @@ void ThrobbingBox_Explosive::OnUse(Event *ev)
     // Play the activation sound
     Sound(m_sActivateSound, CHAN_BODY);
 
+    // HOOK: bomb_plant
+    if (ev->GetEntity(1) && ev->GetEntity(1)->IsSubclassOfPlayer()) {
+        G_ScriptEvent("bomb_plant", ev->GetEntity(1), "e", this);
+    }
+
     Unregister(STRING_TRIGGER);
     m_useThread.Execute(this);
 
@@ -2206,6 +2212,9 @@ void Objective::TurnOff(Event *ev)
 void Objective::Complete(Event *ev)
 {
     ScriptThread::AddObjective(m_iObjectiveIndex, OBJ_STATUS_COMPLETED, m_sText, GetOrigin());
+
+    // HOOK: objective_complete
+    G_ScriptEvent("objective_complete", this, "is", m_iObjectiveIndex, m_sText.c_str());
 }
 
 void Objective::SetCurrent(Event *ev)

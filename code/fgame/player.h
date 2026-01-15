@@ -372,6 +372,13 @@ public:
     // For event hooks
     int  old_pm_flags;
     bool wasOnGround;
+    int  m_lastStatsTime;
+
+    // Stats
+    float m_fDistanceWalked;
+    float m_fDistanceSprinted;
+    float m_fDistanceSwam;
+    float m_fDistanceDriven;
 
     VoteUpload *voteUpload;
 

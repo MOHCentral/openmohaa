@@ -61,6 +61,41 @@ static ScriptDelegate sd_client_begin("client_begin", "Client Began");
 static ScriptDelegate sd_team_join("team_join", "Team Joined");
 static ScriptDelegate sd_player_say("player_say", "Player Said");
 
+// Game Flow
+static ScriptDelegate sd_game_start("game_start", "Game Started");
+static ScriptDelegate sd_game_end("game_end", "Game Ended");
+static ScriptDelegate sd_round_start("round_start", "Round Started");
+static ScriptDelegate sd_round_end("round_end", "Round Ended");
+static ScriptDelegate sd_team_win("team_win", "Team Won");
+
+// Voting
+static ScriptDelegate sd_vote_called("vote_called", "Vote Called");
+static ScriptDelegate sd_vote_passed("vote_passed", "Vote Passed");
+static ScriptDelegate sd_vote_failed("vote_failed", "Vote Failed");
+
+// Vehicle/Turret
+static ScriptDelegate sd_turret_enter("turret_enter", "Turret Entered");
+static ScriptDelegate sd_turret_exit("turret_exit", "Turret Exited");
+static ScriptDelegate sd_vehicle_enter("vehicle_enter", "Vehicle Entered");
+static ScriptDelegate sd_vehicle_exit("vehicle_exit", "Vehicle Exited");
+
+// Specific Player Actions
+static ScriptDelegate sd_weapon_zoom("weapon_zoom", "Weapon Zoomed");
+static ScriptDelegate sd_player_suicide("player_suicide", "Player Suicide");
+static ScriptDelegate sd_player_drown("player_drown", "Player Drowned");
+static ScriptDelegate sd_player_fall_death("player_fall_death", "Player Fell to Death");
+static ScriptDelegate sd_player_telefrag("player_telefrag", "Player Telefragged");
+static ScriptDelegate sd_player_crush("player_crush", "Player Crushed");
+static ScriptDelegate sd_player_slime("player_slime", "Player Slimed");
+static ScriptDelegate sd_player_lava("player_lava", "Player Burned in Lava");
+static ScriptDelegate sd_secret_found("secret_found", "Secret Found");
+
+// Objectives / Bombs
+static ScriptDelegate sd_objective_complete("objective_complete", "Objective Completed");
+static ScriptDelegate sd_objective_capture("objective_capture", "Objective Captured");
+static ScriptDelegate sd_bomb_plant("bomb_plant", "Bomb Planted");
+static ScriptDelegate sd_bomb_defuse("bomb_defuse", "Bomb Defused");
+
 
 void G_ScriptEvent(const char* eventName, Entity* entity, const char* format, ...)
 {

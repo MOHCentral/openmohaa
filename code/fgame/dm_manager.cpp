@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "playerstart.h"
 #include "scriptexception.h"
+#include "g_scriptevents.h"
 
 cvar_t *g_tempaxisscore;
 cvar_t *g_tempaxiswinsinrow;
@@ -1125,6 +1126,9 @@ void DM_Manager::InitGame(void)
         }
     }
 
+    // HOOK: game_start
+    G_ScriptEvent("game_start", NULL, "i", g_gametype->integer);
+
     m_fRoundTime            = 0;
     m_fRoundEndTime         = 0;
     m_iTeamWin              = 0;
@@ -1233,6 +1237,8 @@ bool DM_Manager::CheckEndMatch()
 
             if (fraglimit->integer && TeamHitScoreLimit()) {
                 G_BeginIntermission2();
+                // HOOK: game_end
+                G_ScriptEvent("game_end", NULL, "");
                 return true;
             } else {
                 return false;
@@ -1555,6 +1561,9 @@ void DM_Manager::TeamWin(int teamnum)
         return;
     }
 
+    // HOOK: team_win
+    G_ScriptEvent("team_win", NULL, "i", teamnum);
+
     if (teamnum == TEAM_AXIS) {
         pTeamWin  = &m_team_axis;
         pTeamLose = &m_team_allies;
@@ -1592,6 +1601,9 @@ void DM_Manager::StartRound(void)
     m_fRoundEndTime = 0.0f;
     m_bRoundActive  = true;
 
+    // HOOK: round_start
+    G_ScriptEvent("round_start", NULL, "");
+
     // respawn all players
     for (i = 0, ent = g_entities; i < game.maxclients; i++, ent++) {
         if (!ent->inuse || !ent->client || !ent->entity) {
@@ -1614,6 +1626,9 @@ void DM_Manager::StartRound(void)
 void DM_Manager::EndRound()
 {
     m_bRoundActive = false;
+
+    // HOOK: round_end
+    G_ScriptEvent("round_end", NULL, "");
 
     if (m_fRoundEndTime <= 0) {
         m_fRoundEndTime = level.time;

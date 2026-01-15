@@ -43,6 +43,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 constexpr unsigned long MAX_TRAVEL_DIST = 16216;
 
 static void FlashPlayers(Vector org, float r, float g, float b, float a, float rad, float time, int type);
+const char *G_LocationNumToDispString(int iLocation);
 
 qboolean MeleeAttack(
     Vector               pos,
@@ -1770,6 +1771,12 @@ Entity *FindDefusableObject(const Vector& dir, Entity *owner, float maxdist)
 void DefuseObject(const Vector& dir, Entity *owner, float maxdist)
 {
     Entity         *defusableObj = FindDefusableObject(dir, owner, maxdist);
+
+    // HOOK: bomb_defuse
+    if (defusableObj && owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("bomb_defuse", owner, "e", defusableObj);
+    }
+
     ScriptVariable *defuseThreadVar;
     str             defuseThreadName;
 
@@ -2366,7 +2373,7 @@ float BulletAttack(
 
                         // HOOK: weapon_hit (bullet)
                         if (owner && owner->IsSubclassOfPlayer()) {
-                            G_ScriptEvent("weapon_hit", owner, "ei", ent, trace.location);
+                            G_ScriptEvent("weapon_hit", owner, "es", ent, G_LocationNumToDispString(trace.location));
                         }
 
                         ent->Damage(

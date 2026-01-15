@@ -495,6 +495,11 @@ qboolean Item::Drop(void)
         return false;
     }
 
+    // HOOK: item_drop
+    if (owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("item_drop", owner, "s", getName().c_str());
+    }
+
     setOrigin(owner->origin + Vector("0 0 40"));
 
     // drop the item
