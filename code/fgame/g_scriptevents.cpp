@@ -23,7 +23,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "g_scriptevents.h"
 #include "entity.h"
 #include "../script/scriptvariable.h"
-#include <cstdarg>
 
 //
 // Register all the events here
@@ -61,52 +60,3 @@ static ScriptDelegate sd_client_disconnect("client_disconnect", "Client Disconne
 static ScriptDelegate sd_client_begin("client_begin", "Client Began");
 static ScriptDelegate sd_team_join("team_join", "Team Joined");
 static ScriptDelegate sd_player_say("player_say", "Player Said");
-
-
-void G_ScriptEvent(const char* eventName, Entity* entity, const char* format, ...)
-{
-    ScriptDelegate* delegate = ScriptDelegate::GetScriptDelegate(eventName);
-    if (!delegate) {
-        // Warning?
-        return;
-    }
-
-    Event ev;
-    va_list argptr;
-    va_start(argptr, format);
-
-    if (format) {
-        const char* p = format;
-        while (*p) {
-            switch (*p) {
-            case 's':
-                ev.AddString(va_arg(argptr, char *));
-                break;
-            case 'i':
-                ev.AddInteger(va_arg(argptr, int));
-                break;
-            case 'f':
-                ev.AddFloat((float)va_arg(argptr, double)); // float is promoted to double in varargs
-                break;
-            case 'v':
-                ev.AddVector(*va_arg(argptr, Vector *));
-                break;
-            case 'e':
-                ev.AddEntity(va_arg(argptr, Entity *));
-                break;
-            default:
-                break;
-            }
-            p++;
-        }
-    }
-
-    va_end(argptr);
-
-    // Trigger
-    if (entity) {
-        delegate->Trigger(entity, ev);
-    } else {
-        delegate->Trigger(ev);
-    }
-}

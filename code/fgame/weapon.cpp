@@ -1387,7 +1387,7 @@ void Weapon::Shoot(Event *ev)
 
     // HOOK: weapon_fire
     if (owner && owner->IsSubclassOfPlayer()) {
-        G_ScriptEvent("weapon_fire", owner, "si", getName().c_str(), AmmoAvailable(mode));
+        G_ScriptEvent("weapon_fire", owner, getName().c_str(), AmmoAvailable(mode));
     }
 
     GetMuzzlePosition(pos, vBarrel, forward, right, up);
@@ -2550,7 +2550,7 @@ void Weapon::PickupWeapon(Event *ev)
         Sound(sPickupSound);
 
         if (sen->IsSubclassOfPlayer()) {
-            G_ScriptEvent("item_pickup", sen, "si", item_name.c_str(), iGiveAmmo);
+            G_ScriptEvent("item_pickup", sen, item_name.c_str(), iGiveAmmo);
         }
     } else {
         bool bSameAmmo[MAX_FIREMODES] = {false};
@@ -2939,7 +2939,7 @@ void Weapon::StartReloading(void)
 
     // HOOK: weapon_reload
     if (owner && owner->IsSubclassOfPlayer()) {
-        G_ScriptEvent("weapon_reload", owner, "s", getName().c_str());
+        G_ScriptEvent("weapon_reload", owner, getName().c_str());
     }
 
     if (SetWeaponAnim("reload", EV_Weapon_DoneReloading)) {

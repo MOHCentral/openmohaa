@@ -702,9 +702,9 @@ void Sentient::ChangeWeapon(Weapon *weapon, weaponhand_t hand)
         Weapon *oldWeapon = activeWeaponList[hand];
         int clientNum = edict - g_entities;
         if (oldWeapon) {
-            G_ScriptEvent("weapon_change", this, "ssi", oldWeapon->getName().c_str(), weapon->getName().c_str(), clientNum);
+            G_ScriptEvent("weapon_change", this, oldWeapon->getName().c_str(), weapon->getName().c_str(), clientNum);
         } else {
-            G_ScriptEvent("weapon_change", this, "ssi", "none", weapon->getName().c_str(), clientNum);
+            G_ScriptEvent("weapon_change", this, "none", weapon->getName().c_str(), clientNum);
         }
     }
 

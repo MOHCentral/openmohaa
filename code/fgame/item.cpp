@@ -602,7 +602,7 @@ Item *Item::ItemPickup(Entity *other, qboolean add_to_inventory)
     // Weapon::PickupWeapon does NOT call Item::ItemPickup. It has its own logic.
     // So this is for non-weapon items (health, ammo, etc)
     if (sent->IsSubclassOfPlayer()) {
-        G_ScriptEvent("item_pickup", sent, "si", item->getName().c_str(), item->getAmount());
+        G_ScriptEvent("item_pickup", sent, item->getName().c_str(), item->getAmount());
     }
 
     Sound(sPickupSound);
