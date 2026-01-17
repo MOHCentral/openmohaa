@@ -2,6 +2,8 @@ if(NOT BUILD_GAME_LIBRARIES AND NOT BUILD_GAME_QVMS)
     return()
 endif()
 
+message("Configuring basegame. SOURCE_DIR=${SOURCE_DIR}")
+
 include(utils/set_output_dirs)
 include(shared_script)
 
@@ -91,6 +93,12 @@ if(BUILD_GAME_LIBRARIES)
     target_compile_definitions( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE GAME_DLL WITH_SCRIPT_ENGINE ARCHIVE_SUPPORTED)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE RecastNavigation::Detour RecastNavigation::DetourCrowd RecastNavigation::Recast)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${COMMON_LIBRARIES})
+
+    # Explicitly using include_directories as well to be safe
+    # include_directories(${SOURCE_DIR}/script ${SOURCE_DIR}/qcommon)
+
+    target_include_directories( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${SOURCE_DIR}/script ${SOURCE_DIR}/qcommon )
+
     set_target_properties(      ${GAME_MODULE_BINARY_BASEGAME} PROPERTIES OUTPUT_NAME ${GAME_MODULE_BINARY})
     set_output_dirs(            ${GAME_MODULE_BINARY_BASEGAME} SUBDIRECTORY ${BASEGAME})
 

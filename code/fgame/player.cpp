@@ -9844,7 +9844,9 @@ void Player::GibEvent(Event *ev)
 
 void Player::ArmorDamage(Event *ev)
 {
-    int mod = ev->GetInteger(9);
+    int     mod      = ev->GetInteger(9);
+    Entity *attacker = ev->GetEntity(1);
+    float   damage   = ev->GetFloat(2);
 
     if (g_gametype->integer != GT_SINGLE_PLAYER) {
         // players that are not allowed fighting mustn't take damage
@@ -9852,14 +9854,14 @@ void Player::ArmorDamage(Event *ev)
             return;
         }
 
-        Player *attacker = (Player *)ev->GetEntity(1);
-
         if (attacker && attacker->IsSubclassOfPlayer() && attacker != this) {
-            if (g_gametype->integer >= GT_TEAM && attacker->GetDM_Team() == GetDM_Team() && mod != MOD_TELEFRAG) {
+            Player *playerAttacker = (Player *)attacker;
+
+            if (g_gametype->integer >= GT_TEAM && playerAttacker->GetDM_Team() == GetDM_Team() && mod != MOD_TELEFRAG) {
                 // check for team damage
                 if (g_teamdamage->integer & 2) {
                     // Reflective team-damage
-                    attacker->ProcessEvent(*ev);
+                    playerAttacker->ProcessEvent(*ev);
                 }
 
                 if (!(g_teamdamage->integer & 1)) {
@@ -9868,7 +9870,7 @@ void Player::ArmorDamage(Event *ev)
                 }
             }
 
-            pAttackerDistPointer = attacker;
+            pAttackerDistPointer = playerAttacker;
             fAttackerDispTime    = g_drawattackertime->value + level.time;
         }
     }
