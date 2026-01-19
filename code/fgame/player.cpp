@@ -3419,6 +3419,9 @@ void Player::Pain(Event *ev)
     pain_type     = (meansOfDeath_t)meansofdeath;
     pain_location = iLocation;
 
+    // HOOK: player_pain
+    G_ScriptEvent("player_pain", this, attacker, damage, meansofdeath, iLocation);
+
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
         pain = damage;
@@ -5331,6 +5334,9 @@ void Player::StartUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Start();
+
+    // HOOK: player_use_object_start
+    G_ScriptEvent("player_use_object_start", this, uo);
 }
 
 void Player::FinishUseObject(Event *ev)
@@ -5343,6 +5349,10 @@ void Player::FinishUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Stop(this);
+
+    // HOOK: player_use_object_finish
+    G_ScriptEvent("player_use_object_finish", this, uo);
+
     useitem_in_use = NULL;
 }
 
@@ -8111,6 +8121,9 @@ void Player::EnterVehicle(Event *ev)
 
     ent = ev->GetEntity(1);
     if (ent && ent->IsSubclassOfVehicle()) {
+        // HOOK: vehicle_enter
+        G_ScriptEvent("vehicle_enter", this, ent);
+
         flags |= FL_PARTIAL_IMMOBILE;
         viewheight = STAND_EYE_HEIGHT;
         velocity   = vec_zero;
@@ -8127,6 +8140,9 @@ void Player::EnterVehicle(Event *ev)
 
 void Player::ExitVehicle(Event *ev)
 {
+    // HOOK: vehicle_exit
+    G_ScriptEvent("vehicle_exit", this, m_pVehicle);
+
     flags &= ~FL_PARTIAL_IMMOBILE;
     setMoveType(MOVETYPE_WALK);
     m_pVehicle = NULL;
@@ -8143,6 +8159,9 @@ void Player::ExitVehicle(Event *ev)
 
 void Player::EnterTurret(TurretGun *ent)
 {
+    // HOOK: turret_enter
+    G_ScriptEvent("turret_enter", this, ent);
+
     flags |= FL_PARTIAL_IMMOBILE;
     viewheight = DEFAULT_VIEWHEIGHT;
     velocity   = vec_zero;
@@ -8178,6 +8197,9 @@ void Player::EnterTurret(Event *ev)
 
 void Player::ExitTurret(void)
 {
+    // HOOK: turret_exit
+    G_ScriptEvent("turret_exit", this, m_pTurret);
+
     if (m_pTurret->inheritsFrom(PortableTurret::classinfostatic())) {
         StopPartAnimating(torso);
         SetPartAnim("mg42tripod_aim_straight_straight");
@@ -9363,6 +9385,9 @@ void Player::Spectator(void)
     if (!IsSpectator()) {
         respawn_time = level.time + 1.0f;
     }
+
+    // HOOK: player_spectate
+    G_ScriptEvent("player_spectate", this);
 
     RemoveFromVehiclesAndTurrets();
 
@@ -12367,6 +12392,9 @@ void Player::Spawned(void)
 {
     delegate_spawned.Execute();
 
+    // HOOK: player_spawn
+    G_ScriptEvent("player_spawn", this);
+
     Event *ev = new Event;
     ev->AddEntity(this);
 
@@ -12623,6 +12651,9 @@ void Player::EventSetTeam(Event *ev)
 void Player::FreezeControls(Event *ev)
 {
     m_bFrozen = ev->GetBoolean(1);
+
+    // HOOK: player_freeze
+    G_ScriptEvent("player_freeze", this, m_bFrozen ? 1 : 0);
 }
 
 void Player::GetConnState(Event *ev)

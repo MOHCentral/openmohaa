@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptexception.h"
 
 #include "g_spawn.h"
+#include "g_scriptevents.h"
 #include "level.h"
 #include "game.h"
 #include "gamecmds.h"
@@ -4570,6 +4571,9 @@ void ScriptThread::AddObjective(int index, int status, str text, Vector location
     Info_SetValueForKey(szSend, "loc", va("%f %f %f", location[0], location[1], location[2]));
 
     gi.setConfigstring(CS_OBJECTIVES + index, szSend);
+
+    // HOOK: objective_update
+    G_ScriptEvent("objective_update", NULL, index, status);
 }
 
 void ScriptThread::SetCurrentObjective(int iObjective, int iTeam)

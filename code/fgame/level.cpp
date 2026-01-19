@@ -34,6 +34,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "player.h"
 #include "Entities.h"
 #include "health.h"
+#include "g_scriptevents.h"
 
 #include "navigation_recast_load.h"
 
@@ -1529,6 +1530,9 @@ void Level::ServerSpawned(void)
             //  Recast navigation
             navigationMap.LoadWorldMap(m_mapfile);
         }
+
+        // HOOK: game_start
+        G_ScriptEvent("game_start", NULL);
     } else {
         Director.LoadMenus();
     }

@@ -1133,6 +1133,9 @@ void DM_Manager::InitGame(void)
     m_iNumTargetsDestroyed  = 0;
     m_iNumBombsPlanted      = 0;
 
+    // HOOK: game_init
+    G_ScriptEvent("game_init", NULL, g_gametype->integer);
+
     if (g_gametype->integer >= 0 && g_gametype->integer < GT_MAX_GAME_TYPE) {
         if (g_gametype->integer <= GT_TEAM) {
             m_bAllowRespawns  = true;
