@@ -2802,6 +2802,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         //
         switch (meansofdeath) {
         case MOD_SUICIDE:
+            G_ScriptEvent("player_suicide", this);
             s1 = "took himself out of commision";
             break;
         case MOD_LAVA:
@@ -2874,9 +2875,11 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         switch (meansofdeath) {
         case MOD_CRUSH:
         case MOD_CRUSH_EVERY_FRAME:
+            G_ScriptEvent("player_crushed", this, attacker);
             s1 = "was crushed by";
             break;
         case MOD_TELEFRAG:
+            G_ScriptEvent("player_telefragged", this, attacker);
             s1 = "was telefragged by";
             break;
         case MOD_LAVA:
@@ -2936,15 +2939,22 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
 
             if (iLocation > -1) {
                 bDispLocation = qtrue;
+
+                // HOOK: player_headshot
+                if (iLocation == HITLOC_HEAD || iLocation == HITLOC_HELMET) {
+                    G_ScriptEvent("player_headshot", attacker, this, pAttackerWeap);
+                }
             }
             break;
         case MOD_VEHICLE:
+            G_ScriptEvent("player_roadkill", attacker, this);
             s1 = "was run over by";
             break;
         case MOD_IMPALE:
             s1 = "was impaled by";
             break;
         case MOD_BASH:
+            G_ScriptEvent("player_bash", attacker, this);
             if (G_Random() >= 0.5f) {
                 s1 = "was bashed by";
             } else {
@@ -3353,6 +3363,9 @@ void Player::KilledPlayerInDeathmatch(Player *killed, meansOfDeath_t meansofdeat
         //
         // A teammate was killed
         //
+        // HOOK: player_teamkill
+        G_ScriptEvent("player_teamkill", this, killed);
+
         current_team->AddKills(this, -1);
         num_team_kills++;
     } else {

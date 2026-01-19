@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "playerstart.h"
 #include "scriptexception.h"
+#include "g_scriptevents.h"
 
 cvar_t *g_tempaxisscore;
 cvar_t *g_tempaxiswinsinrow;
@@ -1555,6 +1556,9 @@ void DM_Manager::TeamWin(int teamnum)
         return;
     }
 
+    // HOOK: team_win
+    G_ScriptEvent("team_win", NULL, teamnum);
+
     if (teamnum == TEAM_AXIS) {
         pTeamWin  = &m_team_axis;
         pTeamLose = &m_team_allies;
@@ -1583,6 +1587,9 @@ void DM_Manager::StartRound(void)
     gentity_t *ent;
     int        i;
     Player    *player;
+
+    // HOOK: round_start
+    G_ScriptEvent("round_start", NULL);
 
     m_fRoundTime = level.time;
     if (m_fRoundTime < 0.1f) {
@@ -1613,6 +1620,11 @@ void DM_Manager::StartRound(void)
 
 void DM_Manager::EndRound()
 {
+    // HOOK: round_end
+    if (m_bRoundActive) {
+        G_ScriptEvent("round_end", NULL);
+    }
+
     m_bRoundActive = false;
 
     if (m_fRoundEndTime <= 0) {
