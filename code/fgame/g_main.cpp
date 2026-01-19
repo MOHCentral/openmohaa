@@ -40,6 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "playerbot.h"
 #include "g_bot.h"
 #include "navigation_recast_load.h"
+#include "g_scriptevents.h"
 
 #include "../corepp/tiki.h"
 
@@ -1840,6 +1841,9 @@ void G_BeginIntermission2(void)
     if (level.intermissiontime) {
         return;
     }
+
+    // HOOK: game_end
+    G_ScriptEvent("game_end", NULL);
 
     level.playerfrozen     = qtrue;
     level.intermissiontime = level.time;

@@ -511,8 +511,15 @@ qboolean Item::Drop(void)
         spawnflags |= DROPPED_ITEM;
     }
 
+    // HOOK: item_drop
+    Entity* prevOwner = owner;
+
     // Remove this from the owner's item list
     RemoveFromOwner();
+
+    if (prevOwner && prevOwner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("item_drop", prevOwner, getName().c_str());
+    }
 
     PostEvent(EV_Remove, g_droppeditemlife->value);
 

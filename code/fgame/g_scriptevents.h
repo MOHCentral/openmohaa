@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scriptdelegate.h"
+#include "entity.h"
 #include <string>
 
 // Helper overloads for G_ScriptEventArg
@@ -27,7 +28,7 @@ void G_ScriptEvent(const char* eventName, Entity* entity, Args&&... args)
 
     // Trigger
     if (entity) {
-        delegate->Trigger(entity, ev);
+        delegate->Trigger(static_cast<Listener*>(entity), ev);
     } else {
         delegate->Trigger(ev);
     }

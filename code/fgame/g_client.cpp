@@ -799,6 +799,11 @@ void G_ClientUserinfoChanged(gentity_t *ent, const char *u)
 
     G_SetClientConfigString(ent);
 
+    // HOOK: client_userinfo_changed
+    if (ent->entity) {
+        G_ScriptEvent("client_userinfo_changed", ent->entity);
+    }
+
     if (ent->entity) {
         float fov;
 

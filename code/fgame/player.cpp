@@ -2802,6 +2802,7 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         //
         switch (meansofdeath) {
         case MOD_SUICIDE:
+            G_ScriptEvent("player_suicide", this);
             s1 = "took himself out of commision";
             break;
         case MOD_LAVA:
@@ -2874,9 +2875,11 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         switch (meansofdeath) {
         case MOD_CRUSH:
         case MOD_CRUSH_EVERY_FRAME:
+            G_ScriptEvent("player_crushed", this, attacker);
             s1 = "was crushed by";
             break;
         case MOD_TELEFRAG:
+            G_ScriptEvent("player_telefragged", this, attacker);
             s1 = "was telefragged by";
             break;
         case MOD_LAVA:
@@ -2936,15 +2939,22 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
 
             if (iLocation > -1) {
                 bDispLocation = qtrue;
+
+                // HOOK: player_headshot
+                if (iLocation == HITLOC_HEAD || iLocation == HITLOC_HELMET) {
+                    G_ScriptEvent("player_headshot", attacker, this, pAttackerWeap);
+                }
             }
             break;
         case MOD_VEHICLE:
+            G_ScriptEvent("player_roadkill", attacker, this);
             s1 = "was run over by";
             break;
         case MOD_IMPALE:
             s1 = "was impaled by";
             break;
         case MOD_BASH:
+            G_ScriptEvent("player_bash", attacker, this);
             if (G_Random() >= 0.5f) {
                 s1 = "was bashed by";
             } else {
@@ -3353,6 +3363,9 @@ void Player::KilledPlayerInDeathmatch(Player *killed, meansOfDeath_t meansofdeat
         //
         // A teammate was killed
         //
+        // HOOK: player_teamkill
+        G_ScriptEvent("player_teamkill", this, killed);
+
         current_team->AddKills(this, -1);
         num_team_kills++;
     } else {
@@ -3405,6 +3418,9 @@ void Player::Pain(Event *ev)
 
     pain_type     = (meansOfDeath_t)meansofdeath;
     pain_location = iLocation;
+
+    // HOOK: player_pain
+    G_ScriptEvent("player_pain", this, attacker, damage, meansofdeath, iLocation);
 
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
@@ -5318,6 +5334,9 @@ void Player::StartUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Start();
+
+    // HOOK: player_use_object_start
+    G_ScriptEvent("player_use_object_start", this, uo);
 }
 
 void Player::FinishUseObject(Event *ev)
@@ -5330,6 +5349,10 @@ void Player::FinishUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Stop(this);
+
+    // HOOK: player_use_object_finish
+    G_ScriptEvent("player_use_object_finish", this, uo);
+
     useitem_in_use = NULL;
 }
 
@@ -8098,6 +8121,9 @@ void Player::EnterVehicle(Event *ev)
 
     ent = ev->GetEntity(1);
     if (ent && ent->IsSubclassOfVehicle()) {
+        // HOOK: vehicle_enter
+        G_ScriptEvent("vehicle_enter", this, ent);
+
         flags |= FL_PARTIAL_IMMOBILE;
         viewheight = STAND_EYE_HEIGHT;
         velocity   = vec_zero;
@@ -8114,6 +8140,9 @@ void Player::EnterVehicle(Event *ev)
 
 void Player::ExitVehicle(Event *ev)
 {
+    // HOOK: vehicle_exit
+    G_ScriptEvent("vehicle_exit", this, m_pVehicle);
+
     flags &= ~FL_PARTIAL_IMMOBILE;
     setMoveType(MOVETYPE_WALK);
     m_pVehicle = NULL;
@@ -8130,6 +8159,9 @@ void Player::ExitVehicle(Event *ev)
 
 void Player::EnterTurret(TurretGun *ent)
 {
+    // HOOK: turret_enter
+    G_ScriptEvent("turret_enter", this, ent);
+
     flags |= FL_PARTIAL_IMMOBILE;
     viewheight = DEFAULT_VIEWHEIGHT;
     velocity   = vec_zero;
@@ -8165,6 +8197,9 @@ void Player::EnterTurret(Event *ev)
 
 void Player::ExitTurret(void)
 {
+    // HOOK: turret_exit
+    G_ScriptEvent("turret_exit", this, m_pTurret);
+
     if (m_pTurret->inheritsFrom(PortableTurret::classinfostatic())) {
         StopPartAnimating(torso);
         SetPartAnim("mg42tripod_aim_straight_straight");
@@ -9350,6 +9385,9 @@ void Player::Spectator(void)
     if (!IsSpectator()) {
         respawn_time = level.time + 1.0f;
     }
+
+    // HOOK: player_spectate
+    G_ScriptEvent("player_spectate", this);
 
     RemoveFromVehiclesAndTurrets();
 
@@ -12354,6 +12392,9 @@ void Player::Spawned(void)
 {
     delegate_spawned.Execute();
 
+    // HOOK: player_spawn
+    G_ScriptEvent("player_spawn", this);
+
     Event *ev = new Event;
     ev->AddEntity(this);
 
@@ -12610,6 +12651,9 @@ void Player::EventSetTeam(Event *ev)
 void Player::FreezeControls(Event *ev)
 {
     m_bFrozen = ev->GetBoolean(1);
+
+    // HOOK: player_freeze
+    G_ScriptEvent("player_freeze", this, m_bFrozen ? 1 : 0);
 }
 
 void Player::GetConnState(Event *ev)
