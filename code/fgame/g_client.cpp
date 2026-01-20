@@ -1104,6 +1104,9 @@ void G_ClientDisconnect(gentity_t *ent)
             return;
         }
 
+        // HOOK: client_disconnect (before removing entity)
+        G_ScriptEvent("client_disconnect", ent->entity);
+
         G_PrintfClient(ent, "has left the battle\n");
 
         G_PrintToAllClients(va("%s has left the battle\n", ent->client->pers.netname), 2);

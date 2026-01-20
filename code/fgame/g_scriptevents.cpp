@@ -118,3 +118,49 @@ static ScriptDelegate sd_bot_killed("bot_killed", "Bot Killed");
 static ScriptDelegate sd_bot_state_idle("bot_roam", "Bot Roaming");
 static ScriptDelegate sd_bot_state_curious("bot_curious", "Bot Curious");
 static ScriptDelegate sd_bot_state_attack("bot_attack", "Bot Attacking");
+
+// Server Events
+static ScriptDelegate sd_server_init("server_init", "Server Initialized");
+static ScriptDelegate sd_server_start("server_start", "Server Started");
+static ScriptDelegate sd_server_shutdown("server_shutdown", "Server Shutdown");
+static ScriptDelegate sd_server_spawned("server_spawned", "Server Spawned");
+static ScriptDelegate sd_server_console_command("server_console_command", "Server Console Command");
+
+// Map Events
+static ScriptDelegate sd_map_load_start("map_load_start", "Map Load Started");
+static ScriptDelegate sd_map_load_end("map_load_end", "Map Load Ended");
+static ScriptDelegate sd_map_restart("map_restart", "Map Restarted");
+static ScriptDelegate sd_map_change_start("map_change_start", "Map Change Started");
+
+// Match Events
+static ScriptDelegate sd_match_end("match_end", "Match Ended");
+static ScriptDelegate sd_warmup_start("warmup_start", "Warmup Started");
+static ScriptDelegate sd_warmup_end("warmup_end", "Warmup Ended");
+static ScriptDelegate sd_intermission_start("intermission_start", "Intermission Started");
+
+// Vote Events
+static ScriptDelegate sd_vote_start("vote_start", "Vote Started");
+static ScriptDelegate sd_vote_passed("vote_passed", "Vote Passed");
+static ScriptDelegate sd_vote_failed("vote_failed", "Vote Failed");
+
+// Actor Events
+static ScriptDelegate sd_actor_spawn("actor_spawn", "Actor Spawned");
+static ScriptDelegate sd_actor_killed("actor_killed", "Actor Killed");
+
+// Additional Player Events
+static ScriptDelegate sd_player_respawn("player_respawn", "Player Respawned");
+static ScriptDelegate sd_player_inactivity_drop("player_inactivity_drop", "Player Dropped for Inactivity");
+
+// Objective Events
+static ScriptDelegate sd_objective_capture("objective_capture", "Objective Captured");
+
+// Misc Events
+static ScriptDelegate sd_item_respawn("item_respawn", "Item Respawned");
+static ScriptDelegate sd_explosion("explosion", "Explosion Occurred");
+
+// Stance Events
+static ScriptDelegate sd_player_stand("player_stand", "Player Stood Up");
+
+// Score/Kill Events
+static ScriptDelegate sd_score_change("score_change", "Score Changed");
+static ScriptDelegate sd_teamkill_kick("teamkill_kick", "Player Kicked for Team Killing");

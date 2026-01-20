@@ -263,6 +263,9 @@ void G_InitGame(int levelTime, int randomSeed)
     G_Printf("gamename: %s\n", GAMEVERSION);
     G_Printf("gamedate: %s\n", __DATE__);
 
+    // HOOK: server_init (early hook before full initialization)
+    G_ScriptEvent("server_init", NULL);
+
     g_protocol    = gi.Cvar_Get("com_protocol", "", 0)->integer;
     g_target_game = (target_game_e)gi.Cvar_Get("com_target_game", "0", 0)->integer;
 
@@ -313,6 +316,9 @@ void G_InitGame(int levelTime, int randomSeed)
     gi.Printf("===== ABOUT TO START DAP SERVER =====\n");
     g_DAPServer.Start(4711);
     gi.Printf("===== DAP SERVER START() RETURNED =====\n");
+
+    // HOOK: server_start - server is fully initialized
+    G_ScriptEvent("server_start", NULL);
 }
 
 /*
@@ -353,6 +359,9 @@ G_ShutdownGame
 void G_ShutdownGame()
 {
     gi.Printf("==== ShutdownGame ====\n");
+
+    // HOOK: server_shutdown
+    G_ScriptEvent("server_shutdown", NULL);
 
     // write all the client session data so we can get it back
     G_WriteSessionData();
@@ -407,7 +416,7 @@ void G_Precache(void)
 
 /*
 ================
-G_Precache
+G_ServerSpawned
 
 Called when server finished initializating
 ================
@@ -418,6 +427,9 @@ void G_ServerSpawned(void)
         G_BotPostInit();
 
         level.ServerSpawned();
+
+        // HOOK: server_spawned - server fully spawned and ready
+        G_ScriptEvent("server_spawned", NULL, level.mapname.c_str(), g_gametype->integer);
     } catch (const ScriptException& e) {
         G_ExitWithError(e.string.c_str());
     }
@@ -949,6 +961,9 @@ void G_RegisterSounds(void)
 void G_Restart(void)
 {
     gi.Printf("===== G_Restart() called =====\n");
+
+    // HOOK: map_restart
+    G_ScriptEvent("map_restart", NULL, level.mapname.c_str());
     
     // Ensure DAP server is running for debugging
     if (!g_DAPServer.IsRunning()) {
@@ -1842,8 +1857,14 @@ void G_BeginIntermission2(void)
         return;
     }
 
+    // HOOK: intermission_start
+    G_ScriptEvent("intermission_start", NULL, level.mapname.c_str(), g_gametype->integer);
+
     // HOOK: game_end
     G_ScriptEvent("game_end", NULL);
+
+    // HOOK: match_end with map and gametype info
+    G_ScriptEvent("match_end", NULL, level.mapname.c_str(), g_gametype->integer, dmManager.GetTeamWin());
 
     level.playerfrozen     = qtrue;
     level.intermissiontime = level.time;
@@ -1933,6 +1954,9 @@ void G_ExitLevel(void)
 
     // Close the player log file if necessary
     ClosePlayerLogFile();
+
+    // HOOK: map_change_start
+    G_ScriptEvent("map_change_start", NULL, level.mapname.c_str(), level.nextmap.c_str());
 
     // Kill the sounds
     Com_sprintf(command, sizeof(command), "stopsound\n");

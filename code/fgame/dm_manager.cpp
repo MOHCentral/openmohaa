@@ -755,6 +755,7 @@ bool DM_Manager::JoinTeam(Player *player, teamtype_t teamType)
 {
     DM_Team *team    = player->GetDM_Team();
     DM_Team *pDMTeam = GetTeam(teamType);
+    int      oldTeam = team ? team->m_teamnumber : TEAM_NONE;
 
     if (!pDMTeam) {
         return false;
@@ -772,6 +773,9 @@ bool DM_Manager::JoinTeam(Player *player, teamtype_t teamType)
     pDMTeam->AddPlayer(player);
     AddPlayer(player);
     player->SetDM_Team(pDMTeam);
+
+    // HOOK: team_join
+    G_ScriptEvent("team_join", player, oldTeam, (int)teamType);
 
     if (teamType == TEAM_SPECTATOR) {
         player->EndFight();
@@ -1591,6 +1595,11 @@ void DM_Manager::StartRound(void)
     int        i;
     Player    *player;
 
+    // HOOK: warmup_end (if there was a warmup before this round)
+    if (m_fRoundTime <= 0) {
+        G_ScriptEvent("warmup_end", NULL, level.mapname.c_str());
+    }
+
     // HOOK: round_start
     G_ScriptEvent("round_start", NULL);
 
@@ -1629,6 +1638,9 @@ void DM_Manager::EndRound()
     }
 
     m_bRoundActive = false;
+
+    // HOOK: warmup_start (game is entering warmup/waiting period between rounds)
+    G_ScriptEvent("warmup_start", NULL, level.mapname.c_str());
 
     if (m_fRoundEndTime <= 0) {
         m_fRoundEndTime = level.time;

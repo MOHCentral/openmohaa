@@ -34,6 +34,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <scriptcompiler.h>
 #include "playerbot.h"
 #include "consoleevent.h"
+#include "g_scriptevents.h"
 #include "g_bot.h"
 #include "scriptmaster.h"
 #include "scriptthread.h"
@@ -132,6 +133,9 @@ qboolean G_ConsoleCommand(void)
     result = qfalse;
     try {
         cmd = gi.Argv(0);
+
+        // HOOK: server_console_command
+        G_ScriptEvent("server_console_command", NULL, cmd);
 
         for (cmds = G_ConsoleCmds; cmds->command != NULL; cmds++) {
             if (!Q_stricmp(cmd, cmds->command)) {

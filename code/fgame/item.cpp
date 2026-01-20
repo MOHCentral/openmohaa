@@ -656,6 +656,9 @@ void Item::Respawn(Event *ev)
         Sound("snd_itemspawn");
     }
 
+    // HOOK: item_respawn
+    G_ScriptEvent("item_respawn", this, getName().c_str());
+
     setOrigin();
 
     if (HasAnim("respawn")) {

@@ -2766,6 +2766,9 @@ void Player::Respawn(Event *ev)
         logfile_started = qfalse;
     }
 
+    // HOOK: player_respawn
+    G_ScriptEvent("player_respawn", this);
+
     //
     // Added in OPM
     //
@@ -4235,6 +4238,12 @@ void Player::ClientMove(usercmd_t *ucmd)
         G_ScriptEvent("player_prone", this);
     }
 
+    // player_stand - coming out of crouch or prone
+    if (((old_pm_flags & PMF_DUCKED) && !(client->ps.pm_flags & PMF_DUCKED) && !(client->ps.pm_flags & PMF_VIEW_PRONE))
+        || ((old_pm_flags & PMF_VIEW_PRONE) && !(client->ps.pm_flags & PMF_VIEW_PRONE) && !(client->ps.pm_flags & PMF_DUCKED))) {
+        G_ScriptEvent("player_stand", this);
+    }
+
     old_pm_flags = client->ps.pm_flags;
 
     // Periodic stats
@@ -4360,6 +4369,7 @@ void Player::ClientInactivityTimer(void)
             //
             // Make sure to not kick the local host
             //
+            G_ScriptEvent("teamkill_kick", this, num_team_kills);
             gi.KickClientForReason(client->ps.clientNum, message.c_str());
         } else if (!m_bSpectator) {
             // if it's the host, put it back in spectator mode
@@ -10206,6 +10216,9 @@ void Player::CallVote(Event *ev)
     G_PrintfClient(edict, "called a vote (%s)\n", level.m_voteName.c_str());
     G_PrintToAllClients(va("%s %s.\n", client->pers.netname, gi.LV_ConvertString("called a vote")));
 
+    // HOOK: vote_start
+    G_ScriptEvent("vote_start", this, level.m_voteName.c_str(), level.m_voteString.c_str());
+
     level.m_voteTime = (level.svsFloatTime - level.svsStartFloatTime) * 1000;
     level.m_voteYes  = 1;
     level.m_voteNo   = 0;
@@ -12419,11 +12432,13 @@ void Player::RemoveOwnedProjectiles()
 void Player::AddKills(int num)
 {
     num_kills += num;
+    G_ScriptEvent("score_change", this, "kills", num, num_kills);
 }
 
 void Player::AddDeaths(int num)
 {
     num_deaths += num;
+    G_ScriptEvent("score_change", this, "deaths", num, num_deaths);
 }
 
 ////////////////////////////
