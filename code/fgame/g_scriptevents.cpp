@@ -119,14 +119,16 @@ static ScriptDelegate sd_bot_state_idle("bot_roam", "Bot Roaming");
 static ScriptDelegate sd_bot_state_curious("bot_curious", "Bot Curious");
 static ScriptDelegate sd_bot_state_attack("bot_attack", "Bot Attacking");
 
-// Server Events
-static ScriptDelegate sd_server_init("server_init", "Server Initialized");
-static ScriptDelegate sd_server_start("server_start", "Server Started");
-static ScriptDelegate sd_server_shutdown("server_shutdown", "Server Shutdown");
-static ScriptDelegate sd_server_spawned("server_spawned", "Server Spawned");
+// Server Events (once per executable)
 static ScriptDelegate sd_server_console_command("server_console_command", "Server Console Command");
+static ScriptDelegate sd_server_process_start("server_process_start", "Server Process Started (once per executable)");
+static ScriptDelegate sd_server_process_quit("server_process_quit", "Server Process Quitting (once per executable)");
 
-// Map Events
+// Map Events (once per map load)
+static ScriptDelegate sd_map_init("map_init", "Map Initialization Started");
+static ScriptDelegate sd_map_start("map_start", "Map Initialization Complete");
+static ScriptDelegate sd_map_shutdown("map_shutdown", "Map Shutting Down");
+static ScriptDelegate sd_map_ready("map_ready", "Map Ready (entities spawned)");
 static ScriptDelegate sd_map_load_start("map_load_start", "Map Load Started");
 static ScriptDelegate sd_map_load_end("map_load_end", "Map Load Ended");
 static ScriptDelegate sd_map_restart("map_restart", "Map Restarted");

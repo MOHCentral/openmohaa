@@ -1142,6 +1142,12 @@ void SV_Init (void)
     if (com_firstConfig) {
         SV_ApplyFirstConfigTweaks();
     }
+
+    // Added in OPM
+    // Used by the game DLL to detect first-time vs subsequent initializations
+    Cvar_Get("sv_firstinit", "1", 0);
+    // Used to signal to the game DLL that this is a final quit, not a map change
+    Cvar_Get("sv_quitting", "0", 0);
 }
 
 
@@ -1195,6 +1201,10 @@ void SV_Shutdown( const char *finalmsg ) {
 	if ( svs.clients && !com_errorEntered ) {
 		SV_FinalMessage( finalmsg );
 	}
+
+	// Added in OPM
+	// Signal to the game DLL that this is a final quit (not a map change)
+	Cvar_Set("sv_quitting", "1");
 
 	SV_RemoveOperatorCommands();
 	SV_ShutdownGamespy();

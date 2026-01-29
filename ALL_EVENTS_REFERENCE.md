@@ -2,7 +2,7 @@
 
 This document lists all events that are **actually implemented** in the codebase and can be used with `event_subscribe`.
 
-**Total Implemented Events: 92**
+**Total Implemented Events: 94**
 
 ---
 
@@ -100,22 +100,24 @@ event_subscribe "player_kill" global/my_handler.scr::OnPlayerKill
 
 ---
 
-## Server Events (5 events)
+## Server Events (3 events)
 
 | Event | Description | Parameters | Source File |
-|-------|-------------|------------|-------------|
-| `server_init` | Game DLL initialized | (none) | g_main.cpp |
-| `server_start` | Server startup complete | (none) | g_main.cpp |
-| `server_shutdown` | Server shutting down | (none) | g_main.cpp |
-| `server_spawned` | Server ready with map | map_name, gametype | g_main.cpp |
+|-------|-------------|------------|-----------|
 | `server_console_command` | Console command executed | command_string | gamecmds.cpp |
+| `server_process_start` | Server executable started (once only) | (none) | g_main.cpp |
+| `server_process_quit` | Server executable quitting (once only) | (none) | g_main.cpp |
 
 ---
 
-## Map Events (4 events)
+## Map Events (8 events)
 
 | Event | Description | Parameters | Source File |
 |-------|-------------|------------|-------------|
+| `map_init` | Map initialization started | (none) | g_main.cpp |
+| `map_start` | Map initialization complete | (none) | g_main.cpp |
+| `map_shutdown` | Map shutting down | (none) | g_main.cpp |
+| `map_ready` | Map ready (entities spawned) | map_name, gametype | g_main.cpp |
 | `map_load_start` | Map load started | map_name | level.cpp |
 | `map_load_end` | Map load completed | map_name, gametype | level.cpp |
 | `map_change_start` | Map change started | current_map, next_map | g_main.cpp |
@@ -217,15 +219,15 @@ end
 // In global/maptracker.scr
 main:
     event_subscribe "map_change_start" global/maptracker.scr::OnMapChange
-    event_subscribe "server_spawned" global/maptracker.scr::OnServerReady
+    event_subscribe "map_ready" global/maptracker.scr::OnMapReady
 end
 
 OnMapChange local.current_map local.next_map:
     println "Changing from " local.current_map " to " local.next_map
 end
 
-OnServerReady local.map_name local.gametype:
-    println "Server ready: " local.map_name " (gametype " local.gametype ")"
+OnMapReady local.map_name local.gametype:
+    println "Map ready: " local.map_name " (gametype " local.gametype ")"
 end
 ```
 
@@ -301,4 +303,4 @@ end
 
 *Updated: June 2025*
 *Generated from source code analysis of G_ScriptEvent calls*
-*All 92 events verified against actual codebase*
+*All 94 events verified against actual codebase*

@@ -263,8 +263,8 @@ void G_InitGame(int levelTime, int randomSeed)
     G_Printf("gamename: %s\n", GAMEVERSION);
     G_Printf("gamedate: %s\n", __DATE__);
 
-    // HOOK: server_init (early hook before full initialization)
-    G_ScriptEvent("server_init", NULL);
+    // HOOK: map_init (early hook before full initialization)
+    G_ScriptEvent("map_init", NULL);
 
     g_protocol    = gi.Cvar_Get("com_protocol", "", 0)->integer;
     g_target_game = (target_game_e)gi.Cvar_Get("com_target_game", "0", 0)->integer;
@@ -317,8 +317,15 @@ void G_InitGame(int levelTime, int randomSeed)
     g_DAPServer.Start(4711);
     gi.Printf("===== DAP SERVER START() RETURNED =====\n");
 
-    // HOOK: server_start - server is fully initialized
-    G_ScriptEvent("server_start", NULL);
+    // HOOK: server_process_start - fires only once when server executable first starts
+    cvar_t *sv_firstinit = gi.Cvar_Get("sv_firstinit", "1", 0);
+    if (sv_firstinit && sv_firstinit->integer) {
+        G_ScriptEvent("server_process_start", NULL);
+        gi.cvar_set("sv_firstinit", "0");
+    }
+
+    // HOOK: map_start - map is fully initialized
+    G_ScriptEvent("map_start", NULL);
 }
 
 /*
@@ -360,8 +367,14 @@ void G_ShutdownGame()
 {
     gi.Printf("==== ShutdownGame ====\n");
 
-    // HOOK: server_shutdown
-    G_ScriptEvent("server_shutdown", NULL);
+    // HOOK: server_process_quit - fires only when server is quitting (not on map change)
+    cvar_t *sv_quitting = gi.Cvar_Get("sv_quitting", "0", 0);
+    if (sv_quitting && sv_quitting->integer) {
+        G_ScriptEvent("server_process_quit", NULL);
+    }
+
+    // HOOK: map_shutdown
+    G_ScriptEvent("map_shutdown", NULL);
 
     // write all the client session data so we can get it back
     G_WriteSessionData();
@@ -428,8 +441,8 @@ void G_ServerSpawned(void)
 
         level.ServerSpawned();
 
-        // HOOK: server_spawned - server fully spawned and ready
-        G_ScriptEvent("server_spawned", NULL, level.mapname.c_str(), g_gametype->integer);
+        // HOOK: map_ready - map fully spawned and ready to play
+        G_ScriptEvent("map_ready", NULL, level.mapname.c_str(), g_gametype->integer);
     } catch (const ScriptException& e) {
         G_ExitWithError(e.string.c_str());
     }
