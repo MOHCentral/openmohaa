@@ -1252,15 +1252,15 @@ void DAPServer::HandleStepOut(const json& req) {
 }
 
 bool DAPServer::CheckDebugHook(ScriptVM* vm) {
-    static int callCount = 0;
-    callCount++;
+    //static int callCount = 0;
+    //callCount++;
     
     // Log first 5 calls to confirm this function is being called
-    if (callCount <= 5) {
-        gi.Printf("DAP: CheckDebugHook called #%d - codePos=%p, attached=%d, activeBreakpoints=%lu\n", 
-                  callCount, vm->m_CodePos, m_DebuggerAttached.load(std::memory_order_relaxed), 
-                  m_ActiveBreakpoints.size());
-    }
+    //if (callCount <= 5) {
+    //    gi.Printf("DAP: CheckDebugHook called #%d - codePos=%p, attached=%d, activeBreakpoints=%lu\n", 
+    //              callCount, vm->m_CodePos, m_DebuggerAttached.load(std::memory_order_relaxed), 
+    //              m_ActiveBreakpoints.size());
+    //}
     
     if (!m_DebuggerAttached.load(std::memory_order_relaxed)) return false;
 

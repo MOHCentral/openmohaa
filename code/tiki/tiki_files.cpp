@@ -452,11 +452,11 @@ dtiki_t *TIKI_LoadTikiModel(dtikianim_t *tikianim, const char *name, con_map<str
         }
 
         if (!found) {
-            TIKI_Warning(
-                "TIKI_InitTiki: could not find surface '%s' in '%s' (check referenced skb/skd files).\n",
-                loadsurf->name,
-                tikianim->name
-            );
+            // TIKI_Warning(
+            //     "TIKI_InitTiki: could not find surface '%s' in '%s' (check referenced skb/skd files).\n",
+            //     loadsurf->name,
+            //     tikianim->name
+            // );
         }
     }
 

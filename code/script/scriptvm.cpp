@@ -1021,10 +1021,10 @@ Executes a program
 */
 void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
 {
-    static int execCount = 0;
-    execCount++;
-    gi.Printf("VM: ►►► Execute called #%d - script='%s' label='%s' INITIAL state=%d ◄◄◄\n", 
-              execCount, Filename().c_str(), label.c_str(), state);
+    //static int execCount = 0;
+    //execCount++;
+    //gi.Printf("VM: ►►► Execute called #%d - script='%s' label='%s' INITIAL state=%d ◄◄◄\n", 
+    //          execCount, Filename().c_str(), label.c_str(), state);
     
     unsigned char *opcode;
 
@@ -1071,29 +1071,29 @@ void ScriptVM::Execute(ScriptVariable *data, int dataSize, str label)
     }
 
     // Don't override state if we're waiting for debugger
-    static int stateCheckCount = 0;
-    stateCheckCount++;
-    if (stateCheckCount <= 10) {
-        gi.Printf("VM: Execute state check #%d - current state=%d, STATE_DEBUG_WAIT=%d, STATE_RUNNING=%d\n",
-                  stateCheckCount, state, STATE_DEBUG_WAIT, STATE_RUNNING);
-    }
+    //static int stateCheckCount = 0;
+    //stateCheckCount++;
+    //if (stateCheckCount <= 10) {
+    //    gi.Printf("VM: Execute state check #%d - current state=%d, STATE_DEBUG_WAIT=%d, STATE_RUNNING=%d\n",
+    //              stateCheckCount, state, STATE_DEBUG_WAIT, STATE_RUNNING);
+    //}
     
     if (state != STATE_DEBUG_WAIT) {
-        if (stateCheckCount <= 10) {
-            gi.Printf("VM: Setting state to STATE_RUNNING\n");
-        }
+        //if (stateCheckCount <= 10) {
+        //    gi.Printf("VM: Setting state to STATE_RUNNING\n");
+        //}
         state = STATE_RUNNING;
-    } else {
-        if (stateCheckCount <= 10) {
-            gi.Printf("VM: NOT changing state - keeping STATE_DEBUG_WAIT\n");
-        }
-    }
+    } //else {
+        //if (stateCheckCount <= 10) {
+        //    gi.Printf("VM: NOT changing state - keeping STATE_DEBUG_WAIT\n");
+        //}
+    //}
     
-    static int loopCount = 0;
-    loopCount++;
-    if (loopCount <= 5) {
-        gi.Printf("VM: About to check loop condition - state=%d\n", state);
-    }
+    //static int loopCount = 0;
+    //loopCount++;
+    //if (loopCount <= 5) {
+    //    gi.Printf("VM: About to check loop condition - state=%d\n", state);
+    //}
 
     while (state == STATE_RUNNING) {
         if (g_scripttrace->integer && CanScriptTracePrint()) {

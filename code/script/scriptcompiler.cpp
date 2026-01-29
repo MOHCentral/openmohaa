@@ -1588,7 +1588,7 @@ bool ScriptCompiler::Compile(GameScript *gameScript, unsigned char *progBuffer, 
     prog_ptr = progBuffer;
 
     gameScript->m_ProgToSource = new con_set<const unsigned char *, sourceinfo_t>;
-    Com_Printf("COMPILE: Creating source map for script '%s' at %p\n", gameScript->Filename().c_str(), gameScript->m_ProgToSource);
+    //Com_Printf("COMPILE: Creating source map for script '%s' at %p\n", gameScript->Filename().c_str(), gameScript->m_ProgToSource);
 
     compileSuccess = true;
 
