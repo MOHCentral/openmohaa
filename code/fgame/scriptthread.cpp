@@ -47,6 +47,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "slre.h"
 
 #include "md5.h"
+#include "../qcommon/crypto/picosha2.h"
+
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 #ifdef WIN32
 #    include <direct.h>
@@ -2014,6 +2019,33 @@ Event EV_ScriptThread_Md5String
     "generates MD5 hash of given text",
     EV_RETURN
 );
+Event EV_ScriptThread_Md5String2
+(
+    "md5_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates MD5 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_Sha256String
+(
+    "sha256_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates SHA256 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_UuidString
+(
+    "uuid_string",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "generates a random UUID v4 string",
+    EV_RETURN
+);
 Event EV_ScriptThread_GetEntity
 (
     "getentity",
@@ -2298,6 +2330,9 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetTanH,                 &ScriptThread::EventTanH               },
     {&EV_ScriptThread_strncpy,                 &ScriptThread::StringBytesCopy         },
     {&EV_ScriptThread_Md5String,               &ScriptThread::Md5String               },
+    {&EV_ScriptThread_Md5String2,              &ScriptThread::Md5String2              },
+    {&EV_ScriptThread_Sha256String,            &ScriptThread::Sha256String            },
+    {&EV_ScriptThread_UuidString,              &ScriptThread::UuidString              },
     {&EV_ScriptThread_GetEntity,               &ScriptThread::GetEntByEntnum          },
     {&EV_ScriptThread_TypeOf,                  &ScriptThread::TypeOfVariable          },
     {&EV_ScriptThread_RegisterEv,              &ScriptThread::RegisterEvent           },
@@ -7111,10 +7146,81 @@ void ScriptThread::Md5String(Event *ev)
     ret = checkMD5String(text, hash, sizeof(hash));
     if (ret != 0) {
         ev->AddInteger(-1);
+        throw ScriptException("Error while generating MD5 checksum for string!\n");
+    }
+
+    ev->AddString(hash);
+}
+
+void ScriptThread::Md5String2(Event *ev)
+{
+    char hash[64];
+    str  text;
+    int  ret = 0;
+
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for md5_string!\n");
+    }
+
+    text = ev->GetString(1);
+
+    ret = checkMD5String(text, hash, sizeof(hash));
+    if (ret != 0) {
+        ev->AddInteger(-1);
         throw ScriptException("Error while generating MD5 checksum for strin!\n");
     }
 
     ev->AddString(hash);
+}
+
+void ScriptThread::Sha256String(Event *ev)
+{
+    str text;
+    std::string hash;
+
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for sha256_string!\n");
+    }
+
+    text = ev->GetString(1);
+
+    picosha2::hash256_hex_string(std::string(text.c_str()), hash);
+
+    ev->AddString(hash.c_str());
+}
+
+void ScriptThread::UuidString(Event *ev)
+{
+    thread_local std::random_device rd;
+    thread_local std::mt19937 gen(rd());
+    thread_local std::uniform_int_distribution<> dis(0, 15);
+    thread_local std::uniform_int_distribution<> dis2(8, 11);
+
+    std::stringstream ss;
+    int i;
+    ss << std::hex;
+    for (i = 0; i < 8; i++) {
+        ss << dis(gen);
+    }
+    ss << "-";
+    for (i = 0; i < 4; i++) {
+        ss << dis(gen);
+    }
+    ss << "-4";
+    for (i = 0; i < 3; i++) {
+        ss << dis(gen);
+    }
+    ss << "-";
+    ss << dis2(gen);
+    for (i = 0; i < 3; i++) {
+        ss << dis(gen);
+    }
+    ss << "-";
+    for (i = 0; i < 12; i++) {
+        ss << dis(gen);
+    }
+
+    ev->AddString(ss.str().c_str());
 }
 
 scriptedEvType_t EventNameToType(const char *eventname, char *fullname)
