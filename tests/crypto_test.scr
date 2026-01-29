@@ -12,4 +12,8 @@ void main()
     // Test SHA256
     local.sha256 = sha256_string local.text;
     println("SHA256 of '" + local.text + "': " + local.sha256);
+
+    // Test UUID
+    local.uuid = uuid_string;
+    println("UUID: " + local.uuid);
 }
