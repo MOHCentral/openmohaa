@@ -68,16 +68,17 @@ TacticalSpot TacticalAnalyzer::FindTacticalSpot(const Vector& origin, const Vect
     // Search radius for wall
     if (dtStatusSucceed(query->findDistanceToWall(startRef, startPt, radius, filter, &dist, hitPos, hitNormal))) {
         // We found a wall.
-        Vector gameHitPos, gameHitNormal;
+        // Convert Recast coordinates to game coordinates immediately
+        Vector gameHitPos;
         ConvertRecastToGameCoord(hitPos, gameHitPos);
-
-        Vector recastEnemy;
-        ConvertGameToRecastCoord(enemyPos, recastEnemy);
-
-        Vector toEnemy = recastEnemy - Vector(hitPos);
-        toEnemy.normalize();
-
-        Vector normal(hitNormal);
+        
+        // Convert normal from Recast to game coordinate system
+        // For direction vectors like normals, we apply the same axis transformation
+        Vector gameHitNormal;
+        gameHitNormal[0] = hitNormal[0];
+        gameHitNormal[1] = -hitNormal[2];
+        gameHitNormal[2] = hitNormal[1];
+        gameHitNormal.normalize();
 
         // Let's propose the hit position itself as a cover spot if we are close enough
         // Or rather, if the distance to wall is less than our search radius, we consider moving there.
@@ -86,13 +87,15 @@ TacticalSpot TacticalAnalyzer::FindTacticalSpot(const Vector& origin, const Vect
              spot.type = COVER_FULL; // Assume full for now
              spot.valid = true;
 
-             // Determine Peek Direction
-             Vector rcUp(0,1,0);
-             Vector rcEnemyDir = recastEnemy - Vector(hitPos);
-             rcEnemyDir.normalize();
-             Vector rcRight = CrossProduct(rcEnemyDir, rcUp);
+             // Determine Peek Direction (using game coordinates)
+             Vector toEnemy = enemyPos - gameHitPos;
+             toEnemy.normalize();
+             
+             Vector up(0, 0, 1); // Game coordinate up vector
+             Vector right = CrossProduct(toEnemy, up);
+             right.normalize();
 
-             float side = DotProduct(normal, rcRight);
+             float side = DotProduct(gameHitNormal, right);
              if (side > 0.2f) {
                  spot.peekDir = PEEK_RIGHT;
              } else if (side < -0.2f) {
@@ -108,8 +111,17 @@ TacticalSpot TacticalAnalyzer::FindTacticalSpot(const Vector& origin, const Vect
 
 bool TacticalAnalyzer::CanPeek(const Vector& origin, const Vector& target, PeekDirection dir)
 {
-    // Simplified: Just return true for now, assuming FindTacticalSpot gave a valid peek spot.
-    return true;
+    // Determine if we can peek at the target from origin in the requested direction
+    // by reusing the tactical spot search logic.
+    const float kDefaultPeekRadius = 256.0f;
+    TacticalSpot spot = FindTacticalSpot(origin, target, kDefaultPeekRadius);
+
+    if (!spot.valid)
+    {
+        return false;
+    }
+
+    return spot.peekDir == dir;
 }
 
 //
@@ -142,7 +154,7 @@ BTStatus BTSequence::Tick(BTContext& ctx)
 // BotTactics
 //
 
-BotTactics::BotTactics() : m_controller(nullptr), m_inCover(false), m_stateTimer(0), m_currentPeek(PEEK_NONE), m_grenadeCooldown(0)
+BotTactics::BotTactics() : m_controller(nullptr), m_inCover(false), m_stateTimer(0), m_currentPeek(PEEK_NONE), m_grenadeCooldown(0), m_cachedObjectivePos(vec_zero), m_objectiveCacheTime(0), m_lastDuckAndLeanTime(0)
 {
 }
 
@@ -153,11 +165,24 @@ BotTactics::~BotTactics()
 void BotTactics::Init(BotController* controller)
 {
     m_controller = controller;
-    BuildTree();
+    
+    // Build the behavior tree only once to avoid repeated allocations.
+    if (!m_root)
+    {
+        BuildTree();
+    }
 }
 
 Vector BotTactics::GetObjectivePosition()
 {
+    // Cache objective position to avoid linear search every frame
+    // Refresh cache every 5 seconds
+    const int cacheTimeoutMs = 5000;
+    
+    if (level.inttime - m_objectiveCacheTime < cacheTimeoutMs) {
+        return m_cachedObjectivePos;
+    }
+    
     // Find active func_objective
     Entity *ent = NULL;
     // Iterate G_Find(NULL, FOFS(classname), "func_objective") would be ideal but we need to check headers
@@ -174,11 +199,15 @@ Vector BotTactics::GetObjectivePosition()
             // But we can just go to the first one found for now.
             // Better: Go to the one with the highest index (usually latest)?
             // Or assume objectives are linear.
-            return static_cast<Objective*>(ent)->GetOrigin();
+            m_cachedObjectivePos = static_cast<Objective*>(ent)->GetOrigin();
+            m_objectiveCacheTime = level.inttime;
+            return m_cachedObjectivePos;
         }
         ent = G_Find(ent, FOFS(classname), "func_objective");
     }
 
+    m_cachedObjectivePos = vec_zero;
+    m_objectiveCacheTime = level.inttime;
     return vec_zero;
 }
 
@@ -194,10 +223,11 @@ void BotTactics::BuildTree()
 
         if (level.inttime < m_grenadeCooldown) return BT_FAILURE;
 
-        // Check chance
-        if (rand() % 100 > 5) return BT_FAILURE; // 5% chance per tick if off cooldown
-
         Player* self = m_controller->getControlledEntity();
+        if (!self) {
+            return BT_FAILURE;
+        }
+        
         Weapon* grenade = self->BestWeapon(NULL, false, WEAPON_CLASS_THROWABLE);
 
         if (grenade && grenade->HasAmmo(FIRE_PRIMARY)) {
@@ -215,8 +245,31 @@ void BotTactics::BuildTree()
 
     // Condition: In Cover
     seqPeek->AddChild(std::make_shared<BTLeaf>([this](BTContext& ctx) -> BTStatus {
-        if (m_inCover) return BT_SUCCESS;
-        return BT_FAILURE;
+        if (!m_inCover) return BT_FAILURE;
+        
+        // Reset cover state if enemy is no longer present or position changed significantly
+        auto enemy = m_controller->GetEnemy();
+        if (!enemy) {
+            m_inCover = false;
+            return BT_FAILURE;
+        }
+        
+        // Check if enemy position changed significantly (more than 300 units)
+        if (m_currentCover.valid) {
+            auto* controlledEntity = m_controller->getControlledEntity();
+            if (controlledEntity) {
+                Vector enemyPos = enemy->origin;
+                
+                // If the enemy has moved significantly relative to our cover, invalidate cover
+                if ((enemyPos - m_currentCover.position).lengthSquared() > 300.0f * 300.0f) {
+                    m_inCover = false;
+                    m_currentCover.valid = false;
+                    return BT_FAILURE;
+                }
+            }
+        }
+        
+        return BT_SUCCESS;
     }));
 
     // Action: Peek
@@ -241,9 +294,17 @@ void BotTactics::BuildTree()
              }
         }
 
-        // Random "Duck and Lean"
-        if ((m_currentPeek == PEEK_LEFT || m_currentPeek == PEEK_RIGHT) && (rand() % 100 < 20)) {
-            ctx.cmd->upmove = -127;
+        // Use a simple time-based cooldown to avoid frame-rate dependent behavior.
+        // This limits how often we attempt a random duck while peeking.
+        const int duckCooldownMs = 1000; // Minimum time between duck attempts in milliseconds
+
+        if (m_currentPeek == PEEK_LEFT || m_currentPeek == PEEK_RIGHT) {
+            if ((level.inttime - m_lastDuckAndLeanTime) >= duckCooldownMs) {
+                if (rand() % 100 < 20) {
+                    ctx.cmd->upmove = -127;
+                }
+                m_lastDuckAndLeanTime = level.inttime;
+            }
         }
 
         // Attack is handled by State_Attack usually, but we can enforce it
@@ -259,17 +320,31 @@ void BotTactics::BuildTree()
 
     // Condition: Enemy visible
     seqCover->AddChild(std::make_shared<BTLeaf>([this](BTContext& ctx) -> BTStatus {
-        if (!m_controller->GetEnemy()) return BT_FAILURE;
+        if (!m_controller->GetEnemy()) {
+            // No enemy, reset cover state
+            m_inCover = false;
+            return BT_FAILURE;
+        }
         if (m_inCover) return BT_FAILURE;
         return BT_SUCCESS;
     }));
 
-    // Action: Find and Move to Cover
+    // Action: Find Cover (stance/peek only; movement handled by other states)
     seqCover->AddChild(std::make_shared<BTLeaf>([this](BTContext& ctx) -> BTStatus {
+        auto enemy = m_controller->GetEnemy();
+        if (!enemy) {
+            return BT_FAILURE;
+        }
+
+        auto* controlledEntity = m_controller->getControlledEntity();
+        if (!controlledEntity) {
+            return BT_FAILURE;
+        }
+
         if (!m_currentCover.valid || (level.inttime > m_stateTimer)) {
-             Vector enemyPos = m_controller->GetEnemy()->origin;
+             Vector enemyPos = enemy->origin;
              m_currentCover = TacticalAnalyzer::FindTacticalSpot(
-                 m_controller->getControlledEntity()->origin,
+                 controlledEntity->origin,
                  enemyPos,
                  500.0f
              );
@@ -277,12 +352,16 @@ void BotTactics::BuildTree()
         }
 
         if (m_currentCover.valid) {
-            m_controller->GetMovement().MoveTo(m_currentCover.position);
+            // Do not issue MoveTo here to avoid overriding attack movement.
+            // Instead, update tactical state so other systems can use this info.
             m_currentPeek = m_currentCover.peekDir;
-
-            if (m_controller->GetMovement().MoveDone()) {
+            
+            // Consider bot "in cover" if close to the cover position
+            Vector toCover = m_currentCover.position - controlledEntity->origin;
+            if (toCover.lengthSquared() < 100.0f * 100.0f) {
                 m_inCover = true;
             }
+            
             return BT_SUCCESS;
         }
 

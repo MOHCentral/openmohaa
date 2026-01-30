@@ -129,4 +129,7 @@ private:
     int m_stateTimer;
     PeekDirection m_currentPeek;
     int m_grenadeCooldown;
+    Vector m_cachedObjectivePos;
+    int m_objectiveCacheTime;
+    int m_lastDuckAndLeanTime;
 };
