@@ -118,6 +118,7 @@ public:
 
 private:
     void BuildTree();
+    Vector GetObjectivePosition();
 
     BotController* m_controller;
     std::shared_ptr<BTNode> m_root;
@@ -127,4 +128,5 @@ private:
     bool m_inCover;
     int m_stateTimer;
     PeekDirection m_currentPeek;
+    int m_grenadeCooldown;
 };
