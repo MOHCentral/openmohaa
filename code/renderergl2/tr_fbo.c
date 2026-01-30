@@ -335,6 +335,12 @@ void FBO_Init(void)
 			if (!glRefConfig.framebufferNoAttachments)
 				FBO_CreateBuffer(tr.pshadowFbos[i], GL_RGBA8, 0, 0);
 			FBO_AttachImage(tr.pshadowFbos[i], tr.pshadowMaps[i], GL_DEPTH_ATTACHMENT, 0);
+			if (glRefConfig.framebufferNoAttachments)
+			{
+				FBO_Bind(tr.pshadowFbos[i]);
+				qglDrawBuffer(GL_NONE);
+				qglReadBuffer(GL_NONE);
+			}
 			R_CheckFBO(tr.pshadowFbos[i]);
 		}
 	}
@@ -349,6 +355,12 @@ void FBO_Init(void)
 			if (!glRefConfig.framebufferNoAttachments)
 				FBO_CreateBuffer(tr.sunShadowFbo[i], GL_RGBA8, 0, 0);
 			FBO_AttachImage(tr.sunShadowFbo[i], tr.sunShadowDepthImage[i], GL_DEPTH_ATTACHMENT, 0);
+			if (glRefConfig.framebufferNoAttachments)
+			{
+				FBO_Bind(tr.sunShadowFbo[i]);
+				qglDrawBuffer(GL_NONE);
+				qglReadBuffer(GL_NONE);
+			}
 			R_CheckFBO(tr.sunShadowFbo[i]);
 		}
 	}
