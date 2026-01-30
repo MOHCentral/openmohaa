@@ -72,8 +72,13 @@ TacticalSpot TacticalAnalyzer::FindTacticalSpot(const Vector& origin, const Vect
         Vector gameHitPos;
         ConvertRecastToGameCoord(hitPos, gameHitPos);
         
+        // Convert normal from Recast to game coordinate system
+        // For direction vectors like normals, we apply the same axis transformation
         Vector gameHitNormal;
-        ConvertRecastToGameCoord(hitNormal, gameHitNormal);
+        gameHitNormal[0] = hitNormal[0];
+        gameHitNormal[1] = -hitNormal[2];
+        gameHitNormal[2] = hitNormal[1];
+        gameHitNormal.normalize();
 
         // Let's propose the hit position itself as a cover spot if we are close enough
         // Or rather, if the distance to wall is less than our search radius, we consider moving there.
@@ -149,7 +154,7 @@ BTStatus BTSequence::Tick(BTContext& ctx)
 // BotTactics
 //
 
-BotTactics::BotTactics() : m_controller(nullptr), m_inCover(false), m_stateTimer(0), m_currentPeek(PEEK_NONE), m_grenadeCooldown(0), m_cachedObjectivePos(vec_zero), m_objectiveCacheTime(0)
+BotTactics::BotTactics() : m_controller(nullptr), m_inCover(false), m_stateTimer(0), m_currentPeek(PEEK_NONE), m_grenadeCooldown(0), m_cachedObjectivePos(vec_zero), m_objectiveCacheTime(0), m_lastDuckAndLeanTime(0)
 {
 }
 
@@ -174,7 +179,7 @@ Vector BotTactics::GetObjectivePosition()
     // Refresh cache every 5 seconds
     const int cacheTimeoutMs = 5000;
     
-    if (level.inttime - m_objectiveCacheTime < cacheTimeoutMs && m_cachedObjectivePos != vec_zero) {
+    if (level.inttime - m_objectiveCacheTime < cacheTimeoutMs) {
         return m_cachedObjectivePos;
     }
     
@@ -254,8 +259,6 @@ void BotTactics::BuildTree()
             auto* controlledEntity = m_controller->getControlledEntity();
             if (controlledEntity) {
                 Vector enemyPos = enemy->origin;
-                Vector oldEnemyDir = m_currentCover.position - controlledEntity->origin;
-                Vector newEnemyDir = enemyPos - controlledEntity->origin;
                 
                 // If the enemy has moved significantly relative to our cover, invalidate cover
                 if ((enemyPos - m_currentCover.position).lengthSquared() > 300.0f * 300.0f) {
@@ -293,15 +296,14 @@ void BotTactics::BuildTree()
 
         // Use a simple time-based cooldown to avoid frame-rate dependent behavior.
         // This limits how often we attempt a random duck while peeking.
-        static int lastDuckAndLeanTime = 0;
         const int duckCooldownMs = 1000; // Minimum time between duck attempts in milliseconds
 
         if (m_currentPeek == PEEK_LEFT || m_currentPeek == PEEK_RIGHT) {
-            if ((level.inttime - lastDuckAndLeanTime) >= duckCooldownMs) {
+            if ((level.inttime - m_lastDuckAndLeanTime) >= duckCooldownMs) {
                 if (rand() % 100 < 20) {
                     ctx.cmd->upmove = -127;
                 }
-                lastDuckAndLeanTime = level.inttime;
+                m_lastDuckAndLeanTime = level.inttime;
             }
         }
 

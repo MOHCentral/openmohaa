@@ -131,4 +131,5 @@ private:
     int m_grenadeCooldown;
     Vector m_cachedObjectivePos;
     int m_objectiveCacheTime;
+    int m_lastDuckAndLeanTime;
 };
