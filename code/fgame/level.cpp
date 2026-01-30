@@ -34,6 +34,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "player.h"
 #include "Entities.h"
 #include "health.h"
+#include "g_scriptevents.h"
 
 #include "navigation_recast_load.h"
 
@@ -1118,6 +1119,9 @@ void Level::SpawnEntities(char *entities, int svsTime)
     int         start, end;
     char        name[128];
 
+    // HOOK: map_load_start
+    G_ScriptEvent("map_load_start", NULL, mapname.c_str());
+
     if (gi.Cvar_Get("g_invulnoverride", "0", 0)->integer == 1) {
         // Added in 2.30
         //  Clear the invulnerable override when loading
@@ -1529,6 +1533,12 @@ void Level::ServerSpawned(void)
             //  Recast navigation
             navigationMap.LoadWorldMap(m_mapfile);
         }
+
+        // HOOK: game_start
+        G_ScriptEvent("game_start", NULL);
+
+        // HOOK: map_load_end
+        G_ScriptEvent("map_load_end", NULL, mapname.c_str(), g_gametype->integer);
     } else {
         Director.LoadMenus();
     }
@@ -2009,16 +2019,22 @@ void Level::CheckVote(void)
 
     if ((svsFloatTime - svsStartFloatTime) * 1000 - m_voteTime >= 30000) {
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Failed"), m_voteName.c_str()));
+        // HOOK: vote_failed (timeout)
+        G_ScriptEvent("vote_failed", NULL, m_voteName.c_str(), "timeout", m_voteYes, m_voteNo);
         m_voteTime = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else if (m_voteYes > m_numVoters / 2) {
         // Pass arguments to console
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Passed"), m_voteName.c_str()));
+        // HOOK: vote_passed
+        G_ScriptEvent("vote_passed", NULL, m_voteName.c_str(), m_voteString.c_str(), m_voteYes, m_voteNo);
         m_nextVoteTime = level.inttime + 3000;
         m_voteTime     = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else if (m_voteNo >= m_numVoters / 2) {
         G_PrintToAllClients(va("%s: %s\n", gi.CL_LV_ConvertString("Vote Failed"), m_voteName.c_str()));
+        // HOOK: vote_failed (rejected)
+        G_ScriptEvent("vote_failed", NULL, m_voteName.c_str(), "rejected", m_voteYes, m_voteNo);
         m_voteTime = 0;
         gi.setConfigstring(CS_VOTE_TIME, "");
     } else {

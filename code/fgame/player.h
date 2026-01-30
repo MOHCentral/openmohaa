@@ -369,6 +369,10 @@ public:
     bool              m_bConnected;
     str               m_lastcommand;
 
+    // For event hooks
+    int  old_pm_flags;
+    bool wasOnGround;
+
     VoteUpload *voteUpload;
 
 #ifdef OPM_FEATURES
@@ -387,6 +391,12 @@ public:
 private:
     int m_iInstantMessageTime;
     int m_iTextChatTime;
+    
+    // Distance tracking for player statistics
+    float m_fDistanceWalked;
+    float m_fDistanceSprinted;
+    float m_fDistanceSwam;
+    float m_fDistanceDriven;
 
 public:
     qboolean CondTrue(Conditional& condition);

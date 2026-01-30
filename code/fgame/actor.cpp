@@ -43,6 +43,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "sentient.h"
 #include "g_phys.h"
 #include "debuglines.h"
+#include "g_scriptevents.h"
 #include "scriptexception.h"
 #include "parm.h"
 #include "../corepp/tiki.h"
@@ -3124,6 +3125,9 @@ void Actor::EventStart(Event *ev)
 
     JoinNearbySquads(1024);
 
+    // HOOK: actor_spawn
+    G_ScriptEvent("actor_spawn", this);
+
     if (level.Spawned()) {
         Unregister(STRING_SPAWN);
     }
@@ -5242,9 +5246,11 @@ void Actor::EventKilled(Event *ev)
     Sentient *sent;
     Player   *player;
 
-    DispatchEventKilled(ev, true);
-
+    // HOOK: actor_killed
     attacker = ev->GetEntity(1);
+    G_ScriptEvent("actor_killed", this, attacker);
+
+    DispatchEventKilled(ev, true);
     if (attacker && attacker->IsSubclassOfPlayer()) {
         player = static_cast<Player *>(attacker);
         if (player->m_Team != m_Team) {

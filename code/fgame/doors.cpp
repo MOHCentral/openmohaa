@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "mover.h"
 #include "doors.h"
 #include "sentient.h"
+#include "g_scriptevents.h"
 #include "scriptmaster.h"
 #include "scriptexception.h"
 #include "item.h"
@@ -628,6 +629,9 @@ void Door::CloseEnd(Event *ev)
 
 void Door::Close(Event *ev)
 {
+    // HOOK: door_close
+    G_ScriptEvent("door_close", this);
+
     Door *door;
 
     if (!(getContents() & CONTENTS_SOLID)) {
@@ -726,6 +730,9 @@ void Door::Open(Event *ev)
             gi.AdjustAreaPortalState(this->edict, true);
         }
     }
+
+    // HOOK: door_open
+    G_ScriptEvent("door_open", this, other);
 }
 
 void Door::DoorUse(Event *ev)

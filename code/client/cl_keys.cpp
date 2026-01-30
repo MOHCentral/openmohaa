@@ -1204,7 +1204,7 @@ void CL_KeyEvent(int key, qboolean down, unsigned time)
             }
             if (!kb) {
                 if (key >= 200) {
-                    Com_Printf("%s is unbound, use controls menu to set.\n", Key_KeynumToString(key));
+                    // Com_Printf("%s is unbound, use controls menu to set.\n", Key_KeynumToString(key));
                 }
             } else if (kb[0] == '+') {
                 int  i;
@@ -1279,7 +1279,7 @@ void CL_Key_ForceCommand(int key, unsigned int time)
             Cbuf_AddText("\n");
         }
     } else if (key > K_JOY12) {
-        Com_Printf("%s is unbound, use controls menu to set.\n", Key_KeynumToString(key));
+        // Com_Printf("%s is unbound, use controls menu to set.\n", Key_KeynumToString(key));
     }
 }
 

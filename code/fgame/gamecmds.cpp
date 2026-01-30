@@ -34,7 +34,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <scriptcompiler.h>
 #include "playerbot.h"
 #include "consoleevent.h"
+#include "g_scriptevents.h"
 #include "g_bot.h"
+#include "scriptmaster.h"
+#include "scriptthread.h"
+#include "../script/scriptvariable.h"
 
 typedef struct {
     const char *command;
@@ -130,6 +134,9 @@ qboolean G_ConsoleCommand(void)
     try {
         cmd = gi.Argv(0);
 
+        // HOOK: server_console_command
+        G_ScriptEvent("server_console_command", NULL, cmd);
+
         for (cmds = G_ConsoleCmds; cmds->command != NULL; cmds++) {
             if (!Q_stricmp(cmd, cmds->command)) {
                 return cmds->func(NULL);
@@ -192,6 +199,41 @@ qboolean G_ProcessClientCommand(gentity_t *ent)
         if (!Q_stricmp(cmd, cmds->command)) {
             return cmds->func(ent);
         }
+    }
+
+    // Check for custom commands registered via registercmd
+    ScriptThreadLabel *label = Director.m_scriptCmds.findKeyValue(cmd);
+    if (label && label->IsSet()) {
+        ScriptThread *thread;
+        ScriptVariable *parms;
+        int parmCount;
+        
+        // Create thread from the registered label
+        thread = label->Create(ent->entity);
+        if (!thread) {
+            gi.DPrintf("Failed to create thread for command '%s'\n", cmd);
+            return qtrue;
+        }
+        
+        // Build parameter array: [player_entity, arg1, arg2, ...]
+        n = gi.Argc();
+        parmCount = n; // Total: entity + (n-1) args
+        parms = new ScriptVariable[parmCount];
+        
+        // First parameter: player entity
+        parms[0].setListenerValue(ent->entity);
+        
+        // Remaining parameters: command arguments
+        for (i = 1; i < n; i++) {
+            parms[i].setStringValue(gi.Argv(i));
+        }
+        
+        // Execute thread with parameters
+        thread->Execute(parms, parmCount);
+        
+        // Cleanup
+        delete[] parms;
+        return qtrue;
     }
 
     if (Event::Exists(cmd)) {
