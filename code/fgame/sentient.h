@@ -29,6 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../corepp/container.h"
 #include "animate.h"
 #include "vehicle.h"
+#include <unordered_map>
+#include <string>
 
 extern Event EV_Sentient_Attack;
 extern Event EV_Sentient_Charge;
@@ -95,6 +97,8 @@ class Sentient : public Animate
 {
 protected:
     Container<int>     inventory;
+    std::unordered_multimap<std::string, int> inventoryMap;
+    bool               inventoryMapDirty;
     Container<Ammo *>  ammo_inventory;
     float              LMRF;
     WeaponPtr          newWeapon;
@@ -367,6 +371,9 @@ public:
 
     const Container<int>&    getInventory() const;
     const Container<Ammo *>& getAmmoInventory() const;
+
+    void ItemNameChanged(Item *item, const char *oldName);
+    void RebuildInventoryMap();
 };
 
 typedef SafePtr<Sentient> SentientPtr;
