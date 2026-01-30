@@ -763,6 +763,7 @@ void Item::Pickup(Event *ev)
 void Item::setName(const char *i)
 {
     const char *prefix;
+    str oldName = item_name;
 
     item_name  = i;
     item_index = gi.itemindex(i);
@@ -772,6 +773,10 @@ void Item::setName(const char *i)
     if (prefix) {
         m_sVMprefix  = prefix;
         m_bMOHPrefix = true;
+    }
+
+    if (owner) {
+        owner->ItemNameChanged(this, oldName.c_str());
     }
 }
 
