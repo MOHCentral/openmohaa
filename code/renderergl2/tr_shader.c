@@ -49,12 +49,9 @@ static void CreateMultistageFromBundle();
 return a hash value for the filename
 ================
 */
-#ifdef __GNUCC__
-  #warning TODO: check if long is ok here 
-#endif
-static long generateHashValue( const char *fname, const int size ) {
+static int generateHashValue( const char *fname, const int size ) {
 	int		i;
-	long	hash;
+	int		hash;
 	char	letter;
 
 	hash = 0;
@@ -64,7 +61,7 @@ static long generateHashValue( const char *fname, const int size ) {
 		if (letter =='.') break;				// don't include extension
 		if (letter =='\\') letter = '/';		// damn path names
 		if (letter == PATH_SEP) letter = '/';		// damn path names
-		hash+=(long)(letter)*(i+119);
+		hash+=(int)(letter)*(i+119);
 		i++;
 	}
 	hash = (hash ^ (hash >> 10) ^ (hash >> 20));
