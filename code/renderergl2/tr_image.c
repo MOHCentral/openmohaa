@@ -1921,35 +1921,60 @@ static void RawImage_UploadToRgtc2Texture(GLuint texture, int miplevel, int x, i
 {
 	int wBlocks, hBlocks, iy, ix, size;
 	byte *compressedData, *p;
+	int aligned_x, aligned_y;
+	int offset_x, offset_y;
+	int needed_width, needed_height;
+	int final_width, final_height;
 
-	wBlocks = (width + 3) / 4;
-	hBlocks = (height + 3) / 4;
+	aligned_x = x & ~3;
+	aligned_y = y & ~3;
+	offset_x = x - aligned_x;
+	offset_y = y - aligned_y;
+
+	needed_width = width + offset_x;
+	needed_height = height + offset_y;
+
+	// logic to determine passed width/height to GL
+	final_width = (width % 4 != 0) ? needed_width : ((needed_width + 3) & ~3);
+	final_height = (height % 4 != 0) ? needed_height : ((needed_height + 3) & ~3);
+
+	wBlocks = (final_width + 3) / 4;
+	hBlocks = (final_height + 3) / 4;
 	size = wBlocks * hBlocks * 16;
 
 	p = compressedData = ri.Hunk_AllocateTempMemory(size);
-	for (iy = 0; iy < height; iy += 4)
+	for (iy = 0; iy < final_height; iy += 4)
 	{
-		int oh = MIN(4, height - iy);
-
-		for (ix = 0; ix < width; ix += 4)
+		for (ix = 0; ix < final_width; ix += 4)
 		{
 			byte workingData[16];
 			int component;
-
-			int ow = MIN(4, width - ix);
 
 			for (component = 0; component < 2; component++)
 			{
 				int ox, oy;
 
-				for (oy = 0; oy < oh; oy++)
-					for (ox = 0; ox < ow; ox++)
-						workingData[oy * 4 + ox] = data[((iy + oy) * width + ix + ox) * 4 + component];
-
-				// dupe data to fill
 				for (oy = 0; oy < 4; oy++)
-					for (ox = (oy < oh) ? ow : 0; ox < 4; ox++)
-						workingData[oy * 4 + ox] = workingData[(oy % oh) * 4 + ox % ow];
+				{
+					for (ox = 0; ox < 4; ox++)
+					{
+						int data_x, data_y;
+
+						// Coordinates in the texture relative to aligned_x/y
+						// int tex_rel_x = ix + ox;
+						// int tex_rel_y = iy + oy;
+
+						// Map back to original data coordinates
+						data_x = ix + ox - offset_x;
+						data_y = iy + oy - offset_y;
+
+						// Clamp to valid data range
+						data_x = CLAMP(data_x, 0, width - 1);
+						data_y = CLAMP(data_y, 0, height - 1);
+
+						workingData[oy * 4 + ox] = data[(data_y * width + data_x) * 4 + component];
+					}
+				}
 
 				CompressMonoBlock(p, workingData);
 				p += 8;
@@ -1957,8 +1982,7 @@ static void RawImage_UploadToRgtc2Texture(GLuint texture, int miplevel, int x, i
 		}
 	}
 
-	// FIXME: Won't work for x/y that aren't multiples of 4.
-	qglCompressedTextureSubImage2DEXT(texture, GL_TEXTURE_2D, miplevel, x, y, width, height, GL_COMPRESSED_RG_RGTC2, size, compressedData);
+	qglCompressedTextureSubImage2DEXT(texture, GL_TEXTURE_2D, miplevel, aligned_x, aligned_y, final_width, final_height, GL_COMPRESSED_RG_RGTC2, size, compressedData);
 
 	ri.Hunk_FreeTempMemory(compressedData);
 }
