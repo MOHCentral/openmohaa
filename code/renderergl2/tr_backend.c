@@ -323,13 +323,39 @@ static void SetViewportAndScissor( void ) {
 
 /*
 =================
+RB_HasSkySurface
+=================
+*/
+static qboolean RB_HasSkySurface( const drawSurf_t *drawSurfs, int numDrawSurfs ) {
+	int i;
+	for ( i = 0 ; i < numDrawSurfs ; i++ ) {
+		const drawSurf_t *drawSurf = &drawSurfs[i];
+		shader_t *shader;
+
+		if (*drawSurf->surface == SF_SPRITE) {
+			shader = tr.sortedShaders[((refSprite_t*)drawSurf->surface)->shaderNum];
+		} else {
+			int entityNum, fogNum, dlightMap, pshadowMap;
+			qboolean bStaticModel;
+			R_DecomposeSort( drawSurf->sort, &entityNum, &shader, &fogNum, &dlightMap, &pshadowMap, &bStaticModel );
+		}
+
+		if ( shader && shader->isSky ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+/*
+=================
 RB_BeginDrawingView
 
 Any mirrored or portaled views have already been drawn, so prepare
 to actually render the visible surfaces for this view
 =================
 */
-void RB_BeginDrawingView (void) {
+void RB_BeginDrawingView (qboolean skyRendered) {
 	int clearBits = 0;
 
 	// sync with gl if needed
@@ -375,9 +401,9 @@ void RB_BeginDrawingView (void) {
 	{
 		clearBits |= GL_STENCIL_BUFFER_BIT;
 	}
-	if ( r_fastsky->integer && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) )
+	if ( r_fastsky->integer && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) && skyRendered )
 	{
-		clearBits |= GL_COLOR_BUFFER_BIT;	// FIXME: only if sky shaders have been used
+		clearBits |= GL_COLOR_BUFFER_BIT;
 	}
 
 	// clear to black for cube maps
@@ -947,6 +973,7 @@ RB_DrawSurfs
 const void	*RB_DrawSurfs( const void *data ) {
 	const drawSurfsCommand_t	*cmd;
 	qboolean isShadowView;
+	qboolean skyUsed = qfalse;
 
 	// finish any 2D drawing if needed
 	if ( tess.numIndexes ) {
@@ -958,10 +985,14 @@ const void	*RB_DrawSurfs( const void *data ) {
 	backEnd.refdef = cmd->refdef;
 	backEnd.viewParms = cmd->viewParms;
 
+	if ( r_fastsky->integer && !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		skyUsed = RB_HasSkySurface( cmd->drawSurfs, cmd->numDrawSurfs );
+	}
+
 	isShadowView = !!(backEnd.viewParms.flags & VPF_DEPTHSHADOW);
 
 	// clear the z buffer, set the modelview, etc
-	RB_BeginDrawingView ();
+	RB_BeginDrawingView (skyUsed);
 
 	if (glRefConfig.framebufferObject && (backEnd.viewParms.flags & VPF_DEPTHCLAMP) && glRefConfig.depthClamp)
 	{
