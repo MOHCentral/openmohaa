@@ -797,6 +797,8 @@ Sentient::Sentient()
     m_iThreatBias         = 0;
     m_bFootOnGround_Right = true;
     m_bFootOnGround_Left  = true;
+    m_iRightFootTag       = -2;
+    m_iLeftFootTag        = -2;
     iNextLandTime         = 0;
     m_bDontDropWeapons    = false;
 
@@ -2042,6 +2044,9 @@ void Sentient::setModel(const char *mdl)
     DetachAllActiveWeapons();
     Entity::setModel(mdl);
     AttachAllActiveWeapons();
+
+    m_iRightFootTag = -2;
+    m_iLeftFootTag  = -2;
 }
 
 void Sentient::TurnOffShadow(Event *ev)
@@ -2903,7 +2908,6 @@ void Sentient::UpdateFootsteps(void)
 {
     int iAnimNum;
     int iAnimFlags;
-    int iTagNum;
 
     iAnimFlags = 0;
 
@@ -2920,20 +2924,27 @@ void Sentient::UpdateFootsteps(void)
         return;
     }
 
+    if (m_iRightFootTag == -2) {
+        m_iRightFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
+    }
+
     if (m_bFootOnGround_Right) {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
-        if (iTagNum >= 0) {
-            m_bFootOnGround_Right = G_TIKI_IsOnGround(edict, iTagNum, 13.653847f);
+        if (m_iRightFootTag >= 0) {
+            m_bFootOnGround_Right = G_TIKI_IsOnGround(edict, m_iRightFootTag, 13.653847f);
         } else {
             m_bFootOnGround_Right = true;
         }
     } else {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
-        if (iTagNum >= 0) {
-            if (G_TIKI_IsOnGround(edict, iTagNum, 13.461539f)) {
+        if (m_iRightFootTag >= 0) {
+            if (G_TIKI_IsOnGround(edict, m_iRightFootTag, 13.461539f)) {
                 BroadcastAIEvent(AI_EVENT_FOOTSTEP, G_AIEventRadius(AI_EVENT_FOOTSTEP));
                 // simulate footstep sounds
-                Footstep("Bip01 L Foot", (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
+
+                if (m_iLeftFootTag == -2) {
+                    m_iLeftFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
+                }
+
+                Footstep(m_iLeftFootTag, (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
                 m_bFootOnGround_Right = true;
             }
         } else {
@@ -2941,20 +2952,27 @@ void Sentient::UpdateFootsteps(void)
         }
     }
 
+    if (m_iLeftFootTag == -2) {
+        m_iLeftFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
+    }
+
     if (m_bFootOnGround_Left) {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
-        if (iTagNum >= 0) {
-            m_bFootOnGround_Left = G_TIKI_IsOnGround(edict, iTagNum, 13.653847f);
+        if (m_iLeftFootTag >= 0) {
+            m_bFootOnGround_Left = G_TIKI_IsOnGround(edict, m_iLeftFootTag, 13.653847f);
         } else {
             m_bFootOnGround_Left = true;
         }
     } else {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
-        if (iTagNum >= 0) {
-            if (G_TIKI_IsOnGround(edict, iTagNum, 13.461539f)) {
+        if (m_iLeftFootTag >= 0) {
+            if (G_TIKI_IsOnGround(edict, m_iLeftFootTag, 13.461539f)) {
                 BroadcastAIEvent(AI_EVENT_FOOTSTEP, G_AIEventRadius(AI_EVENT_FOOTSTEP));
                 // simulate footstep sounds
-                Footstep("Bip01 R Foot", (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
+
+                if (m_iRightFootTag == -2) {
+                    m_iRightFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
+                }
+
+                Footstep(m_iRightFootTag, (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
                 m_bFootOnGround_Left = true;
             }
         } else {
@@ -3173,12 +3191,21 @@ void Sentient::FootstepMain(trace_t *trace, int iRunning, int iEquipment)
 
 void Sentient::Footstep(const char *szTagName, int iRunning, int iEquipment)
 {
+    int iTagNum = -1;
+
+    if (szTagName) {
+        iTagNum = gi.Tag_NumForName(this->edict->tiki, szTagName);
+    }
+
+    Footstep(iTagNum, iRunning, iEquipment);
+}
+
+void Sentient::Footstep(int iTagNum, int iRunning, int iEquipment)
+{
     int           i;
-    int           iTagNum;
     vec3_t        vStart, vEnd;
     vec3_t        midlegs;
     vec3_t        vMins, vMaxs;
-    str           sSoundName;
     trace_t       trace;
     orientation_t oTag;
 
@@ -3186,14 +3213,11 @@ void Sentient::Footstep(const char *szTagName, int iRunning, int iEquipment)
     VectorCopy(this->origin, vStart);
     vStart[2] += GROUND_DISTANCE;
 
-    if (szTagName) {
-        iTagNum = gi.Tag_NumForName(this->edict->tiki, szTagName);
-        if (iTagNum != -1) {
-            oTag = G_TIKI_Orientation(this->edict, iTagNum);
+    if (iTagNum >= 0) {
+        oTag = G_TIKI_Orientation(this->edict, iTagNum);
 
-            for (i = 0; i < 2; i++) {
-                VectorMA(vStart, oTag.origin[i], this->orientation[i], vStart);
-            }
+        for (i = 0; i < 2; i++) {
+            VectorMA(vStart, oTag.origin[i], this->orientation[i], vStart);
         }
     }
 
