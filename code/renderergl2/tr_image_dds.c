@@ -72,8 +72,15 @@ ddsHeader_t;
 #define DDSCAPS_REQUIRED 0x1000
 
 // caps2:
-#define DDSCAPS2_CUBEMAP 0xFE00
-#define DDSCAPS2_VOLUME  0x200000
+#define DDSCAPS2_CUBEMAP           0x200
+#define DDSCAPS2_CUBEMAP_POSITIVEX 0x400
+#define DDSCAPS2_CUBEMAP_NEGATIVEX 0x800
+#define DDSCAPS2_CUBEMAP_POSITIVEY 0x1000
+#define DDSCAPS2_CUBEMAP_NEGATIVEY 0x2000
+#define DDSCAPS2_CUBEMAP_POSITIVEZ 0x4000
+#define DDSCAPS2_CUBEMAP_NEGATIVEZ 0x8000
+#define DDSCAPS2_CUBEMAP_ALLFACES ( DDSCAPS2_CUBEMAP_POSITIVEX | DDSCAPS2_CUBEMAP_NEGATIVEX | DDSCAPS2_CUBEMAP_POSITIVEY | DDSCAPS2_CUBEMAP_NEGATIVEY | DDSCAPS2_CUBEMAP_POSITIVEZ | DDSCAPS2_CUBEMAP_NEGATIVEZ )
+#define DDSCAPS2_VOLUME            0x200000
 
 typedef struct ddsHeaderDxt10_s
 {
@@ -305,8 +312,26 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 			*numMips = 1;
 	}
 
-	// FIXME: handle cube map
-	//if ((ddsHeader->caps2 & DDSCAPS2_CUBEMAP) == DDSCAPS2_CUBEMAP)
+	// handle cube map
+	if (ddsHeader->caps2 & DDSCAPS2_CUBEMAP)
+	{
+		if ((ddsHeader->caps2 & DDSCAPS2_CUBEMAP_ALLFACES) != DDSCAPS2_CUBEMAP_ALLFACES)
+		{
+			ri.Printf(PRINT_ALL, "DDS Cubemap %s is missing faces.\n", filename);
+			ri.FS_FreeFile(buffer.v);
+			return;
+		}
+	}
+
+	if (ddsHeaderDxt10 && (ddsHeaderDxt10->miscFlags & 0x4))
+	{
+		if (ddsHeaderDxt10->arraySize < 6)
+		{
+			ri.Printf(PRINT_ALL, "DDS DX10 Cubemap %s is missing faces.\n", filename);
+			ri.FS_FreeFile(buffer.v);
+			return;
+		}
+	}
 
 	//
 	// Convert DXGI format/FourCC into OpenGL format
@@ -481,7 +506,7 @@ void R_SaveDDS(const char *filename, byte *pic, int width, int height, int depth
 	ddsHeader->caps = DDSCAPS_COMPLEX | DDSCAPS_REQUIRED;
 
 	if (depth == 6)
-		ddsHeader->caps2 = DDSCAPS2_CUBEMAP;
+		ddsHeader->caps2 = DDSCAPS2_CUBEMAP | DDSCAPS2_CUBEMAP_ALLFACES;
 
 	ddsHeader->pixelFormatFlags = DDSPF_RGB | DDSPF_ALPHAPIXELS;
 	ddsHeader->rgbBitCount = 32;
