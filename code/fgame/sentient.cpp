@@ -737,6 +737,7 @@ Sentient::Sentient()
     on_fire_tagnums[2]      = -1;
     attack_blocked_time     = 0;
     m_fHelmetSpeed          = 0;
+    m_iHelmetSurfaceIndex   = -1;
 
     inventory.ClearObjectList();
 
@@ -2042,6 +2043,8 @@ void Sentient::setModel(const char *mdl)
     DetachAllActiveWeapons();
     Entity::setModel(mdl);
     AttachAllActiveWeapons();
+
+    UpdateHelmetSurfaceIndex();
 }
 
 void Sentient::TurnOffShadow(Event *ev)
@@ -2115,6 +2118,10 @@ void Sentient::Archive(Archiver& arc)
     arc.ArchiveString(&m_sHelmetTiki);
 
     arc.ArchiveFloat(&m_fHelmetSpeed);
+
+    if (arc.Loading()) {
+        UpdateHelmetSurfaceIndex();
+    }
 
     arc.ArchiveVector(&gunoffset);
     arc.ArchiveVector(&eyeposition);
@@ -2675,6 +2682,15 @@ void Sentient::SetDamageMult(Event *ev)
     m_fDamageMultipliers[index] = ev->GetFloat(2);
 }
 
+void Sentient::UpdateHelmetSurfaceIndex()
+{
+    if (m_sHelmetSurface1.length()) {
+        m_iHelmetSurfaceIndex = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
+    } else {
+        m_iHelmetSurfaceIndex = -1;
+    }
+}
+
 void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str sHelmetSurface1, str sHelmetSurface2)
 {
     m_sHelmetTiki     = sHelmetTiki;
@@ -2683,6 +2699,8 @@ void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str
 
     m_fHelmetSpeed          = fSpeed;
     m_fDamageMultipliers[1] = fDamageMult;
+
+    UpdateHelmetSurfaceIndex();
 }
 
 void Sentient::EventSetupHelmet(Event *ev)
@@ -2702,16 +2720,11 @@ void Sentient::EventSetupHelmet(Event *ev)
 
 bool Sentient::WearingHelmet(void)
 {
-    if (!m_sHelmetSurface1.length()) {
+    if (m_iHelmetSurfaceIndex < 0) {
         return false;
     }
 
-    int iSurf = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
-    if (iSurf >= 0) {
-        return (~edict->s.surfaces[iSurf] & MDL_SURFACE_NODRAW) != 0;
-    } else {
-        return false;
-    }
+    return (~edict->s.surfaces[m_iHelmetSurfaceIndex] & MDL_SURFACE_NODRAW) != 0;
 }
 
 void Sentient::EventPopHelmet(Event *ev)
