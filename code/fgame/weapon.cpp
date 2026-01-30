@@ -776,6 +776,9 @@ Weapon::Weapon()
     // Defaults to no secondary HUD
     m_bSecondaryAmmoInHud = false;
 
+    m_iAttachToTagIndex = -1;
+    m_pAttachToTagTiki = NULL;
+
     PostEvent(EV_Weapon_IdleInit, 0);
 
     last_owner_trigger_time = 0;
@@ -1217,7 +1220,11 @@ void Weapon::GetMuzzlePosition(vec3_t position, vec3_t vBarrelPos, vec3_t forwar
     }
 
     if (owner) {
-        tagnum = gi.Tag_NumForName(owner->edict->tiki, current_attachToTag.c_str());
+        if (m_iAttachToTagIndex == -1 || m_pAttachToTagTiki != owner->edict->tiki) {
+            m_iAttachToTagIndex = gi.Tag_NumForName(owner->edict->tiki, current_attachToTag.c_str());
+            m_pAttachToTagTiki  = owner->edict->tiki;
+        }
+        tagnum = m_iAttachToTagIndex;
 
         // Get the orientation based on the frame and anim stored off in the owner.
         // This is to prevent weird timing with getting orientations on different frames of firing
@@ -2256,6 +2263,8 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
 
     if (!owner) {
         current_attachToTag = "";
+        m_iAttachToTagIndex = -1;
+        m_pAttachToTagTiki  = NULL;
         return;
     }
 
@@ -2271,6 +2280,8 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
         lastValid  = qtrue;
 
         current_attachToTag = holster_attachToTag;
+        m_iAttachToTagIndex = -1;
+        m_pAttachToTagTiki  = NULL;
 
         vOffset = holsterOffset;
         setAngles(holsterAngles);
@@ -2288,9 +2299,13 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
         switch (hand) {
         case WEAPON_MAIN:
             current_attachToTag = attachToTag_main;
+            m_iAttachToTagIndex = -1;
+            m_pAttachToTagTiki  = NULL;
             break;
         case WEAPON_OFFHAND:
             current_attachToTag = attachToTag_offhand;
+            m_iAttachToTagIndex = -1;
+            m_pAttachToTagTiki  = NULL;
             break;
         default:
             warning("Weapon::AttachGun", "Invalid hand for attachment of weapon specified");
@@ -2350,8 +2365,10 @@ void Weapon::AttachToHand(Event *ev)
     }
 
     current_attachToTag = tag;
+    m_iAttachToTagIndex = gi.Tag_NumForName(owner->edict->tiki, tag);
+    m_pAttachToTagTiki  = owner->edict->tiki;
 
-    int tagnum = gi.Tag_NumForName(owner->edict->tiki, tag);
+    int tagnum = m_iAttachToTagIndex;
     if (tagnum < 0) {
         warning(
             "Weapon::AttachToHand",
@@ -2551,6 +2568,8 @@ void Weapon::PickupWeapon(Event *ev)
 
         DetachFromOwner();
         current_attachToTag        = "";
+        m_iAttachToTagIndex        = -1;
+        m_pAttachToTagTiki         = NULL;
         lastValid                  = qfalse;
         edict->s.tag_num           = -1;
         edict->s.attach_use_angles = qfalse;
@@ -4151,6 +4170,8 @@ str Weapon::GetCurrentAttachToTag(void)
 void Weapon::SetCurrentAttachToTag(str s)
 {
     current_attachToTag = s;
+    m_iAttachToTagIndex = -1;
+    m_pAttachToTagTiki  = NULL;
 }
 
 //======================
