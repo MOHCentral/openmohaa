@@ -2,8 +2,8 @@
 #define __SCRIPTYAML_H__
 
 #include "g_local.h"
-#include "script/scriptvariable.h"
-#include "corepp/listener.h"
+#include "../script/scriptvariable.h"
+#include "../corepp/listener.h"
 #include "simpleentity.h"
 
 class ScriptYAML : public SimpleEntity
