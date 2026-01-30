@@ -82,6 +82,8 @@ ddsHeader_t;
 #define DDSCAPS2_CUBEMAP_ALLFACES ( DDSCAPS2_CUBEMAP_POSITIVEX | DDSCAPS2_CUBEMAP_NEGATIVEX | DDSCAPS2_CUBEMAP_POSITIVEY | DDSCAPS2_CUBEMAP_NEGATIVEY | DDSCAPS2_CUBEMAP_POSITIVEZ | DDSCAPS2_CUBEMAP_NEGATIVEZ )
 #define DDSCAPS2_VOLUME            0x200000
 
+#define D3D10_RESOURCE_MISC_TEXTURECUBE 0x4
+
 typedef struct ddsHeaderDxt10_s
 {
 	ui32_t dxgiFormat;
@@ -323,7 +325,7 @@ void R_LoadDDS ( const char *filename, byte **pic, int *width, int *height, GLen
 		}
 	}
 
-	if (ddsHeaderDxt10 && (ddsHeaderDxt10->miscFlags & 0x4))
+	if (ddsHeaderDxt10 && (ddsHeaderDxt10->miscFlags & D3D10_RESOURCE_MISC_TEXTURECUBE))
 	{
 		if (ddsHeaderDxt10->arraySize < 6)
 		{
