@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "player.h"
 #include "navigate.h"
 #include "navigation_path.h"
+#include "bottactics.h"
 
 #define MAX_BOT_FUNCTIONS 5
 
@@ -165,6 +166,7 @@ private:
 
     BotMovement movement;
     BotRotation rotation;
+    BotTactics  m_tactics;
 
     // States
     int    m_iCuriousTime;
@@ -248,6 +250,12 @@ private:
     void        State_EndWeapon(void);
     void        State_Weapon(void);
 
+    static void InitState_Tactical(botfunc_t *func);
+    bool        CheckCondition_Tactical(void);
+    void        State_BeginTactical(void);
+    void        State_EndTactical(void);
+    void        State_Tactical(void);
+
     void CheckStates(void);
 
 public:
@@ -280,6 +288,7 @@ public:
     void EventStuffText(const str& text);
 
     BotMovement& GetMovement();
+    Sentient*    GetEnemy() const { return m_pEnemy; }
 
 public:
     void    setControlledEntity(Player *player);
