@@ -209,12 +209,12 @@ BotTactics::~BotTactics()
 void BotTactics::Init(BotController* controller)
 {
     m_controller = controller;
-    gi.Printf("BotTactics::Init called\n");
+    // gi.Printf("BotTactics::Init called\n");
     
     Player* self = controller->getControlledEntity();
-    if (self) {
-        gi.Printf("BotTactics::Init for %s\n", self->client->pers.netname);
-    }
+    // if (self) {
+    //     gi.Printf("BotTactics::Init for %s\n", self->client->pers.netname);
+    // }
     // Reset combat state
     m_isFiring = false;
     m_isFiring = false;
@@ -293,7 +293,7 @@ void BotTactics::BuildTree()
         }
 
         if (threatPos != vec_zero && minDistSq < 256.0f * 256.0f) {
-            gi.Printf("Bot %s fleeing from projectile!\n", self->client->pers.netname);
+            // gi.Printf("Bot %s fleeing from projectile!\n", self->client->pers.netname);
             
             // Vector away from threat
             Vector runDir = self->origin - threatPos;
@@ -439,7 +439,7 @@ void BotTactics::BuildTree()
                 return BT_FAILURE;
             }
 
-            gi.Printf("Bot %s throwing grenade at %s (dist: %.0f, cluster: %d)\n", self->client->pers.netname, enemy->client->pers.netname, dist, enemiesNear);
+            // gi.Printf("Bot %s throwing grenade at %s (dist: %.0f, cluster: %d)\n", self->client->pers.netname, enemy->client->pers.netname, dist, enemiesNear);
             // Throw grenade
             self->useWeapon(grenade, WEAPON_MAIN);
             ctx.cmd->buttons |= BUTTON_ATTACKLEFT;
@@ -513,7 +513,7 @@ void BotTactics::BuildTree()
             m_isFlanking = true;
             m_lastFlankTime = level.inttime;
             m_controller->GetMovement().MoveTo(m_flankPos);
-            gi.Printf("Bot %s attempting flank maneuver!\n", self->client->pers.netname);
+            // gi.Printf("Bot %s attempting flank maneuver!\n", self->client->pers.netname);
             return BT_RUNNING;
         }
 
@@ -595,7 +595,7 @@ void BotTactics::BuildTree()
                          if (rand() % 100 < 15) {
                              ctx.cmd->upmove = 127; // Jump
                              m_lastJumpTime = level.inttime;
-                             gi.Printf("Bot %s jump-dodging!\n", m_controller->getControlledEntity()->client->pers.netname);
+                            //  gi.Printf("Bot %s jump-dodging!\n", m_controller->getControlledEntity()->client->pers.netname);
                          }
                      }
                 }
@@ -915,7 +915,7 @@ void BotTactics::UpdatePrediction()
     m_predictedPos = basePos + velocity * leadTime;
 
     if (currentlyVisible && velocity.length() > 10) {
-        gi.Printf("Bot %s leading %s by %.2f units\n", self->client->pers.netname, enemy->client->pers.netname, (velocity * leadTime).length());
+        // gi.Printf("Bot %s leading %s by %.2f units\n", self->client->pers.netname, enemy->client->pers.netname, (velocity * leadTime).length());
     }
 }
 
@@ -945,13 +945,13 @@ void BotTactics::ScanEnemies()
             mem.velocity = other->velocity;
             mem.lastSeenTime = level.inttime;
             mem.currentlyVisible = true;
-            gi.Printf("Bot %s tracking enemy %s at %.0f %.0f %.0f\n", self->client->pers.netname, other->client->pers.netname, other->origin.x, other->origin.y, other->origin.z);
+            // gi.Printf("Bot %s tracking enemy %s at %.0f %.0f %.0f\n", self->client->pers.netname, other->client->pers.netname, other->origin.x, other->origin.y, other->origin.z);
         } else {
             // If just lost visibility, trigger suppression
             if (mem.currentlyVisible) {
                 m_suppressionEndTime = level.inttime + 2000; // Suppress for 2 seconds
                 m_suppressionPos = mem.lastPosition;
-                gi.Printf("Bot %s lost LOS, suppressing!\n", self->client->pers.netname);
+                // gi.Printf("Bot %s lost LOS, suppressing!\n", self->client->pers.netname);
             }
             mem.currentlyVisible = false;
         }
@@ -987,7 +987,7 @@ void BotTactics::UpdateWeaponSelection()
     }
 
     if (best && best != self->GetActiveWeapon(WEAPON_MAIN)) {
-        gi.Printf("Bot %s switching to %s (dist: %.0f)\n", self->client->pers.netname, best->getName().c_str(), dist);
+        // gi.Printf("Bot %s switching to %s (dist: %.0f)\n", self->client->pers.netname, best->getName().c_str(), dist);
         self->useWeapon(best, WEAPON_MAIN);
     }
 }
@@ -1098,6 +1098,6 @@ void BotTactics::SetOrder(int orderType, Entity* target)
     
     // Immediate feedback
     if (m_controller && m_controller->getControlledEntity()) {
-        gi.Printf("Bot %s received order %d\n", m_controller->getControlledEntity()->client->pers.netname, orderType);
+        // gi.Printf("Bot %s received order %d\n", m_controller->getControlledEntity()->client->pers.netname, orderType);
     }
 }
