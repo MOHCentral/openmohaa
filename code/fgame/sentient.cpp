@@ -42,6 +42,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "object.h"
 #include "../corepp/tiki.h"
 #include "weapturret.h"
+#include "g_scriptevents.h"
+#include <algorithm>
+#include <cctype>
 
 Event EV_Sentient_ReloadWeapon
 (
@@ -712,6 +715,7 @@ void Sentient::EventGiveDynItem(Event *ev)
 Sentient::Sentient()
     : mAccuracy(0.2f)
     , m_bIsAnimal(false)
+    , inventoryMapDirty(false)
 {
     SentientList.AddObject((Sentient *)this);
     entflags |= ECF_SENTIENT;
@@ -736,6 +740,7 @@ Sentient::Sentient()
     on_fire_tagnums[2]      = -1;
     attack_blocked_time     = 0;
     m_fHelmetSpeed          = 0;
+    m_iHelmetSurfaceIndex   = -1;
 
     inventory.ClearObjectList();
 
@@ -912,6 +917,12 @@ void Sentient::SetBloodModel(Event *ev)
 void Sentient::AddItem(Item *object)
 {
     inventory.AddObject(object->entnum);
+
+    if (!inventoryMapDirty) {
+        std::string name = object->getName().c_str();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        inventoryMap.insert({name, object->entnum});
+    }
 }
 
 void Sentient::RemoveItem(Item *object)
@@ -921,6 +932,20 @@ void Sentient::RemoveItem(Item *object)
     }
 
     inventory.RemoveObject(object->entnum);
+
+    if (!inventoryMapDirty) {
+        std::string name = object->getName().c_str();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+
+        auto range = inventoryMap.equal_range(name);
+        for (auto it = range.first; it != range.second;) {
+            if (it->second == object->entnum) {
+                it = inventoryMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 
     if (object->IsSubclassOfWeapon()) {
         DeactivateWeapon((Weapon *)object);
@@ -964,15 +989,18 @@ Weapon *Sentient::GetWeapon(int index)
 
 Item *Sentient::FindItemByExternalName(const char *itemname)
 {
-    int   num;
-    int   i;
-    Item *item;
+    if (inventoryMapDirty) {
+        RebuildInventoryMap();
+        inventoryMapDirty = false;
+    }
 
-    num = inventory.NumObjects();
-    for (i = 1; i <= num; i++) {
-        item = (Item *)G_GetEntity(inventory.ObjectAt(i));
-        assert(item);
-        if (!Q_stricmp(item->getName(), itemname)) {
+    std::string name = itemname;
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    auto range = inventoryMap.equal_range(name);
+    for (auto it = range.first; it != range.second; ++it) {
+        Item *item = (Item *)G_GetEntity(it->second);
+        if (item) {
             return item;
         }
     }
@@ -1053,6 +1081,8 @@ void Sentient::FreeInventory(void)
         item->Delete();
     }
     inventory.ClearObjectList();
+    inventoryMap.clear();
+    inventoryMapDirty = false;
 
     // Remove all ammo
     num = ammo_inventory.NumObjects();
@@ -2041,6 +2071,8 @@ void Sentient::setModel(const char *mdl)
     DetachAllActiveWeapons();
     Entity::setModel(mdl);
     AttachAllActiveWeapons();
+
+    UpdateHelmetSurfaceIndex();
 }
 
 void Sentient::TurnOffShadow(Event *ev)
@@ -2064,6 +2096,10 @@ void Sentient::Archive(Archiver& arc)
     arc.ArchiveSafePointer(&m_pPrevSquadMate);
 
     inventory.Archive(arc);
+    if (arc.Loading()) {
+        inventoryMapDirty = true;
+    }
+
     if (arc.Saving()) {
         num = ammo_inventory.NumObjects();
     } else {
@@ -2114,6 +2150,10 @@ void Sentient::Archive(Archiver& arc)
     arc.ArchiveString(&m_sHelmetTiki);
 
     arc.ArchiveFloat(&m_fHelmetSpeed);
+
+    if (arc.Loading()) {
+        UpdateHelmetSurfaceIndex();
+    }
 
     arc.ArchiveVector(&gunoffset);
     arc.ArchiveVector(&eyeposition);
@@ -2674,6 +2714,15 @@ void Sentient::SetDamageMult(Event *ev)
     m_fDamageMultipliers[index] = ev->GetFloat(2);
 }
 
+void Sentient::UpdateHelmetSurfaceIndex()
+{
+    if (m_sHelmetSurface1.length()) {
+        m_iHelmetSurfaceIndex = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
+    } else {
+        m_iHelmetSurfaceIndex = -1;
+    }
+}
+
 void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str sHelmetSurface1, str sHelmetSurface2)
 {
     m_sHelmetTiki     = sHelmetTiki;
@@ -2682,6 +2731,8 @@ void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str
 
     m_fHelmetSpeed          = fSpeed;
     m_fDamageMultipliers[1] = fDamageMult;
+
+    UpdateHelmetSurfaceIndex();
 }
 
 void Sentient::EventSetupHelmet(Event *ev)
@@ -2701,16 +2752,11 @@ void Sentient::EventSetupHelmet(Event *ev)
 
 bool Sentient::WearingHelmet(void)
 {
-    if (!m_sHelmetSurface1.length()) {
+    if (m_iHelmetSurfaceIndex < 0) {
         return false;
     }
 
-    int iSurf = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
-    if (iSurf >= 0) {
-        return (~edict->s.surfaces[iSurf] & MDL_SURFACE_NODRAW) != 0;
-    } else {
-        return false;
-    }
+    return (~edict->s.surfaces[m_iHelmetSurfaceIndex] & MDL_SURFACE_NODRAW) != 0;
 }
 
 void Sentient::EventPopHelmet(Event *ev)
@@ -3334,4 +3380,43 @@ void Sentient::LandingSound(float volume, int iEquipment)
     if (iEquipment && random() < 0.5) {
         PlayNonPvsSound("snd_step_equipment", volume);
     }
+}
+
+void Sentient::RebuildInventoryMap()
+{
+    inventoryMap.clear();
+    int num = inventory.NumObjects();
+    for (int i = 1; i <= num; i++) {
+        Item *item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+        if (item) {
+            std::string name = item->getName().c_str();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            inventoryMap.insert({name, item->entnum});
+        }
+    }
+}
+
+void Sentient::ItemNameChanged(Item *item, const char *oldName)
+{
+    if (inventoryMapDirty) {
+        return;
+    }
+
+    std::string sOldName = oldName;
+    std::transform(sOldName.begin(), sOldName.end(), sOldName.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    // Remove old
+    auto range = inventoryMap.equal_range(sOldName);
+    for (auto it = range.first; it != range.second;) {
+        if (it->second == item->entnum) {
+            it = inventoryMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Add new
+    std::string newName = item->getName().c_str();
+    std::transform(newName.begin(), newName.end(), newName.begin(), [](unsigned char c) { return std::tolower(c); });
+    inventoryMap.insert({newName, item->entnum});
 }
