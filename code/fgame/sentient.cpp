@@ -43,7 +43,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../corepp/tiki.h"
 #include "weapturret.h"
 #include "g_scriptevents.h"
-#include <vector>
 
 Event EV_Sentient_ReloadWeapon
 (
@@ -1669,137 +1668,6 @@ qboolean Sentient::CanBlock(int meansofdeath, qboolean full_block)
     return true;
 }
 
-class PooledBloodSpurt;
-
-class PooledBloodSpurtManager : public Entity
-{
-public:
-    CLASS_PROTOTYPE(PooledBloodSpurtManager);
-
-    static PooledBloodSpurtManager *instance;
-    std::vector<PooledBloodSpurt *> pool;
-
-    PooledBloodSpurtManager();
-    ~PooledBloodSpurtManager();
-
-    void              ReturnToPool(PooledBloodSpurt *obj);
-    PooledBloodSpurt *Get();
-};
-
-PooledBloodSpurtManager *PooledBloodSpurtManager::instance = NULL;
-
-CLASS_DECLARATION(Entity, PooledBloodSpurtManager, NULL)
-{
-    {NULL, NULL}
-};
-
-class PooledBloodSpurt : public Animate
-{
-public:
-    CLASS_PROTOTYPE(PooledBloodSpurt);
-
-    void                     Remove(Event *ev);
-    static PooledBloodSpurt *GetPooledSpurt();
-    void                     Reset();
-};
-
-CLASS_DECLARATION(Animate, PooledBloodSpurt, NULL)
-{
-    {&EV_Remove, &PooledBloodSpurt::Remove},
-    {NULL,       NULL                      }
-};
-
-PooledBloodSpurtManager::PooledBloodSpurtManager()
-{
-    instance = this;
-    setSolidType(SOLID_NOT);
-    hideModel();
-}
-
-PooledBloodSpurtManager::~PooledBloodSpurtManager()
-{
-    for (auto p : pool) {
-        delete p;
-    }
-    pool.clear();
-    if (instance == this) {
-        instance = NULL;
-    }
-}
-
-void PooledBloodSpurtManager::ReturnToPool(PooledBloodSpurt *obj)
-{
-    pool.push_back(obj);
-}
-
-PooledBloodSpurt *PooledBloodSpurtManager::Get()
-{
-    if (pool.empty()) {
-        return new PooledBloodSpurt;
-    }
-
-    PooledBloodSpurt *spurt = pool.back();
-    pool.pop_back();
-    return spurt;
-}
-
-void PooledBloodSpurt::Reset()
-{
-    entflags |= ECF_ANIMATE;
-    syncTime = 0.0f;
-    syncRate = 1.0f;
-    pauseSyncTime = 0.0f;
-    is_paused = false;
-    frame_delta = vec_zero;
-    angular_delta = 0;
-
-    edict->s.actionWeight = 1.0f;
-    for (int i = 0; i < MAX_FRAMEINFOS; i++) {
-        edict->s.frameInfo[i].index = 0;
-        edict->s.frameInfo[i].time = 0.0f;
-        edict->s.frameInfo[i].weight = 0.0f;
-        animtimes[i] = 0;
-        frametimes[i] = 0;
-        if (doneEvents[i]) {
-            delete doneEvents[i];
-            doneEvents[i] = NULL;
-        }
-        animFlags[i] = ANIM_LOOP | ANIM_NODELTA | ANIM_NOEXIT | ANIM_PAUSED;
-        ClearAnimSlot(i);
-    }
-
-    setAlpha(1.0f);
-    setScale(1.0f);
-    setAngles(vec_zero);
-    setOrigin(vec_zero);
-}
-
-void PooledBloodSpurt::Remove(Event *ev)
-{
-    hideModel();
-    setSolidType(SOLID_NOT);
-    unlink();
-    StopAnimating(0);
-
-    if (PooledBloodSpurtManager::instance) {
-        PooledBloodSpurtManager::instance->ReturnToPool(this);
-    } else {
-        delete this;
-    }
-}
-
-PooledBloodSpurt *PooledBloodSpurt::GetPooledSpurt()
-{
-    if (!PooledBloodSpurtManager::instance) {
-        new PooledBloodSpurtManager;
-    }
-
-    PooledBloodSpurt *spurt = PooledBloodSpurtManager::instance->Get();
-    spurt->Reset();
-    spurt->showModel();
-    return spurt;
-}
-
 void Sentient::AddBloodSpurt(Vector direction)
 {
     Entity *blood;
@@ -1831,7 +1699,7 @@ void Sentient::AddBloodSpurt(Vector direction)
 
     // Add blood spurt
 
-    blood = PooledBloodSpurt::GetPooledSpurt();
+    blood = new Animate;
     blood->setModel(blood_model);
 
     dir[0]        = -direction[0];
