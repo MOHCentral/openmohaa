@@ -316,6 +316,7 @@ public:
 
 class ScriptVariableList : public Class
 {
+    friend class DAPServer;
 private:
     con_set<short3, ScriptVariable> list;
 

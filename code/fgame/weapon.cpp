@@ -40,6 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "vehicleturret.h"
 #include "debuglines.h"
 #include "g_spawn.h"
+#include "g_scriptevents.h"
 
 Event EV_Weapon_Shoot("shoot", EV_DEFAULT, "S", "mode", "Shoot the weapon", EV_NORMAL);
 Event EV_Weapon_DoneRaising(
@@ -1384,6 +1385,11 @@ void Weapon::Shoot(Event *ev)
         return;
     }
 
+    // HOOK: weapon_fire
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_fire", owner, getName().c_str(), AmmoAvailable(mode));
+    }
+
     GetMuzzlePosition(pos, vBarrel, forward, right, up);
     ApplyFireKickback(forward, 1000.0);
 
@@ -1834,6 +1840,10 @@ qboolean Weapon::ReadyToFire(firemode_t mode, qboolean playsound)
         } else if (playsound) {
             if (level.time > next_noammo_time) {
                 Sound(m_NoAmmoSound);
+                // HOOK: weapon_no_ammo
+                if (owner) {
+                    G_ScriptEvent("weapon_no_ammo", owner, getName().c_str());
+                }
             }
             next_noammo_time = level.time + level.frametime + FireDelay(mode);
         }
@@ -1855,6 +1865,11 @@ void Weapon::PutAway(void)
 //======================
 void Weapon::DetachFromOwner(void)
 {
+    // HOOK: weapon_holster
+    if (owner) {
+        G_ScriptEvent("weapon_holster", owner, getName().c_str());
+    }
+
     DetachGun();
     weaponstate = WEAPON_HOLSTERED;
 }
@@ -1864,6 +1879,11 @@ void Weapon::DetachFromOwner(void)
 //======================
 void Weapon::AttachToOwner(weaponhand_t hand)
 {
+    // HOOK: weapon_raise
+    if (owner) {
+        G_ScriptEvent("weapon_raise", owner, getName().c_str());
+    }
+
     AttachGun(hand);
     ForceIdle();
 }
@@ -2007,7 +2027,11 @@ qboolean Weapon::Drop(void)
     CancelEventsOfType(EV_Weapon_DoneReloading);
 
     // Remove this from the owner's item list
+    Entity *previousOwner = owner;
     RemoveFromOwner();
+
+    // HOOK: weapon_drop
+    G_ScriptEvent("weapon_drop", previousOwner, this);
 
     if (g_droppeditemlife->value > 0) {
         PostEvent(EV_Remove, g_droppeditemlife->value);
@@ -2542,6 +2566,10 @@ void Weapon::PickupWeapon(Event *ev)
         iGiveAmmo = startammo[FIRE_PRIMARY];
 
         Sound(sPickupSound);
+
+        if (sen->IsSubclassOfPlayer()) {
+            G_ScriptEvent("item_pickup", sen, item_name.c_str(), iGiveAmmo);
+        }
     } else {
         bool bSameAmmo[MAX_FIREMODES] = {false};
 
@@ -2779,6 +2807,11 @@ void Weapon::DoneRaising(Event *ev)
     weaponstate = WEAPON_READY;
     ForceIdle();
 
+    // HOOK: weapon_ready (weapon raised and now ready)
+    if (owner) {
+        G_ScriptEvent("weapon_ready", owner, getName().c_str());
+    }
+
     if (!owner) {
         PostEvent(EV_Remove, 0);
         return;
@@ -2927,6 +2960,11 @@ void Weapon::StartReloading(void)
         return;
     }
 
+    // HOOK: weapon_reload
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_reload", owner, getName().c_str());
+    }
+
     if (SetWeaponAnim("reload", EV_Weapon_DoneReloading)) {
         weaponstate = WEAPON_RELOADING;
     } else {
@@ -2944,6 +2982,11 @@ void Weapon::DoneReloading(Event *ev)
 {
     SetShouldReload(qfalse);
     weaponstate = WEAPON_READY;
+
+    // HOOK: weapon_reload_done
+    if (owner) {
+        G_ScriptEvent("weapon_reload_done", owner, getName().c_str());
+    }
 
     // Added in OPM
     //  Set to idle when done reloading

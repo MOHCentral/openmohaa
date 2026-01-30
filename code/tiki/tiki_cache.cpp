@@ -121,10 +121,10 @@ dtikianim_t *TIKI_RegisterTikiAnimFlags(const char *path, qboolean use)
 
     tiki = TIKI_LoadTikiAnim(filename);
     if (tiki) {
-        if (use) {
-            Com_DPrintf("^~^~^ Add the following line to the *_precache.scr map script:\n");
-            Com_DPrintf("cache %s\n", filename);
-        }
+        //if (use) {
+        //    Com_DPrintf("^~^~^ Add the following line to the *_precache.scr map script:\n");
+        //    Com_DPrintf("cache %s\n", filename);
+        //}
 
         (*tikianimcache)[tiki->name] = tiki;
     }

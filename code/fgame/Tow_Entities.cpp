@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "Tow_Entities.h"
 #include "player.h"
 #include "scriptthread.h"
+#include "g_scriptevents.h"
 
 TOWObjectiveMan g_TOWObjectiveMan;
 
@@ -282,6 +283,10 @@ void TOWObjective::TakeOver(Event *ev)
 
     g_TOWObjectiveMan.TakeOverObjective(m_eController, controller);
     m_eController = controller;
+
+    // HOOK: objective_capture
+    // controller: 1 = allies, 2 = axis
+    G_ScriptEvent("objective_capture", this, (int)controller);
 
     if (m_bNoRespawnForLeading) {
         //
