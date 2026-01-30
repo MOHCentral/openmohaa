@@ -110,7 +110,7 @@ void BotController::Init(void)
     InitState_Curious(&botfuncs[1]);
     InitState_Grenade(&botfuncs[2]);
     InitState_Idle(&botfuncs[3]);
-    //InitState_Weapon(&botfuncs[4]);
+    InitState_Tactical(&botfuncs[4]);
 }
 
 void BotController::GetUsercmd(usercmd_t *ucmd)
@@ -1206,6 +1206,40 @@ Weapon *BotController::FindMeleeWeapon()
     }
 
     return bestweapon;
+}
+
+/*
+====================
+Tactical state
+
+Advanced behavior
+====================
+*/
+void BotController::InitState_Tactical(botfunc_t *func)
+{
+    func->CheckCondition = &BotController::CheckCondition_Tactical;
+    func->BeginState     = &BotController::State_BeginTactical;
+    func->EndState       = &BotController::State_EndTactical;
+    func->ThinkState     = &BotController::State_Tactical;
+}
+
+bool BotController::CheckCondition_Tactical(void)
+{
+    return m_pEnemy != NULL;
+}
+
+void BotController::State_BeginTactical(void)
+{
+    m_tactics.Init(this);
+}
+
+void BotController::State_EndTactical(void)
+{
+}
+
+void BotController::State_Tactical(void)
+{
+    m_tactics.Update(&m_botCmd);
 }
 
 void BotController::UseWeaponWithAmmo()
