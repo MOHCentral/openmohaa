@@ -117,7 +117,10 @@ protected:
     str                m_sHelmetSurface2;
     str                m_sHelmetTiki;
     float              m_fHelmetSpeed;
+    int                m_iHelmetSurfaceIndex;
     bool               m_bDontDropWeapons;
+
+    void         UpdateHelmetSurfaceIndex();
 
     virtual void EventTake(Event *ev);
     virtual void EventGiveAmmo(Event *ev);
