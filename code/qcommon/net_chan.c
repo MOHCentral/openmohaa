@@ -319,24 +319,6 @@ void Netchan_TransmitNextFragment( netchan_t *chan, netprofpacketlist_t *packetl
 	byte		send_buf[MAX_PACKETLEN];
 	size_t		fragmentLength;
 
-	// DEFENSIVE: Validate channel state to catch corruption early
-	if ( !chan ) {
-		Com_Error( ERR_DROP, "Netchan_TransmitNextFragment: NULL channel" );
-		return;
-	}
-	
-	if ( chan->unsentFragmentStart > MAX_MSGLEN ) {
-		Com_Error( ERR_DROP, "Netchan_TransmitNextFragment: corrupt unsentFragmentStart %zu (max %d)",
-				   chan->unsentFragmentStart, MAX_MSGLEN );
-		return;
-	}
-	
-	if ( chan->unsentLength > MAX_MSGLEN ) {
-		Com_Error( ERR_DROP, "Netchan_TransmitNextFragment: corrupt unsentLength %zu (max %d)",
-				   chan->unsentLength, MAX_MSGLEN );
-		return;
-	}
-
 	// write the packet header
 	MSG_InitOOB (&send, send_buf, chan->remoteAddress.type == NA_LOOPBACK ? MAX_PACKETLEN : MAX_REMOTE_PACKETLEN); // <-- only do the oob here
 

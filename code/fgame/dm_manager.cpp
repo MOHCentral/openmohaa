@@ -25,7 +25,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "playerstart.h"
 #include "scriptexception.h"
-#include "g_scriptevents.h"
 
 cvar_t *g_tempaxisscore;
 cvar_t *g_tempaxiswinsinrow;
@@ -755,7 +754,6 @@ bool DM_Manager::JoinTeam(Player *player, teamtype_t teamType)
 {
     DM_Team *team    = player->GetDM_Team();
     DM_Team *pDMTeam = GetTeam(teamType);
-    int      oldTeam = team ? team->m_teamnumber : TEAM_NONE;
 
     if (!pDMTeam) {
         return false;
@@ -773,9 +771,6 @@ bool DM_Manager::JoinTeam(Player *player, teamtype_t teamType)
     pDMTeam->AddPlayer(player);
     AddPlayer(player);
     player->SetDM_Team(pDMTeam);
-
-    // HOOK: team_join
-    G_ScriptEvent("team_join", player, oldTeam, (int)teamType);
 
     if (teamType == TEAM_SPECTATOR) {
         player->EndFight();
@@ -1136,9 +1131,6 @@ void DM_Manager::InitGame(void)
     m_bIgnoringClockForBomb = false;
     m_iNumTargetsDestroyed  = 0;
     m_iNumBombsPlanted      = 0;
-
-    // HOOK: game_init
-    G_ScriptEvent("game_init", NULL, g_gametype->integer);
 
     if (g_gametype->integer >= 0 && g_gametype->integer < GT_MAX_GAME_TYPE) {
         if (g_gametype->integer <= GT_TEAM) {
@@ -1563,9 +1555,6 @@ void DM_Manager::TeamWin(int teamnum)
         return;
     }
 
-    // HOOK: team_win
-    G_ScriptEvent("team_win", NULL, teamnum);
-
     if (teamnum == TEAM_AXIS) {
         pTeamWin  = &m_team_axis;
         pTeamLose = &m_team_allies;
@@ -1594,14 +1583,6 @@ void DM_Manager::StartRound(void)
     gentity_t *ent;
     int        i;
     Player    *player;
-
-    // HOOK: warmup_end (if there was a warmup before this round)
-    if (m_fRoundTime <= 0) {
-        G_ScriptEvent("warmup_end", NULL, level.mapname.c_str());
-    }
-
-    // HOOK: round_start
-    G_ScriptEvent("round_start", NULL);
 
     m_fRoundTime = level.time;
     if (m_fRoundTime < 0.1f) {
@@ -1632,15 +1613,7 @@ void DM_Manager::StartRound(void)
 
 void DM_Manager::EndRound()
 {
-    // HOOK: round_end
-    if (m_bRoundActive) {
-        G_ScriptEvent("round_end", NULL);
-    }
-
     m_bRoundActive = false;
-
-    // HOOK: warmup_start (game is entering warmup/waiting period between rounds)
-    G_ScriptEvent("warmup_start", NULL, level.mapname.c_str());
 
     if (m_fRoundEndTime <= 0) {
         m_fRoundEndTime = level.time;

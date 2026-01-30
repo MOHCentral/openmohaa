@@ -35,11 +35,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 void Showmenu(const str& name, qboolean bForce);
 void Hidemenu(const str& name, qboolean bForce);
 
-#ifdef USE_HTTP
-extern Event EV_ScriptMaster_CurlGet;
-extern Event EV_ScriptMaster_CurlPost;
-#endif
-
 #define MAX_VAR_STACK 1024
 #define MAX_FASTEVENT 10
 
@@ -69,7 +64,6 @@ public:
     SafePtr<ScriptThread> m_CurrentThread;  // current running thread
 
     con_map<const_str, GameScript *> m_GameScripts; // compiled gamescripts
-    con_set<str, ScriptThreadLabel>  m_scriptCmds;  // registered custom commands
 
     // Miscellaneous
     Container<str>         m_menus;    // Script menus
@@ -88,11 +82,6 @@ protected:
     void        Cache(Event *ev);
     void        RegisterAliasAndCache(Event *ev);
     void        RegisterAlias(Event *ev);
-
-#ifdef USE_HTTP
-    void        CurlGet(Event *ev);
-    void        CurlPost(Event *ev);
-#endif
 
 public:
     CLASS_PROTOTYPE(ScriptMaster);

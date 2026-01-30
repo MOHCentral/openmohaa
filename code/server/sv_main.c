@@ -252,7 +252,7 @@ void QDECL SV_SendServerCommand(client_t *cl, const char *fmt, ...) {
 	}
 
 	// send the data to all relevant clients
-	for (j = 0, client = svs.clients; j < svs.iNumClients ; j++, client++) {
+	for (j = 0, client = svs.clients; j < sv_maxclients->integer ; j++, client++) {
 		SV_AddServerCommand( client, (char *)message );
 	}
 }
@@ -538,7 +538,7 @@ void SVC_Status( netadr_t from ) {
 	status[0] = 0;
 	statusLength = 0;
 
-	for (i=0 ; i < svs.iNumClients ; i++) {
+	for (i=0 ; i < sv_maxclients->integer ; i++) {
 		cl = &svs.clients[i];
 		if ( cl->state >= CS_CONNECTED ) {
 			ps = SV_GameClientNum( i );
@@ -872,7 +872,7 @@ static void SV_CalcPings( void ) {
 	int			delta;
 	playerState_t	*ps;
 
-	for (i=0 ; i < svs.iNumClients ; i++) {
+	for (i=0 ; i < sv_maxclients->integer ; i++) {
 		cl = &svs.clients[i];
 		if ( cl->state != CS_ACTIVE ) {
 			cl->ping = 999;
@@ -934,7 +934,7 @@ static void SV_CheckTimeouts( void ) {
 	droppoint = svs.time - 1000 * sv_timeout->integer;
 	zombiepoint = svs.time - 1000 * sv_zombietime->integer;
 
-	for (i=0,cl=svs.clients ; i < svs.iNumClients ; i++,cl++) {
+	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
 		// message times may be wrong across a changelevel
 		if (cl->lastPacketTime > svs.time) {
 			cl->lastPacketTime = svs.time;
@@ -1308,14 +1308,7 @@ int SV_RateMsec(client_t *client)
 	else
 		messageSize += UDPIP_HEADER_SIZE;
 
-	// Guard against division by zero: ensure divisor is at least 1
-	{
-		int divisor = (int)(rate * com_timescale->value);
-		if (divisor < 1) {
-			divisor = 1;
-		}
-		rateMsec = messageSize * 1000 / divisor;
-	}
+	rateMsec = messageSize * 1000 / ((int) (rate * com_timescale->value));
 	rate = Sys_Milliseconds() - client->netchan.lastSentTime;
 	
 	if(rate > rateMsec)

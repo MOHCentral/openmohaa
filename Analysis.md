@@ -63,7 +63,7 @@ I have implemented the `ScriptYAML` class to support YAML and JSON parsing via `
     *   Updated `cmake/basegame.cmake` to link `yaml-cpp` and include the new source files.
 2.  **Source Code**:
     *   `code/fgame/scriptyaml.h`: Header definition.
-    *   `code/fgame/scriptyaml.cpp`: Implementation of `load`, `get`, `parse`, `save`, and `serialize`.
+    *   `code/fgame/scriptyaml.cpp`: Implementation of `load`, `get`, and `parse`.
 
 ## Usage in Script
 ```c

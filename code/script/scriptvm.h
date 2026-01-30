@@ -41,8 +41,7 @@ enum eVMState {
     STATE_SUSPENDED, // Suspended
     STATE_WAITING,   // Waiting for something
     STATE_EXECUTION, // Resume to execution
-    STATE_DESTROYED, // Pending deletion
-    STATE_DEBUG_WAIT // Waiting for debugger
+    STATE_DESTROYED  // Pending deletion
 };
 
 enum eThreadState {
@@ -81,7 +80,6 @@ public:
 
 class ScriptVMStack
 {
-    friend class DAPServer;
 public:
     ScriptVMStack();
     ScriptVMStack(size_t stackSize);
@@ -136,7 +134,6 @@ public:
 class ScriptVM
 {
     friend class ScriptThread;
-    friend class DAPServer;
 
 public:
     // important thread variables

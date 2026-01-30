@@ -38,5 +38,4 @@ public:
     Armor();
 
     qboolean Pickupable(Entity *other) override;
-    void     PickupArmor(Event *ev);
 };

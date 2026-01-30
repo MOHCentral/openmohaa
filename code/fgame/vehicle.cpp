@@ -35,7 +35,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "vehicleturret.h"
 #include "scriptexception.h"
 #include "debuglines.h"
-#include "g_scriptevents.h"
 
 Event EV_Vehicle_Start
 (
@@ -3566,9 +3565,6 @@ void Vehicle::VehicleDestroyed(Event *ev)
     hideModel();
 
     ent = ev->GetEntity(1);
-
-    // HOOK: vehicle_death
-    G_ScriptEvent("vehicle_death", this, ent);
     if (driver.ent) {
         EntityPtr driverPtr;
 
@@ -4952,10 +4948,6 @@ void Vehicle::VehicleTouched(Event *ev)
     Event  *event;
 
     other = ev->GetEntity(1);
-
-    // HOOK: vehicle_collision
-    G_ScriptEvent("vehicle_collision", this, other);
-
     if (other == driver.ent) {
         return;
     }

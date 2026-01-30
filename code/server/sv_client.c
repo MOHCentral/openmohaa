@@ -444,7 +444,7 @@ void SV_DirectConnect( netadr_t from ) {
 	qport = atoi( Info_ValueForKey( userinfo, "qport" ) );
 
 	// quick reject
-	for (i=0,cl=svs.clients ; i < svs.iNumClients ; i++,cl++) {
+	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
 		if ( cl->state == CS_FREE ) {
 			continue;
 		}
@@ -529,7 +529,7 @@ void SV_DirectConnect( netadr_t from ) {
 	Com_Memset (newcl, 0, sizeof(client_t));
 
 	// if there is already a slot for this ip, reuse it
-	for (i=0,cl=svs.clients ; i < svs.iNumClients ; i++,cl++) {
+	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
 		if ( cl->state == CS_FREE ) {
 			continue;
 		}
@@ -569,7 +569,7 @@ void SV_DirectConnect( netadr_t from ) {
 	}
 
 	newcl = NULL;
-	for ( i = startIndex; i < svs.iNumClients ; i++ ) {
+	for ( i = startIndex; i < sv_maxclients->integer ; i++ ) {
 		cl = &svs.clients[i];
 		if (cl->state == CS_FREE) {
 			newcl = cl;
@@ -580,16 +580,16 @@ void SV_DirectConnect( netadr_t from ) {
 	if ( !newcl ) {
 		if ( NET_IsLocalAddress( from ) ) {
 			count = 0;
-			for ( i = startIndex; i < svs.iNumClients ; i++ ) {
+			for ( i = startIndex; i < sv_maxclients->integer ; i++ ) {
 				cl = &svs.clients[i];
 				if (cl->netchan.remoteAddress.type == NA_BOT) {
 					count++;
 				}
 			}
 			// if they're all bots
-			if (count >= svs.iNumClients - startIndex) {
-				SV_DropClient(&svs.clients[svs.iNumClients - 1], "only bots on server");
-				newcl = &svs.clients[svs.iNumClients - 1];
+			if (count >= sv_maxclients->integer - startIndex) {
+				SV_DropClient(&svs.clients[sv_maxclients->integer - 1], "only bots on server");
+				newcl = &svs.clients[sv_maxclients->integer - 1];
 			}
 			else {
 				Com_Error( ERR_FATAL, "server is full on local connect\n" );
@@ -689,12 +689,12 @@ gotnewcl:
 	// if this was the first client on the server, or the last client
 	// the server can hold, send a heartbeat to the master.
 	count = 0;
-	for (i=0,cl=svs.clients ; i < svs.iNumClients ; i++,cl++) {
+	for (i=0,cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++) {
 		if ( svs.clients[i].state >= CS_CONNECTED ) {
 			count++;
 		}
 	}
-	if ( count == 1 || count == svs.iNumClients ) {
+	if ( count == 1 || count == sv_maxclients->integer ) {
 		SV_Heartbeat_f();
 	}
 }
@@ -797,12 +797,12 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	// to the master so it is known the server is empty
 	// send a heartbeat now so the master will get up to date info
 	// if there is already a slot for this ip, reuse it
-	for (i=0 ; i < svs.iNumClients ; i++ ) {
+	for (i=0 ; i < sv_maxclients->integer ; i++ ) {
 		if ( svs.clients[i].state >= CS_CONNECTED ) {
 			break;
 		}
 	}
-	if ( i == svs.iNumClients ) {
+	if ( i == sv_maxclients->integer ) {
 		SV_Heartbeat_f();
 	}
 
@@ -1271,7 +1271,7 @@ int SV_SendQueuedMessages(void)
 	int i, retval = -1, nextFragT;
 	client_t *cl;
 	
-	for(i=0; i < svs.iNumClients; i++)
+	for(i=0; i < sv_maxclients->integer; i++)
 	{
 		cl = &svs.clients[i];
 		
@@ -1306,7 +1306,7 @@ int SV_SendDownloadMessages(void)
 	msg_t msg;
 	byte msgBuffer[MAX_MSGLEN];
 	
-	for(i=0; i < svs.iNumClients; i++)
+	for(i=0; i < sv_maxclients->integer; i++)
 	{
 		cl = &svs.clients[i];
 		
@@ -2031,7 +2031,7 @@ void SV_UserVoip(client_t *cl, msg_t *msg, qboolean ignoreData)
 	// !!! FIXME: decide if this is bogus data?
 
 	// decide who needs this VoIP packet sent to them...
-	for (i = 0, client = svs.clients; i < svs.iNumClients ; i++, client++) {
+	for (i = 0, client = svs.clients; i < sv_maxclients->integer ; i++, client++) {
 		if (client->state != CS_ACTIVE)
 			continue;  // not in the game yet, don't send to this guy.
 		else if (i == sender)

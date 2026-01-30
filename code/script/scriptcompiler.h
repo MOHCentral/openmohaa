@@ -143,9 +143,6 @@ public:
     void ProcessContinueJumpLocations(int iStartContinueJumpLocCount);
 
     unsigned char *GetPosition();
-    
-    // Debug symbol table
-    void AddLocalVarDebugInfo(const char* name, int stackOffset, unsigned char* startPos);
 
     // compile
     void CompileError(unsigned int sourcePos, const char *format, ...);

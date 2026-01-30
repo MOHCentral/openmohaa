@@ -22,9 +22,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 // scriptdelegate -- manages function delegate
 
-#ifndef __SCRIPTDELEGATE_H__
-#define __SCRIPTDELEGATE_H__
-
 #include "../corepp/listener.h"
 #include "../corepp/delegate.h"
 #include "gamescript.h"
@@ -197,5 +194,3 @@ private:
     Container<ScriptRegisteredDelegate_Code>       list_code;
     Container<ScriptRegisteredDelegate_CodeMember> list_codeMember;
 };
-
-#endif // __SCRIPTDELEGATE_H__

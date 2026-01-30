@@ -83,7 +83,7 @@ static client_t *SV_GetPlayerByHandle( void ) {
 	}
 
 	// check for a name match
-	for ( i=0, cl=svs.clients ; i < svs.iNumClients ; i++,cl++ ) {
+	for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
 		if ( !cl->state ) {
 			continue;
 		}
@@ -363,7 +363,7 @@ static void SV_Kick_f( void ) {
 	cl = SV_GetPlayerByHandle();
 	if ( !cl ) {
 		if ( !Q_stricmp(Cmd_Argv(1), "all") ) {
-			for ( i=0, cl=svs.clients ; i < svs.iNumClients ; i++,cl++ ) {
+			for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
 				if ( !cl->state ) {
 					continue;
 				}
@@ -375,7 +375,7 @@ static void SV_Kick_f( void ) {
 			}
 		}
 		else if ( !Q_stricmp(Cmd_Argv(1), "allbots") ) {
-			for ( i=0, cl=svs.clients ; i < svs.iNumClients ; i++,cl++ ) {
+			for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
 				if ( !cl->state ) {
 					continue;
 				}
@@ -414,7 +414,7 @@ static void SV_KickAll_f( void ) {
 		return;
 	}
 
-	for( i = 0, cl = svs.clients; i < svs.iNumClients; i++, cl++ ) {
+	for( i = 0, cl = svs.clients; i < sv_maxclients->integer; i++, cl++ ) {
 		if( !cl->state ) {
 			continue;
 		}
@@ -965,7 +965,7 @@ static void SV_AddBanToList(qboolean isexception)
 	SV_WriteBans();
 
 	// Find and kick any connected clients matching the banned IP
-	for(index = 0; index < svs.iNumClients; index++) {
+	for(index = 0; index < sv_maxclients->integer; index++) {
 		client_t *kickcl = &svs.clients[index];
 		
 		if(!kickcl->state)
@@ -1474,7 +1474,7 @@ static void SV_ConSayto_f(void) {
 	Com_FieldStringToPlayerName( name, MAX_NAME_LENGTH, rawname );
 
 	saytocl = NULL;
-	for ( i=0, cl=svs.clients ; i < svs.iNumClients ; i++,cl++ ) {
+	for ( i=0, cl=svs.clients ; i < sv_maxclients->integer ; i++,cl++ ) {
 		if ( !cl->state ) {
 			continue;
 		}

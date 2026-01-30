@@ -703,17 +703,8 @@ void ScriptCompiler::EmitLabelParameterList(sval_t parameter_list, unsigned int 
     if (parameter_list.node) {
         EmitOpcode(OP_MARK_STACK_POS, sourcePos);
 
-        int paramIndex = 0;
         for (const sval_t *param = parameter_list.node->node; param; param = param[1].node) {
-            // Extract parameter name if it's a field type
-            if (param[0].node && param[0].node[0].type == ENUM_field) {
-                const char* paramName = param[0].node[2].stringValue;
-                // Add debug info: parameter at stack offset = paramIndex
-                AddLocalVarDebugInfo(paramName, paramIndex, code_pos);
-            }
-            
             EmitParameter(*param, sourcePos);
-            paramIndex++;
         };
 
         EmitOpcode(OP_RESTORE_STACK_POS, sourcePos);
@@ -1458,20 +1449,6 @@ unsigned char *ScriptCompiler::GetPosition()
     return code_pos;
 }
 
-void ScriptCompiler::AddLocalVarDebugInfo(const char* name, int stackOffset, unsigned char* startPos)
-{
-    if (!script) return;
-    
-    // Add debug info to the script's debug symbol table
-    DebugLocalVar debugVar;
-    debugVar.name = Director.AddString(name);
-    debugVar.stackOffset = stackOffset;
-    debugVar.startPos = startPos;
-    debugVar.endPos = nullptr; // Could be set later when variable goes out of scope
-    
-    script->m_DebugLocalVars.AddObject(debugVar);
-}
-
 void ScriptCompiler::CompileError(unsigned int sourcePos, const char *format, ...)
 {
     char    buffer[4000];
@@ -1588,7 +1565,6 @@ bool ScriptCompiler::Compile(GameScript *gameScript, unsigned char *progBuffer, 
     prog_ptr = progBuffer;
 
     gameScript->m_ProgToSource = new con_set<const unsigned char *, sourceinfo_t>;
-    //Com_Printf("COMPILE: Creating source map for script '%s' at %p\n", gameScript->Filename().c_str(), gameScript->m_ProgToSource);
 
     compileSuccess = true;
 

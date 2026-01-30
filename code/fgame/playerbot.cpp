@@ -33,7 +33,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "weaputils.h"
 #include "windows.h"
 #include "g_bot.h"
-#include "g_scriptevents.h"
 
 // We assume that we have limited access to the server-side
 // and that most logic come from the playerstate_s structure
@@ -580,14 +579,7 @@ Make the bot move to random directions
 void BotController::InitState_Idle(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Idle;
-    func->BeginState     = &BotController::State_BeginIdle;
     func->ThinkState     = &BotController::State_Idle;
-}
-
-void BotController::State_BeginIdle(void)
-{
-    State_DefaultBegin();
-    G_ScriptEvent("bot_roam", static_cast<Player*>(controlledEnt));
 }
 
 bool BotController::CheckCondition_Idle(void)
@@ -644,14 +636,7 @@ Forward to the last event position
 void BotController::InitState_Curious(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Curious;
-    func->BeginState     = &BotController::State_BeginCurious;
     func->ThinkState     = &BotController::State_Curious;
-}
-
-void BotController::State_BeginCurious(void)
-{
-    State_DefaultBegin();
-    G_ScriptEvent("bot_curious", static_cast<Player*>(controlledEnt));
 }
 
 bool BotController::CheckCondition_Curious(void)
@@ -704,15 +689,8 @@ Attack the enemy
 void BotController::InitState_Attack(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Attack;
-    func->BeginState     = &BotController::State_BeginAttack;
     func->EndState       = &BotController::State_EndAttack;
     func->ThinkState     = &BotController::State_Attack;
-}
-
-void BotController::State_BeginAttack(void)
-{
-    State_DefaultBegin();
-    G_ScriptEvent("bot_attack", static_cast<Player*>(controlledEnt));
 }
 
 static Vector bot_origin;
@@ -1230,9 +1208,6 @@ void BotController::Spawned(void)
     ClearEnemy();
     m_iCuriousTime   = 0;
     m_botCmd.buttons = 0;
-
-    // HOOK: bot_spawn
-    G_ScriptEvent("bot_spawn", controlledEnt);
 }
 
 void BotController::Think()
@@ -1250,10 +1225,6 @@ void BotController::Think()
 void BotController::Killed(const Event& ev)
 {
     Entity *attacker;
-
-    // HOOK: bot_killed
-    attacker = ev.GetEntity(1);
-    G_ScriptEvent("bot_killed", controlledEnt, attacker);
 
     // send the respawn buttons
     if (!(m_botCmd.buttons & BUTTON_ATTACKLEFT)) {

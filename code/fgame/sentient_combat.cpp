@@ -25,7 +25,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "game.h"
 #include "player.h"
 #include "../script/scriptexception.h"
-#include "g_scriptevents.h"
 
 ActiveWeapon::ActiveWeapon()
 {
@@ -695,17 +694,6 @@ void Sentient::ChangeWeapon(Weapon *weapon, weaponhand_t hand)
     // Check if weapon is already active in the slot
     if (weapon == activeWeaponList[hand]) {
         return;
-    }
-
-    // weapon_change hook
-    if (IsSubclassOfPlayer() && weapon) {
-        Weapon *oldWeapon = activeWeaponList[hand];
-        int clientNum = edict - g_entities;
-        if (oldWeapon) {
-            G_ScriptEvent("weapon_change", this, oldWeapon->getName().c_str(), weapon->getName().c_str(), clientNum);
-        } else {
-            G_ScriptEvent("weapon_change", this, "none", weapon->getName().c_str(), clientNum);
-        }
     }
 
     ActivateWeapon(weapon, hand);

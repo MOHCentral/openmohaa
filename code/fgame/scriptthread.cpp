@@ -27,10 +27,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptexception.h"
 
 #include "g_spawn.h"
-#include "g_scriptevents.h"
 #include "level.h"
 #include "game.h"
-#include "gamecmds.h"
 #include "camera.h"
 #include "dm_manager.h"
 #include "hud.h"
@@ -47,11 +45,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "slre.h"
 
 #include "md5.h"
-#include "../qcommon/crypto/picosha2.h"
-
-#include <random>
-#include <sstream>
-#include <iomanip>
 
 #ifdef WIN32
 #    include <direct.h>
@@ -2019,33 +2012,6 @@ Event EV_ScriptThread_Md5String
     "generates MD5 hash of given text",
     EV_RETURN
 );
-Event EV_ScriptThread_Md5String2
-(
-    "md5_string",
-    EV_DEFAULT,
-    "s",
-    "text",
-    "generates MD5 hash of given text",
-    EV_RETURN
-);
-Event EV_ScriptThread_Sha256String
-(
-    "sha256_string",
-    EV_DEFAULT,
-    "s",
-    "text",
-    "generates SHA256 hash of given text",
-    EV_RETURN
-);
-Event EV_ScriptThread_UuidString
-(
-    "uuid_string",
-    EV_DEFAULT,
-    NULL,
-    NULL,
-    "generates a random UUID v4 string",
-    EV_RETURN
-);
 Event EV_ScriptThread_GetEntity
 (
     "getentity",
@@ -2155,27 +2121,6 @@ Event EV_ScriptThread_FS_OpenAppend
     "Opens the specified file for appending. Returns an FSFile object.",
     EV_RETURN
 );
-
-#ifdef USE_HTTP
-Event EV_ScriptThread_CurlGet
-(
-    "curl_get",
-    EV_DEFAULT,
-    "ss",
-    "url callback_label",
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code).",
-    EV_NORMAL
-);
-Event EV_ScriptThread_CurlPost
-(
-    "curl_post",
-    EV_DEFAULT,
-    "sss",
-    "url post_data callback_label",
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code).",
-    EV_NORMAL
-);
-#endif
 
 CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetCvar,                 &ScriptThread::Getcvar                 },
@@ -2330,9 +2275,6 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetTanH,                 &ScriptThread::EventTanH               },
     {&EV_ScriptThread_strncpy,                 &ScriptThread::StringBytesCopy         },
     {&EV_ScriptThread_Md5String,               &ScriptThread::Md5String               },
-    {&EV_ScriptThread_Md5String2,              &ScriptThread::Md5String2              },
-    {&EV_ScriptThread_Sha256String,            &ScriptThread::Sha256String            },
-    {&EV_ScriptThread_UuidString,              &ScriptThread::UuidString              },
     {&EV_ScriptThread_GetEntity,               &ScriptThread::GetEntByEntnum          },
     {&EV_ScriptThread_TypeOf,                  &ScriptThread::TypeOfVariable          },
     {&EV_ScriptThread_RegisterEv,              &ScriptThread::RegisterEvent           },
@@ -2415,10 +2357,6 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_FS_OpenRead,             &ScriptThread::FS_OpenRead             },
     {&EV_ScriptThread_FS_OpenWrite,            &ScriptThread::FS_OpenWrite            },
     {&EV_ScriptThread_FS_OpenAppend,           &ScriptThread::FS_OpenAppend           },
-#ifdef USE_HTTP
-    {&EV_ScriptThread_CurlGet,                 &ScriptThread::CurlGet                 },
-    {&EV_ScriptThread_CurlPost,                &ScriptThread::CurlPost                },
-#endif
     {NULL,                                     NULL                                   }
 };
 
@@ -4606,9 +4544,6 @@ void ScriptThread::AddObjective(int index, int status, str text, Vector location
     Info_SetValueForKey(szSend, "loc", va("%f %f %f", location[0], location[1], location[2]));
 
     gi.setConfigstring(CS_OBJECTIVES + index, szSend);
-
-    // HOOK: objective_update
-    G_ScriptEvent("objective_update", NULL, index, status);
 }
 
 void ScriptThread::SetCurrentObjective(int iObjective, int iTeam)
@@ -4874,19 +4809,11 @@ void ScriptThread::SetTimer(Event *ev)
 
 void ScriptThread::EventRegisterCommand(Event *ev)
 {
-    ScriptThreadLabel label;
-    str commandName;
+    ScriptThreadLabel scriptLabel;
 
-    commandName = ev->GetString(1);
-    
-    // Set the script label using current script context
-    label.SetThread(ev->GetValue(2));
-    
-    // Store in ScriptMaster's command map
-    Director.m_scriptCmds.addKeyValue(commandName) = label;
-    
-    // Register command so it's recognized by the engine
-    gi.AddCommand(commandName.c_str(), NULL);
+    scriptLabel.SetThread(ev->GetValue(2));
+
+    m_scriptCmds.addKeyValue(ev->GetString(1)) = scriptLabel;
 }
 
 void ScriptThread::CreateHUD(Event *ev)
@@ -7146,81 +7073,10 @@ void ScriptThread::Md5String(Event *ev)
     ret = checkMD5String(text, hash, sizeof(hash));
     if (ret != 0) {
         ev->AddInteger(-1);
-        throw ScriptException("Error while generating MD5 checksum for string!\n");
-    }
-
-    ev->AddString(hash);
-}
-
-void ScriptThread::Md5String2(Event *ev)
-{
-    char hash[64];
-    str  text;
-    int  ret = 0;
-
-    if (ev->NumArgs() != 1) {
-        throw ScriptException("Wrong arguments count for md5_string!\n");
-    }
-
-    text = ev->GetString(1);
-
-    ret = checkMD5String(text, hash, sizeof(hash));
-    if (ret != 0) {
-        ev->AddInteger(-1);
         throw ScriptException("Error while generating MD5 checksum for strin!\n");
     }
 
     ev->AddString(hash);
-}
-
-void ScriptThread::Sha256String(Event *ev)
-{
-    str text;
-    std::string hash;
-
-    if (ev->NumArgs() != 1) {
-        throw ScriptException("Wrong arguments count for sha256_string!\n");
-    }
-
-    text = ev->GetString(1);
-
-    picosha2::hash256_hex_string(std::string(text.c_str()), hash);
-
-    ev->AddString(hash.c_str());
-}
-
-void ScriptThread::UuidString(Event *ev)
-{
-    thread_local std::random_device rd;
-    thread_local std::mt19937 gen(rd());
-    thread_local std::uniform_int_distribution<> dis(0, 15);
-    thread_local std::uniform_int_distribution<> dis2(8, 11);
-
-    std::stringstream ss;
-    int i;
-    ss << std::hex;
-    for (i = 0; i < 8; i++) {
-        ss << dis(gen);
-    }
-    ss << "-";
-    for (i = 0; i < 4; i++) {
-        ss << dis(gen);
-    }
-    ss << "-4";
-    for (i = 0; i < 3; i++) {
-        ss << dis(gen);
-    }
-    ss << "-";
-    ss << dis2(gen);
-    for (i = 0; i < 3; i++) {
-        ss << dis(gen);
-    }
-    ss << "-";
-    for (i = 0; i < 12; i++) {
-        ss << dis(gen);
-    }
-
-    ev->AddString(ss.str().c_str());
 }
 
 scriptedEvType_t EventNameToType(const char *eventname, char *fullname)
@@ -7629,27 +7485,6 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
     file = new FSFile(f);
     ev->AddListener(file);
 }
-
-#ifdef USE_HTTP
-void ScriptThread::CurlGet(Event *ev)
-{
-    // Forward to ScriptMaster
-    Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
-    newEvent->AddString(ev->GetString(1));
-    newEvent->AddString(ev->GetString(2));
-    Director.ProcessEvent(newEvent);
-}
-
-void ScriptThread::CurlPost(Event *ev)
-{
-    // Forward to ScriptMaster
-    Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
-    newEvent->AddString(ev->GetString(1));
-    newEvent->AddString(ev->GetString(2));
-    newEvent->AddString(ev->GetString(3));
-    Director.ProcessEvent(newEvent);
-}
-#endif
 
 CLASS_DECLARATION(Listener, OSFile, NULL) {
     {NULL, NULL}

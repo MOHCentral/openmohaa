@@ -25,11 +25,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "g_local.h"
 #include "armor.h"
-#include "sentient.h"
-#include "g_scriptevents.h"
 
 CLASS_DECLARATION(Item, Armor, NULL) {
-    {&EV_Item_Pickup, &Armor::PickupArmor},
     {NULL, NULL}
 };
 
@@ -84,24 +81,4 @@ qboolean Armor::Pickupable(Entity *other)
         }
     }
     return true;
-}
-
-void Armor::PickupArmor(Event *ev)
-{
-    Entity   *other;
-    Sentient *sent;
-
-    other = ev->GetEntity(1);
-    if (!other || !other->isSubclassOf(Sentient)) {
-        return;
-    }
-
-    sent = (Sentient *)other;
-
-    if (!ItemPickup(other, qfalse)) {
-        return;
-    }
-
-    // HOOK: armor_pickup - player is self, amount is parameter
-    G_ScriptEvent("armor_pickup", sent, getAmount());
 }

@@ -24,7 +24,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "g_local.h"
 #include "scriptmaster.h"
-#include "dapserver.h"
 #include "scriptthread.h"
 #include "scriptclass.h"
 #include "gamescript.h"
@@ -34,10 +33,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "worldspawn.h"
 #include "scriptcompiler.h"
 #include "scriptexception.h"
-
-#ifdef USE_HTTP
-#include "curlworker.h"
-#endif
 
 #ifdef WIN32
 #    include <direct.h>
@@ -120,32 +115,10 @@ Event EV_Cache
     "pre-cache the given resource."
 );
 
-#ifdef USE_HTTP
-Event EV_ScriptMaster_CurlGet(
-    "curl_get",
-    EV_DEFAULT,
-    "ss",
-    "url callback_label",
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
-);
-
-Event EV_ScriptMaster_CurlPost(
-    "curl_post",
-    EV_DEFAULT,
-    "sss",
-    "url post_data callback_label",
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
-);
-#endif
-
 CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
     {&EV_RegisterAliasAndCache, &ScriptMaster::RegisterAliasAndCache},
     {&EV_RegisterAlias,         &ScriptMaster::RegisterAlias        },
     {&EV_Cache,                 &ScriptMaster::Cache                },
-#ifdef USE_HTTP
-    {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
-    {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
-#endif
     {NULL,                      NULL                                }
 };
 
@@ -438,10 +411,6 @@ const char *ScriptMaster::ConstStrings[] = {
 
 ScriptMaster::~ScriptMaster()
 {
-#ifdef USE_HTTP
-    g_CurlWorker.Stop();
-    curl_global_cleanup();
-#endif
     Reset(false);
 }
 
@@ -604,41 +573,6 @@ void ScriptMaster::Cache(Event *ev)
     CacheResource(ev->GetString(1));
 }
 
-#ifdef USE_HTTP
-void ScriptMaster::CurlGet(Event *ev)
-{
-    str url = ev->GetString(1);
-    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
-        return;
-    }
-
-    CurlTask task;
-    task.url = url.c_str();
-    task.callbackLabel = ev->GetString(2).c_str();
-    task.isPost = false;
-
-    g_CurlWorker.AddTask(task);
-}
-
-void ScriptMaster::CurlPost(Event *ev)
-{
-    str url = ev->GetString(1);
-    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
-        return;
-    }
-
-    CurlTask task;
-    task.url = url.c_str();
-    task.postData = ev->GetString(2).c_str();
-    task.callbackLabel = ev->GetString(3).c_str();
-    task.isPost = true;
-
-    g_CurlWorker.AddTask(task);
-}
-#endif
-
 void ScriptMaster::InitConstStrings(void)
 {
     EventDef                       *eventDef;
@@ -800,10 +734,6 @@ ScriptThread *ScriptMaster::CreateScriptThread(ScriptClass *scriptClass, str lab
 
 ScriptMaster::ScriptMaster()
 {
-#ifdef USE_HTTP
-    curl_global_init(CURL_GLOBAL_ALL);
-    g_CurlWorker.Start();
-#endif
 }
 
 void ScriptMaster::Reset(qboolean samemap)
@@ -832,7 +762,6 @@ void ScriptMaster::Reset(qboolean samemap)
 
         CloseGameScript();
         StringDict.clear();
-        m_scriptCmds.clear();
         InitConstStrings();
     }
 
@@ -847,86 +776,20 @@ void ScriptMaster::ExecuteRunning(void)
     str fileName;
     str sourcePosString;
 
-    g_DAPServer.RunFrame();
-
-#ifdef USE_HTTP
-    // Process Curl Results
-    CurlResult result;
-    while (g_CurlWorker.GetResult(result)) {
-        if (!result.callbackLabel.empty()) {
-            GameScript *script = GetScript(level.m_mapscript);
-            // If callbackLabel has '::', split it.
-            str label = result.callbackLabel.c_str();
-            str scriptName = level.m_mapscript;
-
-            const char *p = strstr(label.c_str(), "::");
-            if (p) {
-                // Safely extract the script name substring
-                scriptName = str(label.c_str(), p - label.c_str());
-                // Use a temporary string for the label part to avoid UAF on label buffer
-                str labelPart = p + 2;
-                label = labelPart;
-
-                script = GetScript(scriptName);
-            }
-
-            if (script) {
-               // Use CreateThread as defined in ScriptMaster header
-               // ScriptThread *CreateThread(GameScript *scr, str label, Listener *self = NULL);
-               ScriptThread* thread = CreateThread(script, label);
-               if (thread) {
-                   // Create an event that holds our data to pass to the script
-                   Event callbackEv(label);
-                   callbackEv.AddInteger(result.success);
-                   callbackEv.AddString(result.data.c_str());
-                   callbackEv.AddInteger(result.httpCode);
-
-                   // Execute the thread with the event
-                   // This pushes the event arguments onto the stack for the script function
-                   thread->Execute(callbackEv);
-               }
-            } else {
-                 gi.DPrintf("Curl Callback Error: Could not load script '%s'\n", scriptName.c_str());
-            }
-        }
-    }
-#endif
-
-    //static int execRunningCount = 0;
-    //execRunningCount++;
-    //if (execRunningCount % 100 == 1) {  // Log every 100th call to avoid spam
-    //    gi.Printf("ScriptMaster: ExecuteRunning #%d - stackCount=%d\n", execRunningCount, stackCount);
-    //}
-    
     if (stackCount) {
-        //if (execRunningCount % 100 == 1) {
-        //    gi.Printf("ScriptMaster: Returning early - stackCount=%d (non-zero!)\n", stackCount);
-        //}
         return;
     }
 
     if (!timerList.IsDirty()) {
-        //if (execRunningCount % 100 == 1) {
-        //    gi.Printf("ScriptMaster: Returning early - timerList not dirty\n");
-        //}
         return;
     }
-    
-    //if (execRunningCount % 100 == 1) {
-    //    gi.Printf("ScriptMaster: Processing timerList... (current time=%d)\n", level.svsTime);
-    //}
 
     cmdTime   = 0;
     cmdCount  = 0;
     startTime = level.svsTime;
 
-    int threadCount = 0;
     try {
         while ((m_CurrentThread = (ScriptThread *)timerList.GetNextElement(i))) {
-            threadCount++;
-            //if (execRunningCount % 100 == 1) {
-            //    gi.Printf("ScriptMaster: Found thread #%d at time %d\n", threadCount, i);
-            //}
             if (g_timescripts->integer) {
                 fileName        = m_CurrentThread->FileName();
                 sourcePosString = m_CurrentThread->m_ScriptVM->GetSourcePos();
@@ -936,10 +799,6 @@ void ScriptMaster::ExecuteRunning(void)
             level.setTime(level.svsStartTime + i);
 
             m_CurrentThread->m_ScriptVM->m_ThreadState = THREAD_RUNNING;
-            //if (execRunningCount % 100 == 1) {
-            //    gi.Printf("ScriptMaster: Calling Execute() for thread %p, state=%d\n", 
-            //              m_CurrentThread->m_ScriptVM, m_CurrentThread->m_ScriptVM->state);
-            //}
             m_CurrentThread->m_ScriptVM->Execute();
 
             if (g_timescripts->integer) {

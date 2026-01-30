@@ -1281,7 +1281,7 @@ void SV_SendClientMessages(void)
 	client_t		*c;
 
 	// send a message to each connected client
-	for(i=0; i < svs.iNumClients; i++)
+	for(i=0; i < sv_maxclients->integer; i++)
 	{
 		c = &svs.clients[i];
 		

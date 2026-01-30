@@ -451,9 +451,9 @@ qboolean S_LoadSound(const char *fileName, sfx_t *sfx, int streamed, qboolean fo
         return qtrue;
     }
 
-    //if (clc.state != CA_LOADING && !force_load) {
-    //    Com_Printf("**************S_LoadSound: %s\n", fileName);
-    //}
+    if (clc.state != CA_LOADING && !force_load) {
+        Com_Printf("**************S_LoadSound: %s\n", fileName);
+    }
 
     if (strstr(fileName, ".mp3")) {
         return S_LoadMP3(fileName, sfx);

@@ -32,7 +32,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "health.h"
 #include "game.h"
-#include "g_scriptevents.h"
 
 typedef struct {
     str  name;
@@ -511,15 +510,8 @@ qboolean Item::Drop(void)
         spawnflags |= DROPPED_ITEM;
     }
 
-    // HOOK: item_drop
-    Entity* prevOwner = owner;
-
     // Remove this from the owner's item list
     RemoveFromOwner();
-
-    if (prevOwner && prevOwner->IsSubclassOfPlayer()) {
-        G_ScriptEvent("item_drop", prevOwner, getName().c_str());
-    }
 
     PostEvent(EV_Remove, g_droppeditemlife->value);
 
@@ -603,15 +595,6 @@ Item *Item::ItemPickup(Entity *other, qboolean add_to_inventory)
     //
     sent->ReceivedItem(item);
 
-    // HOOK: item_pickup
-    // Exclude weapons as they are handled in weapon.cpp, unless we want double events?
-    // Weapons inherit from Item. Weapon::PickupWeapon calls Item::ItemPickup?
-    // Weapon::PickupWeapon does NOT call Item::ItemPickup. It has its own logic.
-    // So this is for non-weapon items (health, ammo, etc)
-    if (sent->IsSubclassOfPlayer()) {
-        G_ScriptEvent("item_pickup", sent, item->getName().c_str(), item->getAmount());
-    }
-
     Sound(sPickupSound);
 
     if (!Removable()) {
@@ -655,9 +638,6 @@ void Item::Respawn(Event *ev)
     if (playrespawn) {
         Sound("snd_itemspawn");
     }
-
-    // HOOK: item_respawn
-    G_ScriptEvent("item_respawn", this, getName().c_str());
 
     setOrigin();
 

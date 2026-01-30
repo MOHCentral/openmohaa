@@ -54,7 +54,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "portableturret.h"
 #include "fixedturret.h"
 #include "clientvote.h"
-#include "g_scriptevents.h"
 
 const Vector power_color(0.0, 1.0, 0.0);
 const Vector acolor(1.0, 1.0, 1.0);
@@ -2052,12 +2051,6 @@ Player::Player()
     m_iInstantMessageTime = 0;
     m_iTextChatTime       = 0;
 
-    // Distance tracking initialization
-    m_fDistanceWalked   = 0.0f;
-    m_fDistanceSprinted = 0.0f;
-    m_fDistanceSwam     = 0.0f;
-    m_fDistanceDriven   = 0.0f;
-
     voteUpload = NULL;
     //====
 
@@ -2210,9 +2203,6 @@ Player::Player()
     for (int i = 0; i < MAX_SPEED_MULTIPLIERS; i++) {
         speed_multiplier[i] = 1.0f;
     }
-
-    old_pm_flags = 0;
-    wasOnGround  = false;
 
 #ifdef OPM_FEATURES
     m_fpsTiki  = NULL;
@@ -2766,9 +2756,6 @@ void Player::Respawn(Event *ev)
         logfile_started = qfalse;
     }
 
-    // HOOK: player_respawn
-    G_ScriptEvent("player_respawn", this);
-
     //
     // Added in OPM
     //
@@ -2805,7 +2792,6 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         //
         switch (meansofdeath) {
         case MOD_SUICIDE:
-            G_ScriptEvent("player_suicide", this);
             s1 = "took himself out of commision";
             break;
         case MOD_LAVA:
@@ -2878,11 +2864,9 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
         switch (meansofdeath) {
         case MOD_CRUSH:
         case MOD_CRUSH_EVERY_FRAME:
-            G_ScriptEvent("player_crushed", this, attacker);
             s1 = "was crushed by";
             break;
         case MOD_TELEFRAG:
-            G_ScriptEvent("player_telefragged", this, attacker);
             s1 = "was telefragged by";
             break;
         case MOD_LAVA:
@@ -2942,22 +2926,15 @@ void Player::Obituary(Entity *attacker, Entity *inflictor, int meansofdeath, int
 
             if (iLocation > -1) {
                 bDispLocation = qtrue;
-
-                // HOOK: player_headshot
-                if (iLocation == HITLOC_HEAD || iLocation == HITLOC_HELMET) {
-                    G_ScriptEvent("player_headshot", attacker, this, pAttackerWeap);
-                }
             }
             break;
         case MOD_VEHICLE:
-            G_ScriptEvent("player_roadkill", attacker, this);
             s1 = "was run over by";
             break;
         case MOD_IMPALE:
             s1 = "was impaled by";
             break;
         case MOD_BASH:
-            G_ScriptEvent("player_bash", attacker, this);
             if (G_Random() >= 0.5f) {
                 s1 = "was bashed by";
             } else {
@@ -3254,9 +3231,6 @@ void Player::Killed(Event *ev)
     scriptDelegate_kill.Trigger(this, *event);
     scriptedEvents[SE_KILL].Trigger(event);
 
-    G_ScriptEvent("player_kill", attacker, attacker, this, inflictor, location, meansofdeath);
-    G_ScriptEvent("player_death", this, inflictor);
-
     Unregister(STRING_DEATH);
 }
 
@@ -3366,9 +3340,6 @@ void Player::KilledPlayerInDeathmatch(Player *killed, meansOfDeath_t meansofdeat
         //
         // A teammate was killed
         //
-        // HOOK: player_teamkill
-        G_ScriptEvent("player_teamkill", this, killed);
-
         current_team->AddKills(this, -1);
         num_team_kills++;
     } else {
@@ -3421,9 +3392,6 @@ void Player::Pain(Event *ev)
 
     pain_type     = (meansOfDeath_t)meansofdeath;
     pain_location = iLocation;
-
-    // HOOK: player_pain
-    G_ScriptEvent("player_pain", this, attacker, damage, meansofdeath, iLocation);
 
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
@@ -3537,8 +3505,6 @@ void Player::DoUse(Event *ev)
             event->AddListener(this);
 
             hit->entity->ProcessEvent(event);
-
-            G_ScriptEvent("player_use", this, hit->entity);
 
             if (m_pVehicle || m_pTurret) {
                 break;
@@ -4218,42 +4184,6 @@ void Player::ClientMove(usercmd_t *ucmd)
     m_fLastDeltaTime = level.time;
 
     TouchStuff(&pm);
-
-    //
-    // Movement Hooks
-    //
-    // player_land
-    if (!wasOnGround && groundentity) {
-        G_ScriptEvent("player_land", this, oldvelocity.z);
-    }
-    wasOnGround = (groundentity != NULL);
-
-    // player_crouch
-    if (!(old_pm_flags & PMF_DUCKED) && (client->ps.pm_flags & PMF_DUCKED)) {
-        G_ScriptEvent("player_crouch", this);
-    }
-
-    // player_prone
-    if (!(old_pm_flags & PMF_VIEW_PRONE) && (client->ps.pm_flags & PMF_VIEW_PRONE)) {
-        G_ScriptEvent("player_prone", this);
-    }
-
-    // player_stand - coming out of crouch or prone
-    if (((old_pm_flags & PMF_DUCKED) && !(client->ps.pm_flags & PMF_DUCKED) && !(client->ps.pm_flags & PMF_VIEW_PRONE))
-        || ((old_pm_flags & PMF_VIEW_PRONE) && !(client->ps.pm_flags & PMF_VIEW_PRONE) && !(client->ps.pm_flags & PMF_DUCKED))) {
-        G_ScriptEvent("player_stand", this);
-    }
-
-    old_pm_flags = client->ps.pm_flags;
-
-    // Periodic stats
-    static int last_stats_time = 0;
-    if (level.inttime > last_stats_time + 60000) {
-        last_stats_time = level.inttime;
-        // Fire player_distance for all players?
-        // Actually this is ClientMove so it runs for this player
-        G_ScriptEvent("player_distance", this, m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
-    }
 }
 
 void Player::VehicleMove(usercmd_t *ucmd)
@@ -4369,7 +4299,6 @@ void Player::ClientInactivityTimer(void)
             //
             // Make sure to not kick the local host
             //
-            G_ScriptEvent("teamkill_kick", this, num_team_kills);
             gi.KickClientForReason(client->ps.clientNum, message.c_str());
         } else if (!m_bSpectator) {
             // if it's the host, put it back in spectator mode
@@ -5344,9 +5273,6 @@ void Player::StartUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Start();
-
-    // HOOK: player_use_object_start
-    G_ScriptEvent("player_use_object_start", this, uo);
 }
 
 void Player::FinishUseObject(Event *ev)
@@ -5359,10 +5285,6 @@ void Player::FinishUseObject(Event *ev)
 
     uo = (UseObject *)(Entity *)useitem_in_use;
     uo->Stop(this);
-
-    // HOOK: player_use_object_finish
-    G_ScriptEvent("player_use_object_finish", this, uo);
-
     useitem_in_use = NULL;
 }
 
@@ -8008,9 +7930,6 @@ void Player::Jump(Event *ev)
     maxheight = ev->GetFloat(1);
 
     if (maxheight > 16) {
-        // HOOK: player_jump
-        G_ScriptEvent("player_jump", this);
-
         // v^2 = 2ad
         velocity[2] += sqrt(2 * sv_gravity->integer * maxheight);
 
@@ -8131,9 +8050,6 @@ void Player::EnterVehicle(Event *ev)
 
     ent = ev->GetEntity(1);
     if (ent && ent->IsSubclassOfVehicle()) {
-        // HOOK: vehicle_enter
-        G_ScriptEvent("vehicle_enter", this, ent);
-
         flags |= FL_PARTIAL_IMMOBILE;
         viewheight = STAND_EYE_HEIGHT;
         velocity   = vec_zero;
@@ -8150,9 +8066,6 @@ void Player::EnterVehicle(Event *ev)
 
 void Player::ExitVehicle(Event *ev)
 {
-    // HOOK: vehicle_exit
-    G_ScriptEvent("vehicle_exit", this, m_pVehicle);
-
     flags &= ~FL_PARTIAL_IMMOBILE;
     setMoveType(MOVETYPE_WALK);
     m_pVehicle = NULL;
@@ -8169,9 +8082,6 @@ void Player::ExitVehicle(Event *ev)
 
 void Player::EnterTurret(TurretGun *ent)
 {
-    // HOOK: turret_enter
-    G_ScriptEvent("turret_enter", this, ent);
-
     flags |= FL_PARTIAL_IMMOBILE;
     viewheight = DEFAULT_VIEWHEIGHT;
     velocity   = vec_zero;
@@ -8207,9 +8117,6 @@ void Player::EnterTurret(Event *ev)
 
 void Player::ExitTurret(void)
 {
-    // HOOK: turret_exit
-    G_ScriptEvent("turret_exit", this, m_pTurret);
-
     if (m_pTurret->inheritsFrom(PortableTurret::classinfostatic())) {
         StopPartAnimating(torso);
         SetPartAnim("mg42tripod_aim_straight_straight");
@@ -8640,15 +8547,10 @@ void Player::AttachToLadder(Event *ev)
     pLadder->PositionOnLadder(this);
 
     SetViewAngles(Vector(v_angle[0], angles[1], v_angle[2]));
-
-    G_ScriptEvent("ladder_mount", this, pLadder);
 }
 
 void Player::UnattachFromLadder(Event *ev)
 {
-    if (m_pLadder) {
-        G_ScriptEvent("ladder_dismount", this, m_pLadder);
-    }
     m_pLadder = NULL;
 }
 
@@ -9396,9 +9298,6 @@ void Player::Spectator(void)
         respawn_time = level.time + 1.0f;
     }
 
-    // HOOK: player_spectate
-    G_ScriptEvent("player_spectate", this);
-
     RemoveFromVehiclesAndTurrets();
 
     // Added in OPM
@@ -9670,12 +9569,6 @@ void Player::Join_DM_Team(Event *ev)
     }
 
     m_fTeamSelectTime = level.time;
-    // HOOK: team_join
-    // We should probably pass the old team and new team.
-    // team is the new team.
-    // GetTeam() returns the current (old) team before SetTeam is called.
-    G_ScriptEvent("team_join", this, GetTeam(), team);
-
     SetTeam(team);
     // Make sure to remove player from turret
     RemoveFromVehiclesAndTurrets();
@@ -9899,22 +9792,12 @@ void Player::ArmorDamage(Event *ev)
 
     scriptDelegate_damage.Trigger(this, *event);
     scriptedEvents[SE_DAMAGE].Trigger(event);
-
-    // Extract attacker and damage for G_ScriptEvent
-    Entity *scriptEventAttacker = ev->GetEntity(1);
-    float scriptEventDamage = ev->GetFloat(2);
-    G_ScriptEvent("player_damage", this, scriptEventAttacker, scriptEventDamage, mod);
 }
 
 void Player::Disconnect(void)
 {
     Event *ev = new Event;
     ev->AddListener(this);
-
-    // Fire final distance event
-    G_ScriptEvent("player_distance", this, m_fDistanceWalked, m_fDistanceSprinted, m_fDistanceSwam, m_fDistanceDriven);
-
-    G_ScriptEvent("client_disconnect", this);
 
     scriptDelegate_disconnecting.Trigger(this, *ev);
     scriptedEvents[SE_DISCONNECTED].Trigger(ev);
@@ -10215,9 +10098,6 @@ void Player::CallVote(Event *ev)
 
     G_PrintfClient(edict, "called a vote (%s)\n", level.m_voteName.c_str());
     G_PrintToAllClients(va("%s %s.\n", client->pers.netname, gi.LV_ConvertString("called a vote")));
-
-    // HOOK: vote_start
-    G_ScriptEvent("vote_start", this, level.m_voteName.c_str(), level.m_voteString.c_str());
 
     level.m_voteTime = (level.svsFloatTime - level.svsStartFloatTime) * 1000;
     level.m_voteYes  = 1;
@@ -11283,8 +11163,6 @@ void Player::EventDMMessage(Event *ev)
         } else {
             G_PrintfClient(edict, "says @#%d: %s\n", iMode - 1, pStartMessage);
         }
-
-        G_ScriptEvent("player_say", this, pStartMessage);
 
         gi.SendServerCommand(iMode - 1, "%s\n", szPrintString);
 
@@ -12405,9 +12283,6 @@ void Player::Spawned(void)
 {
     delegate_spawned.Execute();
 
-    // HOOK: player_spawn
-    G_ScriptEvent("player_spawn", this);
-
     Event *ev = new Event;
     ev->AddEntity(this);
 
@@ -12432,13 +12307,11 @@ void Player::RemoveOwnedProjectiles()
 void Player::AddKills(int num)
 {
     num_kills += num;
-    G_ScriptEvent("score_change", this, "kills", num, num_kills);
 }
 
 void Player::AddDeaths(int num)
 {
     num_deaths += num;
-    G_ScriptEvent("score_change", this, "deaths", num, num_deaths);
 }
 
 ////////////////////////////
@@ -12666,9 +12539,6 @@ void Player::EventSetTeam(Event *ev)
 void Player::FreezeControls(Event *ev)
 {
     m_bFrozen = ev->GetBoolean(1);
-
-    // HOOK: player_freeze
-    G_ScriptEvent("player_freeze", this, m_bFrozen ? 1 : 0);
 }
 
 void Player::GetConnState(Event *ev)

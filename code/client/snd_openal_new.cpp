@@ -771,7 +771,7 @@ S_FadeSound
 */
 void S_FadeSound(float fTime)
 {
-    //Com_Printf("Called FadeSound with: %f\n", fTime);
+    Com_Printf("Called FadeSound with: %f\n", fTime);
 
     if (fTime > 0) {
         s_bFading        = true;

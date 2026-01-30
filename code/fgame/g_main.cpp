@@ -31,7 +31,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "dm_manager.h"
 #include "player.h"
 #include "scriptmaster.h"
-#include "dapserver.h"
 #include "scriptexception.h"
 #include "lightstyleclass.h"
 #include "lodthing.h"
@@ -40,7 +39,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "playerbot.h"
 #include "g_bot.h"
 #include "navigation_recast_load.h"
-#include "g_scriptevents.h"
 
 #include "../corepp/tiki.h"
 
@@ -263,9 +261,6 @@ void G_InitGame(int levelTime, int randomSeed)
     G_Printf("gamename: %s\n", GAMEVERSION);
     G_Printf("gamedate: %s\n", __DATE__);
 
-    // HOOK: map_init (early hook before full initialization)
-    G_ScriptEvent("map_init", NULL);
-
     g_protocol    = gi.Cvar_Get("com_protocol", "", 0)->integer;
     g_target_game = (target_game_e)gi.Cvar_Get("com_target_game", "0", 0)->integer;
 
@@ -312,20 +307,6 @@ void G_InitGame(int levelTime, int randomSeed)
         //  This frees alias list to avoid filling up memory
         gi.GlobalAlias_Clear();
     }
-    
-    gi.Printf("===== ABOUT TO START DAP SERVER =====\n");
-    g_DAPServer.Start(4711);
-    gi.Printf("===== DAP SERVER START() RETURNED =====\n");
-
-    // HOOK: server_process_start - fires only once when server executable first starts
-    cvar_t *sv_firstinit = gi.Cvar_Get("sv_firstinit", "1", 0);
-    if (sv_firstinit && sv_firstinit->integer) {
-        G_ScriptEvent("server_process_start", NULL);
-        gi.cvar_set("sv_firstinit", "0");
-    }
-
-    // HOOK: map_start - map is fully initialized
-    G_ScriptEvent("map_start", NULL);
 }
 
 /*
@@ -367,15 +348,6 @@ void G_ShutdownGame()
 {
     gi.Printf("==== ShutdownGame ====\n");
 
-    // HOOK: server_process_quit - fires only when server is quitting (not on map change)
-    cvar_t *sv_quitting = gi.Cvar_Get("sv_quitting", "0", 0);
-    if (sv_quitting && sv_quitting->integer) {
-        G_ScriptEvent("server_process_quit", NULL);
-    }
-
-    // HOOK: map_shutdown
-    G_ScriptEvent("map_shutdown", NULL);
-
     // write all the client session data so we can get it back
     G_WriteSessionData();
 
@@ -386,7 +358,6 @@ void G_ShutdownGame()
     L_ShutdownEvents();
 
     G_DeAllocGameData();
-    g_DAPServer.Stop();
 }
 
 //===================================================================
@@ -429,7 +400,7 @@ void G_Precache(void)
 
 /*
 ================
-G_ServerSpawned
+G_Precache
 
 Called when server finished initializating
 ================
@@ -440,9 +411,6 @@ void G_ServerSpawned(void)
         G_BotPostInit();
 
         level.ServerSpawned();
-
-        // HOOK: map_ready - map fully spawned and ready to play
-        G_ScriptEvent("map_ready", NULL, level.mapname.c_str(), g_gametype->integer);
     } catch (const ScriptException& e) {
         G_ExitWithError(e.string.c_str());
     }
@@ -973,19 +941,6 @@ void G_RegisterSounds(void)
 
 void G_Restart(void)
 {
-    gi.Printf("===== G_Restart() called =====\n");
-
-    // HOOK: map_restart
-    G_ScriptEvent("map_restart", NULL, level.mapname.c_str());
-    
-    // Ensure DAP server is running for debugging
-    if (!g_DAPServer.IsRunning()) {
-        gi.Printf("DAP: Server not running, starting it now...\n");
-        g_DAPServer.Start(4711);
-    } else {
-        gi.Printf("DAP: Server already running\n");
-    }
-    
     G_InitWorldSession();
 
     // Added in 2.0
@@ -1870,15 +1825,6 @@ void G_BeginIntermission2(void)
         return;
     }
 
-    // HOOK: intermission_start
-    G_ScriptEvent("intermission_start", NULL, level.mapname.c_str(), g_gametype->integer);
-
-    // HOOK: game_end
-    G_ScriptEvent("game_end", NULL);
-
-    // HOOK: match_end with map and gametype info
-    G_ScriptEvent("match_end", NULL, level.mapname.c_str(), g_gametype->integer, dmManager.GetTeamWin());
-
     level.playerfrozen     = qtrue;
     level.intermissiontime = level.time;
 
@@ -1967,9 +1913,6 @@ void G_ExitLevel(void)
 
     // Close the player log file if necessary
     ClosePlayerLogFile();
-
-    // HOOK: map_change_start
-    G_ScriptEvent("map_change_start", NULL, level.mapname.c_str(), level.nextmap.c_str());
 
     // Kill the sounds
     Com_sprintf(command, sizeof(command), "stopsound\n");

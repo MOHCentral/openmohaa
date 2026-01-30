@@ -31,7 +31,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "ammo.h"
 #include "player.h"
 #include "g_phys.h"
-#include "g_scriptevents.h"
 
 Event EV_AmmoEntity_PostSpawn
 (
@@ -106,9 +105,6 @@ Item *AmmoEntity::ItemPickup(Entity *other, qboolean add_to_inventory)
 
     // Give the ammo to the player
     player->GiveAmmo(item_name, amount);
-
-    // HOOK: ammo_pickup
-    G_ScriptEvent("ammo_pickup", other, item_name.c_str(), amount);
 
     // Make the weapon reload if the weapon has an empty clip
     pWeap = player->GetActiveWeapon(WEAPON_MAIN);
