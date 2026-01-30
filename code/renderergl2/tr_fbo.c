@@ -332,7 +332,8 @@ void FBO_Init(void)
 		{
 			tr.pshadowFbos[i] = FBO_Create(va("_shadowmap%d", i), tr.pshadowMaps[i]->width, tr.pshadowMaps[i]->height);
 			// FIXME: this next line wastes 16mb with 16x512x512 sun shadow maps, skip if OpenGL 4.3+ or ARB_framebuffer_no_attachments
-			FBO_CreateBuffer(tr.pshadowFbos[i], GL_RGBA8, 0, 0);
+			if (!glRefConfig.framebufferNoAttachments)
+				FBO_CreateBuffer(tr.pshadowFbos[i], GL_RGBA8, 0, 0);
 			FBO_AttachImage(tr.pshadowFbos[i], tr.pshadowMaps[i], GL_DEPTH_ATTACHMENT, 0);
 			R_CheckFBO(tr.pshadowFbos[i]);
 		}
@@ -345,7 +346,8 @@ void FBO_Init(void)
 			tr.sunShadowFbo[i] = FBO_Create("_sunshadowmap", tr.sunShadowDepthImage[i]->width, tr.sunShadowDepthImage[i]->height);
 			// FIXME: this next line wastes 16mb with 4x1024x1024 sun shadow maps, skip if OpenGL 4.3+ or ARB_framebuffer_no_attachments
 			// This at least gets sun shadows working on older GPUs (Intel)
-			FBO_CreateBuffer(tr.sunShadowFbo[i], GL_RGBA8, 0, 0);
+			if (!glRefConfig.framebufferNoAttachments)
+				FBO_CreateBuffer(tr.sunShadowFbo[i], GL_RGBA8, 0, 0);
 			FBO_AttachImage(tr.sunShadowFbo[i], tr.sunShadowDepthImage[i], GL_DEPTH_ATTACHMENT, 0);
 			R_CheckFBO(tr.sunShadowFbo[i]);
 		}

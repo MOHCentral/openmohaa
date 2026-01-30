@@ -36,9 +36,11 @@ void GLimp_InitExtraExtensions(void)
 	const char* result[3] = { "...ignoring %s\n", "...using %s\n", "...%s not found\n" };
 	qboolean q_gl_version_at_least_3_0;
 	qboolean q_gl_version_at_least_3_2;
+	qboolean q_gl_version_at_least_4_3;
 
 	q_gl_version_at_least_3_0 = QGL_VERSION_ATLEAST( 3, 0 );
 	q_gl_version_at_least_3_2 = QGL_VERSION_ATLEAST( 3, 2 );
+	q_gl_version_at_least_4_3 = QGL_VERSION_ATLEAST( 4, 3 );
 
 	// Check if we need Intel graphics specific fixes.
 	glRefConfig.intelGraphics = qfalse;
@@ -250,6 +252,20 @@ void GLimp_InitExtraExtensions(void)
 		glRefConfig.seamlessCubeMap = !!r_arb_seamless_cube_map->integer;
 
 		ri.Printf(PRINT_ALL, result[glRefConfig.seamlessCubeMap], extension);
+	}
+	else
+	{
+		ri.Printf(PRINT_ALL, result[2], extension);
+	}
+
+	// OpenGL 4.3 - GL_ARB_framebuffer_no_attachments
+	extension = "GL_ARB_framebuffer_no_attachments";
+	glRefConfig.framebufferNoAttachments = qfalse;
+	if (q_gl_version_at_least_4_3 || SDL_GL_ExtensionSupported(extension))
+	{
+		glRefConfig.framebufferNoAttachments = qtrue;
+
+		ri.Printf(PRINT_ALL, result[glRefConfig.framebufferNoAttachments], extension);
 	}
 	else
 	{

@@ -1931,6 +1931,8 @@ typedef struct {
 	GLenum vaoCacheGlIndexType; // GL_UNSIGNED_INT or GL_UNSIGNED_SHORT
 	size_t vaoCacheGlIndexSize; // must be <= sizeof( vaoCacheGlIndex_t )
 
+	qboolean framebufferNoAttachments;
+
 	// OpenGL ES extensions
 	qboolean readDepth;
 	qboolean readStencil;
