@@ -314,6 +314,7 @@ private:
 #endif
 
 public:
+    MulticastDelegate<void(Event*)>              delegate_pain;
     MulticastDelegate<void(const str& text)> delegate_stufftext;
     MulticastDelegate<void()>                delegate_spawned;
 

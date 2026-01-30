@@ -78,6 +78,8 @@ BotController::BotController()
     m_iLastBurstTime      = 0;
 
     m_iNextTauntTime = 0;
+    
+    m_tactics.Init(this);
 
     m_StateFlags = 0;
 }
@@ -466,6 +468,37 @@ void BotController::NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDis
         m_iCuriousTime   = level.inttime + 20000;
         m_vNewCuriousPos = vPos;
         break;
+    }
+}
+
+void BotController::ProcessVoiceCommand(const char *cmd, Entity *commander, bool teamOnly)
+{
+    if (!commander || !cmd || !controlledEnt) return;
+
+    if (teamOnly) {
+        if (!commander->isSubclassOf(Player)) return;
+        Player *pSpeaker = (Player *)commander;
+        Player *pMe = controlledEnt;
+        if (pSpeaker->GetTeam() != pMe->GetTeam()) return;
+    }
+
+    BotOrder order = ORDER_NONE;
+    if (!Q_stricmp(cmd, "follow")) order = ORDER_FOLLOW;
+    else if (!Q_stricmp(cmd, "hold")) order = ORDER_HOLD;
+    else if (!Q_stricmp(cmd, "attack")) order = ORDER_ATTACK;
+    else if (!Q_stricmp(cmd, "report")) {
+        float hPercent = (float)controlledEnt->health / (float)controlledEnt->max_health * 100.0f;
+        SendCommand(va("say_team Status: Health %.0f%%, Weapon %s", hPercent, "Ready"));
+        return;
+    }
+
+    if (order != ORDER_NONE) {
+        m_tactics.SetOrder(order, commander);
+        
+        // Acknowledge chance
+        if (random() < 0.3f) {
+             SendCommand("say_team Roger.");
+        }
     }
 }
 
@@ -1035,6 +1068,11 @@ void BotController::State_Attack(void)
             m_iLastAimTime = level.inttime;
         }
 
+        Vector predictedPos = m_tactics.GetPredictedPos();
+        if (predictedPos != vec_zero) {
+            vTarget = predictedPos;
+        }
+
         rotation.AimAt(vTarget + m_vAimOffset * g_bot_attack_spreadmult->value);
     } else {
         AimAtAimNode();
@@ -1230,7 +1268,6 @@ bool BotController::CheckCondition_Tactical(void)
 
 void BotController::State_BeginTactical(void)
 {
-    m_tactics.Init(this);
 }
 
 void BotController::State_EndTactical(void)
@@ -1239,7 +1276,6 @@ void BotController::State_EndTactical(void)
 
 void BotController::State_Tactical(void)
 {
-    m_tactics.Update(&m_botCmd);
 }
 
 void BotController::UseWeaponWithAmmo()
@@ -1275,6 +1311,8 @@ void BotController::Think()
     usereyes_t eyeinfo;
 
     UpdateBotStates();
+    m_tactics.Update(&m_botCmd);
+    
     GetUsercmd(&ucmd);
     GetEyeInfo(&eyeinfo);
 
@@ -1357,6 +1395,20 @@ void BotController::EventStuffText(const str& text)
     SendCommand(text);
 }
 
+void BotController::Pain(Event *ev)
+{
+    Entity *attacker = ev->GetEntity(1);
+    if (attacker && attacker->isSubclassOf(Sentient) && attacker != controlledEnt) {
+        // Immediate reaction: turn towards attacker if they are closer than current enemy or we have no enemy
+        if (!m_pEnemy || (attacker->origin - controlledEnt->origin).lengthSquared() < (m_pEnemy->origin - controlledEnt->origin).lengthSquared()) {
+            gi.Printf("Bot %s reacting to damage from %s\n", controlledEnt->client->pers.netname, attacker->client ? attacker->client->pers.netname : attacker->getClassname());
+            m_pEnemy = (Sentient *)attacker;
+            rotation.TurnTowards(attacker->origin);
+            m_iAttackTime = level.inttime;
+        }
+    }
+}
+
 void BotController::setControlledEntity(Player *player)
 {
     controlledEnt = player;
@@ -1369,6 +1421,9 @@ void BotController::setControlledEntity(Player *player)
     delegateHandle_stufftext =
         player->delegate_stufftext.Add(std::bind(&BotController::EventStuffText, this, std::placeholders::_1));
     delegateHandle_spawned = player->delegate_spawned.Add(std::bind(&BotController::Spawned, this));
+    delegateHandle_pain = player->delegate_pain.Add(std::bind(&BotController::Pain, this, std::placeholders::_1));
+
+    m_tactics.Init(this);
 }
 
 Player *BotController::getControlledEntity() const

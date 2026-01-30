@@ -401,6 +401,15 @@ void G_Say(gentity_t *ent, qboolean team, qboolean arg0)
 
         gi.SendServerCommand(0, "print \"%s\"", text);
     }
+
+    // OPM Bot Voice Command Hook
+    // Strip name prefix if possible, or just pass the whole text (BotManager parses it)
+    // Actually G_Say constructs text as "Name: Message". We want raw message.
+    // Raw message is in gi.Args().
+    // We should reconstruct it properly or pass what we have.
+    // gi.Args() is the whole string after "say".
+    // Calling BotManager with raw args.
+    botManager.ProcessVoiceCommand(ent->entity, gi.Args(), team);
 }
 
 qboolean G_CameraCmd(gentity_t *ent)

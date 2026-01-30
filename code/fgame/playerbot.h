@@ -132,6 +132,7 @@ public:
     const Vector& GetTargetAngles() const;
     void          SetTargetAngles(Vector vAngles);
     void          AimAt(Vector vPos);
+    void          TurnTowards(Vector vPos);
 
 private:
     SafePtr<Player> controlledEntity;
@@ -205,6 +206,7 @@ private:
     DelegateHandle delegateHandle_killed;
     DelegateHandle delegateHandle_stufftext;
     DelegateHandle delegateHandle_spawned;
+    DelegateHandle delegateHandle_pain;
 
 private:
     Weapon *FindWeaponWithAmmo(void);
@@ -277,6 +279,7 @@ public:
     void NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDistanceSquared, float fRadiusSquared);
     void ClearEnemy(void);
 
+    void ProcessVoiceCommand(const char *cmd, Entity *commander, bool teamOnly);
     void SendCommand(const char *text);
 
     void Think();
@@ -285,9 +288,11 @@ public:
 
     void Killed(const Event& ev);
     void GotKill(const Event& ev);
+    void Pain(Event *ev);
     void EventStuffText(const str& text);
 
     BotMovement& GetMovement();
+    BotRotation& GetRotation() { return rotation; }
     Sentient*    GetEnemy() const { return m_pEnemy; }
 
 public:
@@ -331,6 +336,7 @@ public:
     void Cleanup();
     void Frame();
     void BroadcastEvent(Entity *originator, Vector origin, int iType, float radius);
+    void ProcessVoiceCommand(Entity *speaker, const char *text, bool teamOnly);
 
 private:
     BotControllerManager botControllerManager;

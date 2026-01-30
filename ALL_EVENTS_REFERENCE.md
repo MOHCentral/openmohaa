@@ -213,8 +213,8 @@ main:
     event_subscribe "player_kill" event_player_kill
 end
 
-event_player_kill local.attacker local.attacker2 local.victim local.inflictor local.location local.meansofdeath:
-    iprintlnbold(local.attacker.netname + " killed " + local.victim.netname)
+event_player_kill local.attacker local.victim local.inflictor local.location local.meansofdeath:
+    iprintlnbold(self.netname + " killed " + local.victim.netname)
 end
 ```
 
@@ -223,8 +223,7 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.attacker | The killer |
-| local.attacker2 | Secondary attacker reference |
+| local.attacker | The killer (duplicate of self) |
 | local.victim | The player who died |
 | local.inflictor | Entity that directly caused death |
 | local.location | Hit location |
@@ -241,8 +240,8 @@ main:
     event_subscribe "player_death" event_player_death
 end
 
-event_player_death local.victim local.inflictor:
-    iprintlnbold("Player " + local.victim.netname + " died")
+event_player_death local.inflictor:
+    iprintlnbold("Player " + self.netname + " died")
 end
 ```
 
@@ -251,7 +250,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.victim | The player who died |
 | local.inflictor | Entity that caused death |
 
 **self:** The victim
@@ -265,8 +263,8 @@ main:
     event_subscribe "player_damage" event_player_damage
 end
 
-event_player_damage local.victim local.attacker local.damage local.meansofdeath:
-    iprintlnbold(local.victim.netname + " took " + local.damage + " damage")
+event_player_damage local.attacker local.damage local.meansofdeath:
+    iprintlnbold(self.netname + " took " + local.damage + " damage")
 end
 ```
 
@@ -275,7 +273,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.victim | The player who took damage |
 | local.attacker | The attacker entity |
 | local.damage | Amount of damage |
 | local.meansofdeath | Means of death identifier |
@@ -291,8 +288,8 @@ main:
     event_subscribe "player_pain" event_player_pain
 end
 
-event_player_pain local.victim local.attacker local.damage local.meansofdeath local.hit_location:
-    iprintlnbold(local.victim.netname + " hit in " + local.hit_location)
+event_player_pain local.attacker local.damage local.meansofdeath local.hit_location:
+    iprintlnbold(self.netname + " hit in " + local.hit_location)
 end
 ```
 
@@ -301,7 +298,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.victim | The player who took damage |
 | local.attacker | The attacker entity |
 | local.damage | Amount of damage |
 | local.meansofdeath | Means of death identifier |
@@ -318,8 +314,8 @@ main:
     event_subscribe "player_headshot" event_player_headshot
 end
 
-event_player_headshot local.attacker local.victim local.weapon_name:
-    iprintlnbold(local.attacker.netname + " headshot " + local.victim.netname + " with " + local.weapon_name)
+event_player_headshot local.victim local.weapon_name:
+    iprintlnbold(self.netname + " headshot " + local.victim.netname + " with " + local.weapon_name)
 end
 ```
 
@@ -328,7 +324,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.attacker | The player who got the headshot |
 | local.victim | The player who was headshot |
 | local.weapon_name | Name of the weapon used |
 
@@ -363,8 +358,8 @@ main:
     event_subscribe "player_crushed" event_player_crushed
 end
 
-event_player_crushed local.victim local.attacker:
-    iprintlnbold(local.victim.netname + " was crushed")
+event_player_crushed local.attacker:
+    iprintlnbold(self.netname + " was crushed")
 end
 ```
 
@@ -373,7 +368,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.victim | The crushed player |
 | local.attacker | Entity that crushed them |
 
 **self:** The victim
@@ -387,8 +381,8 @@ main:
     event_subscribe "player_telefragged" event_player_telefragged
 end
 
-event_player_telefragged local.victim local.attacker:
-    iprintlnbold(local.victim.netname + " was telefragged by " + local.attacker.netname)
+event_player_telefragged local.attacker:
+    iprintlnbold(self.netname + " was telefragged by " + local.attacker.netname)
 end
 ```
 
@@ -397,7 +391,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.victim | The telefragged player |
 | local.attacker | Player who telefragged them |
 
 **self:** The victim
@@ -411,8 +404,8 @@ main:
     event_subscribe "player_roadkill" event_player_roadkill
 end
 
-event_player_roadkill local.attacker local.victim:
-    iprintlnbold(local.attacker.netname + " ran over " + local.victim.netname)
+event_player_roadkill local.victim:
+    iprintlnbold(self.netname + " ran over " + local.victim.netname)
 end
 ```
 
@@ -421,7 +414,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.attacker | The driver who got the roadkill |
 | local.victim | The player who was run over |
 
 **self:** The attacker
@@ -435,8 +427,8 @@ main:
     event_subscribe "player_bash" event_player_bash
 end
 
-event_player_bash local.attacker local.victim:
-    iprintlnbold(local.attacker.netname + " bashed " + local.victim.netname)
+event_player_bash local.victim:
+    iprintlnbold(self.netname + " bashed " + local.victim.netname)
 end
 ```
 
@@ -445,7 +437,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.attacker | The player who bashed |
 | local.victim | The player who was bashed |
 
 **self:** The attacker
@@ -459,8 +450,8 @@ main:
     event_subscribe "player_teamkill" event_player_teamkill
 end
 
-event_player_teamkill local.killer local.victim:
-    iprintlnbold(local.killer.netname + " team killed " + local.victim.netname)
+event_player_teamkill local.victim:
+    iprintlnbold(self.netname + " team killed " + local.victim.netname)
 end
 ```
 
@@ -469,7 +460,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.killer | The player who team killed |
 | local.victim | The teammate who was killed |
 
 **self:** The killer
@@ -483,7 +473,7 @@ main:
     event_subscribe "weapon_fire" event_weapon_fire
 end
 
-event_weapon_fire local.owner local.weapon_name local.ammo_remaining:
+event_weapon_fire local.weapon_name local.ammo_remaining:
     // self is the weapon owner
 end
 ```
@@ -493,7 +483,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who fired |
 | local.weapon_name | Name of the weapon |
 | local.ammo_remaining | Ammo left after firing |
 
@@ -508,8 +497,8 @@ main:
     event_subscribe "weapon_hit" event_weapon_hit
 end
 
-event_weapon_hit local.owner local.target local.hit_location_or_type:
-    iprintlnbold(local.owner.netname + " hit " + local.target.netname)
+event_weapon_hit local.target local.hit_location_or_type:
+    iprintlnbold(self.netname + " hit " + local.target.netname)
 end
 ```
 
@@ -518,7 +507,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who fired |
 | local.target | The entity that was hit |
 | local.hit_location_or_type | Hit location or "projectile" for projectile hits |
 
@@ -533,7 +521,7 @@ main:
     event_subscribe "weapon_reload" event_weapon_reload
 end
 
-event_weapon_reload local.owner local.weapon_name:
+event_weapon_reload local.weapon_name:
     // Player started reloading
 end
 ```
@@ -543,7 +531,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player reloading |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -557,7 +544,7 @@ main:
     event_subscribe "weapon_reload_done" event_weapon_reload_done
 end
 
-event_weapon_reload_done local.owner local.weapon_name:
+event_weapon_reload_done local.weapon_name:
     // Reload complete
 end
 ```
@@ -567,7 +554,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who reloaded |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -581,8 +567,8 @@ main:
     event_subscribe "weapon_change" event_weapon_change
 end
 
-event_weapon_change local.owner local.old_weapon local.new_weapon local.client_num:
-    iprintlnbold(local.owner.netname + " switched from " + local.old_weapon + " to " + local.new_weapon)
+event_weapon_change local.old_weapon local.new_weapon local.client_num:
+    iprintlnbold(self.netname + " switched from " + local.old_weapon + " to " + local.new_weapon)
 end
 ```
 
@@ -591,7 +577,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who switched |
 | local.old_weapon | Previous weapon name (or "none") |
 | local.new_weapon | New weapon name |
 | local.client_num | Client number |
@@ -607,7 +592,7 @@ main:
     event_subscribe "weapon_ready" event_weapon_ready
 end
 
-event_weapon_ready local.owner local.weapon_name:
+event_weapon_ready local.weapon_name:
     // Weapon is ready to fire
 end
 ```
@@ -617,7 +602,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -631,8 +615,8 @@ main:
     event_subscribe "weapon_no_ammo" event_weapon_no_ammo
 end
 
-event_weapon_no_ammo local.owner local.weapon_name:
-    iprintlnbold(local.owner.netname + " is out of ammo for " + local.weapon_name)
+event_weapon_no_ammo local.weapon_name:
+    iprintlnbold(self.netname + " is out of ammo for " + local.weapon_name)
 end
 ```
 
@@ -641,7 +625,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -655,7 +638,7 @@ main:
     event_subscribe "weapon_holster" event_weapon_holster
 end
 
-event_weapon_holster local.owner local.weapon_name:
+event_weapon_holster local.weapon_name:
     // Weapon holstered
 end
 ```
@@ -665,7 +648,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -679,7 +661,7 @@ main:
     event_subscribe "weapon_raise" event_weapon_raise
 end
 
-event_weapon_raise local.owner local.weapon_name:
+event_weapon_raise local.weapon_name:
     // Weapon raised
 end
 ```
@@ -689,7 +671,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player |
 | local.weapon_name | Name of the weapon |
 
 **self:** The weapon owner
@@ -703,8 +684,8 @@ main:
     event_subscribe "weapon_drop" event_weapon_drop
 end
 
-event_weapon_drop local.previous_owner local.weapon_entity:
-    iprintlnbold(local.previous_owner.netname + " dropped a weapon")
+event_weapon_drop local.weapon_entity:
+    iprintlnbold(self.netname + " dropped a weapon")
 end
 ```
 
@@ -713,7 +694,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.previous_owner | The player who dropped it |
 | local.weapon_entity | The dropped weapon entity |
 
 **self:** The previous owner
@@ -727,8 +707,8 @@ main:
     event_subscribe "grenade_throw" event_grenade_throw
 end
 
-event_grenade_throw local.owner local.projectile_entity:
-    iprintlnbold(local.owner.netname + " threw a grenade")
+event_grenade_throw local.projectile_entity:
+    iprintlnbold(self.netname + " threw a grenade")
 end
 ```
 
@@ -737,7 +717,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who threw it |
 | local.projectile_entity | The grenade entity |
 
 **self:** The thrower
@@ -751,7 +730,7 @@ main:
     event_subscribe "grenade_explode" event_grenade_explode
 end
 
-event_grenade_explode local.owner local.grenade_entity:
+event_grenade_explode local.grenade_entity:
     // Grenade exploded
 end
 ```
@@ -761,7 +740,6 @@ end
 **Parameters:**
 | Parameter | Description |
 |-----------|-------------|
-| local.owner | The player who threw it |
 | local.grenade_entity | The grenade entity |
 
 **self:** The thrower

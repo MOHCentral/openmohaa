@@ -3425,6 +3425,8 @@ void Player::Pain(Event *ev)
     // HOOK: player_pain
     G_ScriptEvent("player_pain", this, attacker, damage, meansofdeath, iLocation);
 
+    delegate_pain.Execute(ev);
+
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
         pain = damage;

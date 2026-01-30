@@ -401,6 +401,7 @@ void QDECL Com_Error(int level, const char *error, ...)
     va_end(argptr);
 
     G_Error("%s", text);
+    exit(1);
 }
 
 void QDECL Com_Printf(const char *msg, ...)
