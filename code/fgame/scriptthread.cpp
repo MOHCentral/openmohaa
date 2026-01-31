@@ -52,6 +52,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <cstdio>
 
 #ifdef WIN32
 #    include <direct.h>
@@ -2173,6 +2174,15 @@ Event EV_ScriptThread_CurlPost
     "sss",
     "url post_data callback_label",
     "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code).",
+    EV_NORMAL
+);
+Event EV_ScriptThread_HttpCallback
+(
+    "http_callback",
+    EV_DEFAULT,
+    "isi",
+    "success data http_code",
+    "Internal event used to pass HTTP callback parameters to script threads.",
     EV_NORMAL
 );
 #endif
@@ -7633,20 +7643,45 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
 #ifdef USE_HTTP
 void ScriptThread::CurlGet(Event *ev)
 {
-    // Forward to ScriptMaster
+    gi.Printf("ScriptThread::CurlGet: Called\n");
     Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
     newEvent->AddString(ev->GetString(1));
-    newEvent->AddString(ev->GetString(2));
+    newEvent->AddValue(ev->GetValue(2));
+    
+    // Explicitly pass the source script filename
+    ScriptClass *scriptClass = GetScriptClass();
+    if (scriptClass && scriptClass->GetScript()) {
+        const char* fname = scriptClass->GetScript()->Filename();
+        gi.Printf("ScriptThread::CurlGet: Capturing context: '%s'\n", fname);
+        newEvent->AddString(fname);
+    } else {
+        gi.Printf("ScriptThread::CurlGet: No script context found!\n");
+        newEvent->AddString("");
+    }
+    
     Director.ProcessEvent(newEvent);
 }
 
 void ScriptThread::CurlPost(Event *ev)
 {
-    // Forward to ScriptMaster
+    gi.Printf("ScriptThread::CurlPost: Called\n");
     Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
     newEvent->AddString(ev->GetString(1));
     newEvent->AddString(ev->GetString(2));
-    newEvent->AddString(ev->GetString(3));
+    newEvent->AddValue(ev->GetValue(3));
+    
+    // Explicitly pass the source script filename
+    ScriptClass *scriptClass = GetScriptClass();
+    if (scriptClass && scriptClass->GetScript()) {
+
+        const char* fname = scriptClass->GetScript()->Filename();
+        gi.Printf("ScriptThread::CurlPost: Capturing context: '%s'\n", fname);
+        newEvent->AddString(fname);
+    } else {
+        gi.Printf("ScriptThread::CurlPost: No script context found!\n");
+        newEvent->AddString("");
+    }
+    
     Director.ProcessEvent(newEvent);
 }
 #endif

@@ -32,6 +32,7 @@ class Listener;
 class ScriptThread;
 class ScriptVariable;
 class GameScript;
+class ScriptMaster;
 
 typedef struct {
     byte     *codepos;   // code position pointer
@@ -211,6 +212,7 @@ public:
     void Archive(Archiver& arc);
 
     friend bool operator==(const ScriptThreadLabel& a, const ScriptThreadLabel& b);
+    friend class ScriptMaster;
 };
 
 inline bool operator==(const ScriptThreadLabel& a, const ScriptThreadLabel& b)

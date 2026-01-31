@@ -91,7 +91,7 @@ if(BUILD_GAME_LIBRARIES)
     target_compile_definitions( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE GAME_DLL WITH_SCRIPT_ENGINE ARCHIVE_SUPPORTED)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE RecastNavigation::Detour RecastNavigation::DetourCrowd RecastNavigation::Recast)
     target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${COMMON_LIBRARIES})
-    target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${YAML_CPP_LIBRARIES})
+    target_link_libraries(      ${GAME_MODULE_BINARY_BASEGAME} PRIVATE yaml-cpp)
     # target_include_directories( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${YAML_CPP_INCLUDE_DIRS})
     target_include_directories( ${GAME_MODULE_BINARY_BASEGAME} PRIVATE ${CMAKE_SOURCE_DIR}/code/thirdparty/yaml-cpp/include)
 

@@ -33,12 +33,22 @@ if [ -f "$CFG_FILE" ]; then
             echo "----------------------------------------"
             
             # Skip registration, go straight to launch
+            # Skip registration, go straight to launch
             cd "$(dirname "$0")/build"
-            GAME_BIN=$(find . -maxdepth 2 -type f -name "openmohaa*" -executable | head -n 1)
+            GAME_BIN="/home/elgan/dev/openmohaa-central/build/Debug/openmohaa-dbg"
+            
             if [ -n "$GAME_BIN" ]; then
                 clear
                 echo "Launching $GAME_BIN..."
-                gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +exec server.cfg +exec opm_server.cfg "$@"
+                ls -l "$GAME_BIN"
+                
+                # Determine build dir for library path
+                # Force add Debug dir to path since that's where game-dbg.so is
+                BUILD_DIR=$(dirname "$GAME_BIN")
+                export LD_LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/Debug:$LD_LIBRARY_PATH"
+                echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+
+                gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg "$@"
             else
                 echo "Could not find openmohaa executable."
                 exit 1
@@ -106,12 +116,20 @@ echo "----------------------------------------"
 # Find and launch the game
 cd "$(dirname "$0")/build"
 
-GAME_BIN=$(find . -maxdepth 2 -type f -name "openmohaa*" -executable | head -n 1)
+    GAME_BIN="/home/elgan/dev/openmohaa-central/build/Debug/openmohaa-dbg"
 
 if [ -n "$GAME_BIN" ]; then
     clear
     echo "Launching $GAME_BIN..."
-    gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +exec server.cfg +exec opm_server.cfg "$@"
+    ls -l "$GAME_BIN"
+    
+    # Determine build dir for library path
+    # Force add Debug dir to path since that's where game-dbg.so is
+    BUILD_DIR=$(dirname "$GAME_BIN")
+    export LD_LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/Debug:$LD_LIBRARY_PATH"
+    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+
+    gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg "$@"
 else
     echo "Could not find openmohaa executable."
     exit 1

@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptthread.h"
 #include "scriptclass.h"
 #include "gamescript.h"
+#include "scriptvariable.h"
 #include "game.h"
 #include "g_spawn.h"
 #include "object.h"
@@ -38,6 +39,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef USE_HTTP
 #include "curlworker.h"
 #endif
+
+#include <cstdio>
 
 #ifdef WIN32
 #    include <direct.h>
@@ -122,18 +125,18 @@ Event EV_Cache
 
 #ifdef USE_HTTP
 Event EV_ScriptMaster_CurlGet(
-    "curl_get",
+    "sm_curl_get",
     EV_DEFAULT,
-    "ss",
-    "url callback_label",
+    "sVs",
+    "url callback_label source_script",
     "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
 );
 
 Event EV_ScriptMaster_CurlPost(
-    "curl_post",
+    "sm_curl_post",
     EV_DEFAULT,
-    "sss",
-    "url post_data callback_label",
+    "ssVs",
+    "url post_data callback_label source_script",
     "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
 );
 #endif
@@ -607,32 +610,80 @@ void ScriptMaster::Cache(Event *ev)
 #ifdef USE_HTTP
 void ScriptMaster::CurlGet(Event *ev)
 {
+    gi.Printf("ScriptMaster::CurlGet: Called\n");
+
     str url = ev->GetString(1);
     if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        gi.Printf("ScriptMaster::CurlGet: Invalid URL protocol (must be http or https): %s\n", url.c_str());
         return;
     }
 
     CurlTask task;
     task.url = url.c_str();
+    
+    // Get context from event argument
+    if (ev->NumArgs() >= 3) {
+        task.sourceScript = ev->GetString(3).c_str();
+        gi.Printf("ScriptMaster::CurlGet: Context passed in args: '%s'\n", task.sourceScript.c_str());
+    } else {
+        gi.Printf("ScriptMaster::CurlGet: No context in args (NumArgs=%d).\n", ev->NumArgs());
+        if (Director.CurrentThread()) {
+             task.sourceScript = Director.CurrentThread()->FileName();
+             gi.Printf("ScriptMaster::CurlGet: Captured context from Director: '%s' (ThreadPtr=%p)\n", 
+                task.sourceScript.c_str(), Director.CurrentThread());
+        } else {
+             gi.Printf("ScriptMaster::CurlGet: Director.CurrentThread() is NULL.\n");
+        }
+    }
+    
+    // Just get the string label, ExecuteRunning handles :: logic
     task.callbackLabel = ev->GetString(2).c_str();
+
     task.isPost = false;
+    
+    // Debug print
+    gi.Printf("ScriptMaster::CurlGet: FINAL URL='%s' Script='%s' Label='%s'\n", 
+        task.url.c_str(), task.sourceScript.c_str(), task.callbackLabel.c_str());
 
     g_CurlWorker.AddTask(task);
 }
 
 void ScriptMaster::CurlPost(Event *ev)
 {
+    gi.Printf("Curl [post] called\n");
+   
     str url = ev->GetString(1);
     if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
-        gi.DPrintf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        gi.Printf("CurlPost: Invalid URL protocol (must be http or https): %s\n", url.c_str());
         return;
     }
 
     CurlTask task;
     task.url = url.c_str();
     task.postData = ev->GetString(2).c_str();
+
+    // Get context from event argument
+    if (ev->NumArgs() >= 4) {
+        task.sourceScript = ev->GetString(4).c_str();
+        gi.Printf("ScriptMaster::CurlPost: Context passed in args: '%s' (Arg4)\n", task.sourceScript.c_str());
+    } else {
+        gi.Printf("ScriptMaster::CurlPost: No context in args (NumArgs=%d). Expected >= 4.\n", ev->NumArgs());
+        if (Director.CurrentThread()) {
+             task.sourceScript = Director.CurrentThread()->FileName();
+             gi.Printf("ScriptMaster::CurlPost: Captured context from Director: '%s' (ThreadPtr=%p)\n", 
+                task.sourceScript.c_str(), Director.CurrentThread());
+        } else {
+             gi.Printf("ScriptMaster::CurlPost: Director.CurrentThread() is NULL.\n");
+        }
+    }
+    
+    // Just get the string label, ExecuteRunning handles :: logic
     task.callbackLabel = ev->GetString(3).c_str();
+
+    // Debug print
+    gi.Printf("ScriptMaster::CurlPost: FINAL URL='%s' Script='%s' Label='%s'\n", 
+        task.url.c_str(), task.sourceScript.c_str(), task.callbackLabel.c_str());
+
     task.isPost = true;
 
     g_CurlWorker.AddTask(task);
@@ -775,7 +826,7 @@ ScriptThread *ScriptMaster::CreateScriptThread(ScriptClass *scriptClass, const_s
 
     if (!m_pCodePos) {
         throw ScriptException(
-            "ScriptMaster::CreateScriptThread: label '%s' does not exist in '%s'.",
+            "ScriptMaster::CreateScriptThread [DEBUG-CHECK]: label '%s' does not exist in '%s'.",
             Director.GetString(label).c_str(),
             scriptClass->Filename().c_str()
         );
@@ -854,10 +905,9 @@ void ScriptMaster::ExecuteRunning(void)
     CurlResult result;
     while (g_CurlWorker.GetResult(result)) {
         if (!result.callbackLabel.empty()) {
-            GameScript *script = GetScript(level.m_mapscript);
-            // If callbackLabel has '::', split it.
+            str scriptName = result.sourceScript.empty() ? level.m_mapscript : str(result.sourceScript.c_str());
             str label = result.callbackLabel.c_str();
-            str scriptName = level.m_mapscript;
+            GameScript *script = GetScript(scriptName);
 
             const char *p = strstr(label.c_str(), "::");
             if (p) {
@@ -876,7 +926,9 @@ void ScriptMaster::ExecuteRunning(void)
                ScriptThread* thread = CreateThread(script, label);
                if (thread) {
                    // Create an event that holds our data to pass to the script
-                   Event callbackEv(label);
+                   // We use the "http_callback" event which is defined in scriptthread.cpp
+                   // This ensures we have a valid event ID and avoids "Event does not exist" errors.
+                   Event callbackEv("http_callback");
                    callbackEv.AddInteger(result.success);
                    callbackEv.AddString(result.data.c_str());
                    callbackEv.AddInteger(result.httpCode);

@@ -34,12 +34,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 struct CurlTask {
     std::string url;
     std::string postData;
+    std::string sourceScript;
     std::string callbackLabel;
     bool isPost;
 };
 
 struct CurlResult {
     std::string data;
+    std::string sourceScript;
     std::string callbackLabel;
     bool success;
     long httpCode;

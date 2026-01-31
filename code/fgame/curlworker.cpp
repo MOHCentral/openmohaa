@@ -108,6 +108,7 @@ void CurlWorker::WorkLoop() {
             CURLcode res;
             CurlResult result;
             result.callbackLabel = task.callbackLabel;
+            result.sourceScript = task.sourceScript;
             result.success = false;
             result.httpCode = 0;
 
@@ -140,8 +141,7 @@ void CurlWorker::WorkLoop() {
                     result.success = (result.httpCode >= 200 && result.httpCode < 300);
                 } else {
                     result.success = false;
-                    // On error, the data string might contain partial data or be empty.
-                    // We can optionally put the error message in data if we want.
+                    result.data = curl_easy_strerror(res);
                 }
 
                 curl_easy_cleanup(curl);
