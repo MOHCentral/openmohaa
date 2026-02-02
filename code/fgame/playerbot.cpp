@@ -101,6 +101,7 @@ BotController::~BotController()
         controlledEnt->delegate_killed.Remove(delegateHandle_killed);
         controlledEnt->delegate_stufftext.Remove(delegateHandle_stufftext);
         controlledEnt->delegate_spawned.Remove(delegateHandle_spawned);
+        controlledEnt->delegate_pain.Remove(delegateHandle_pain);
     }
 }
 
@@ -1261,37 +1262,6 @@ void BotController::State_Grenade(void)
     }
 }
 
-/*
-====================
-Weapon state
-
-Change weapon when necessary
-====================
-*/
-void BotController::InitState_Weapon(botfunc_t *func)
-{
-    func->CheckCondition = &BotController::CheckCondition_Weapon;
-    func->BeginState     = &BotController::State_BeginWeapon;
-}
-
-bool BotController::CheckCondition_Weapon(void)
-{
-    return controlledEnt->GetActiveWeapon(WEAPON_MAIN)
-        != controlledEnt->BestWeapon(NULL, false, WEAPON_CLASS_THROWABLE);
-}
-
-void BotController::State_BeginWeapon(void)
-{
-    Weapon *weap = controlledEnt->BestWeapon(NULL, false, WEAPON_CLASS_THROWABLE);
-
-    if (weap == NULL) {
-        SendCommand("safeholster 1");
-        return;
-    }
-
-    SendCommand(va("use \"%s\"", weap->model.c_str()));
-}
-
 Weapon *BotController::FindWeaponWithAmmo()
 {
     Weapon               *next;
@@ -1389,8 +1359,8 @@ void BotController::InitState_Tactical(botfunc_t *func)
 
 bool BotController::CheckCondition_Tactical(void)
 {
-    // Active when we have an enemy or recently had one
-    return m_pEnemy != NULL || level.inttime < m_iAttackTime + 5000;
+    // Active when we have an enemy or recently had one (but not at level start)
+    return m_pEnemy != NULL || (m_iAttackTime != 0 && level.inttime < m_iAttackTime + 5000);
 }
 
 void BotController::State_BeginTactical(void)
@@ -1551,13 +1521,37 @@ void BotController::Pain(Event *ev)
 {
     Entity *attacker = ev->GetEntity(1);
     if (attacker && attacker->isSubclassOf(Sentient) && attacker != controlledEnt) {
-        // Immediate reaction: turn towards attacker if they are closer than current enemy or we have no enemy
-        if (!m_pEnemy || (attacker->origin - controlledEnt->origin).lengthSquared() < (m_pEnemy->origin - controlledEnt->origin).lengthSquared()) {
-            gi.Printf("Bot %s reacting to damage from %s\n", controlledEnt->client->pers.netname, attacker->client ? attacker->client->pers.netname : attacker->getClassname());
-            m_pEnemy = (Sentient *)attacker;
-            rotation.TurnTowards(attacker->origin);
-            m_iAttackTime = level.inttime;
+        // React to being hit: always turn toward attacker first
+        Sentient *sentAttacker = static_cast<Sentient *>(attacker);
+        
+        // Check if we should switch focus to this attacker
+        bool shouldSwitchTarget = !m_pEnemy;
+        if (!shouldSwitchTarget && m_pEnemy) {
+            // Switch if new attacker is closer than current enemy
+            float newDistSq = (attacker->origin - controlledEnt->origin).lengthSquared();
+            float oldDistSq = (m_pEnemy->origin - controlledEnt->origin).lengthSquared();
+            shouldSwitchTarget = (newDistSq < oldDistSq * 0.8f); // Only switch if significantly closer
         }
+        
+        if (shouldSwitchTarget) {
+            m_pEnemy = sentAttacker;
+            m_iEnemyEyesTag = -1;
+        }
+        
+        // Always turn toward attacker when hit (even if not switching target)
+        rotation.TurnTowards(attacker->origin);
+        
+        // Store attacker position so we can hunt them down
+        m_vLastEnemyPos = attacker->origin;
+        
+        // Keep attack state active for 5 seconds after being shot
+        // This keeps us hunting even if we lose sight briefly
+        m_iAttackTime = level.inttime + 5000;
+        
+        // Also activate curious mode toward the attacker position
+        // in case we lose them - we'll investigate their last known position
+        m_iCuriousTime = level.inttime + 10000;
+        m_vNewCuriousPos = attacker->origin;
     }
 }
 

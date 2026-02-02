@@ -1157,6 +1157,12 @@ void BotTactics::Update(usercmd_t* cmd)
 
     BTContext ctx(m_controller, cmd);
     m_root->Tick(ctx);
+    
+    // Combat leaning - apply after behavior tree so it doesn't conflict
+    // Only lean when we have an enemy
+    if (m_controller->GetEnemy()) {
+        ApplyCombatLean(cmd);
+    }
 }
 
 void BotTactics::UpdatePrediction()
@@ -2985,5 +2991,182 @@ void BotTactics::ClearOldSounds()
     if (m_isInvestigatingSound && 
         level.inttime - m_investigatingSound.heardTime > SOUND_MEMORY_DURATION) {
         m_isInvestigatingSound = false;
+    }
+}
+
+/*
+===============
+HasWallToSide
+
+Checks if there's a wall within maxDist to the left or right of the bot.
+Returns true if wall found, and sets outDist to actual distance.
+===============
+*/
+bool BotTactics::HasWallToSide(bool checkRight, float maxDist, float& outDist) const
+{
+    Player* self = m_controller->getControlledEntity();
+    if (!self) return false;
+    
+    Vector forward, right, up;
+    self->angles.AngleVectors(&forward, &right, &up);
+    
+    // Check side direction
+    Vector sideDir = checkRight ? right : (right * -1.0f);
+    
+    Vector start = self->origin + Vector(0, 0, self->viewheight * 0.5f);
+    Vector end = start + sideDir * maxDist;
+    
+    trace_t trace = G_Trace(start, vec_zero, vec_zero, end, self, MASK_SOLID, false, "HasWallToSide");
+    
+    if (trace.fraction < 1.0f) {
+        outDist = trace.fraction * maxDist;
+        return true;
+    }
+    
+    outDist = maxDist;
+    return false;
+}
+
+/*
+===============
+CanSeeAroundWall
+
+Checks if leaning in a direction would allow seeing the target.
+Used to determine if leaning would be beneficial.
+===============
+*/
+bool BotTactics::CanSeeAroundWall(bool leanRight, const Vector& targetPos) const
+{
+    Player* self = m_controller->getControlledEntity();
+    if (!self) return false;
+    
+    Vector forward, right, up;
+    self->angles.AngleVectors(&forward, &right, &up);
+    
+    // Simulate lean offset (about 16 units sideways, typical lean amount)
+    float leanOffset = 16.0f;
+    Vector leanDir = leanRight ? right : (right * -1.0f);
+    
+    Vector leanedEyePos = self->origin + Vector(0, 0, self->viewheight) + leanDir * leanOffset;
+    
+    // Check if we can see target from leaned position
+    trace_t trace = G_Trace(leanedEyePos, vec_zero, vec_zero, targetPos, self, MASK_OPAQUE, false, "CanSeeAroundWall");
+    
+    return (trace.fraction >= 0.95f);
+}
+
+/*
+===============
+GetCombatLeanDirection
+
+Determines ideal lean direction during combat based on:
+1. Wall proximity - lean away from nearby walls
+2. Enemy position - lean to expose minimum profile while maintaining sight
+3. Corner detection - lean around corners to peek
+
+Returns PEEK_NONE if leaning is not beneficial.
+===============
+*/
+PeekDirection BotTactics::GetCombatLeanDirection() const
+{
+    Player* self = m_controller->getControlledEntity();
+    Sentient* enemy = m_controller->GetEnemy();
+    
+    if (!self || !enemy) return PEEK_NONE;
+    
+    // Only lean if stationary or moving slowly (leaning while running looks bad)
+    if (self->velocity.lengthSquared() > 100.0f * 100.0f) {
+        return PEEK_NONE;
+    }
+    
+    float leftDist = 0, rightDist = 0;
+    bool hasWallLeft = HasWallToSide(false, 64.0f, leftDist);
+    bool hasWallRight = HasWallToSide(true, 64.0f, rightDist);
+    
+    // If we have a wall on one side, lean toward it (use it as cover)
+    // This exposes less body while still being able to shoot
+    if (hasWallLeft && !hasWallRight && leftDist < 48.0f) {
+        // Wall on left - lean left to use it as cover
+        if (CanSeeAroundWall(false, enemy->origin)) {
+            return PEEK_LEFT;
+        }
+    }
+    
+    if (hasWallRight && !hasWallLeft && rightDist < 48.0f) {
+        // Wall on right - lean right to use it as cover
+        if (CanSeeAroundWall(true, enemy->origin)) {
+            return PEEK_RIGHT;
+        }
+    }
+    
+    // Corner detection: Check if we're at a corner and should lean to peek
+    // This is when wall is close on one side and we can see enemy by leaning other way
+    if (hasWallLeft && leftDist < 32.0f) {
+        if (!CanSeeAroundWall(false, enemy->origin) && CanSeeAroundWall(true, enemy->origin)) {
+            return PEEK_RIGHT;
+        }
+    }
+    
+    if (hasWallRight && rightDist < 32.0f) {
+        if (!CanSeeAroundWall(true, enemy->origin) && CanSeeAroundWall(false, enemy->origin)) {
+            return PEEK_LEFT;
+        }
+    }
+    
+    // Skill-based random lean for dodging (higher skill = more likely to lean during combat)
+    float skill = GetSkillLevel();
+    if (skill > 0.5f && (rand() % 1000) < (int)(skill * 30)) {
+        // Random tactical lean to reduce profile
+        return (rand() % 2 == 0) ? PEEK_LEFT : PEEK_RIGHT;
+    }
+    
+    return PEEK_NONE;
+}
+
+/*
+===============
+ApplyCombatLean
+
+Applies lean buttons during combat based on tactical situation.
+Should be called from Update() when in combat.
+===============
+*/
+void BotTactics::ApplyCombatLean(usercmd_t* cmd)
+{
+    if (!cmd) return;
+    
+    // Don't apply combat lean if already in cover peeking (behavior tree handles that)
+    if (m_inCover && m_currentPeek != PEEK_NONE) {
+        return;
+    }
+    
+    // Check for combat lean opportunity
+    PeekDirection leanDir = GetCombatLeanDirection();
+    
+    // Apply lean with more stability to avoid flickering
+    // Only change lean direction every 500ms minimum
+    static int lastLeanChangeTime = 0;
+    static PeekDirection lastLeanDir = PEEK_NONE;
+    
+    if (level.inttime - lastLeanChangeTime > 500 || leanDir == lastLeanDir) {
+        if (leanDir != lastLeanDir) {
+            lastLeanDir = leanDir;
+            lastLeanChangeTime = level.inttime;
+        }
+        
+        switch (leanDir) {
+            case PEEK_LEFT:
+                cmd->buttons |= BUTTON_LEAN_LEFT;
+                cmd->buttons &= ~BUTTON_LEAN_RIGHT;
+                break;
+            case PEEK_RIGHT:
+                cmd->buttons |= BUTTON_LEAN_RIGHT;
+                cmd->buttons &= ~BUTTON_LEAN_LEFT;
+                break;
+            default:
+                // Clear lean buttons if not leaning
+                cmd->buttons &= ~(BUTTON_LEAN_LEFT | BUTTON_LEAN_RIGHT);
+                break;
+        }
     }
 }

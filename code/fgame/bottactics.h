@@ -234,6 +234,10 @@ public:
     TacticalSpot FindCoverTowardSound(const Vector& soundPos) const;
     void ClearOldSounds();
     
+    // Combat leaning - detect walls and lean appropriately during combat
+    PeekDirection GetCombatLeanDirection() const;
+    void ApplyCombatLean(usercmd_t* cmd);
+    
     // Cover-to-cover movement (public for State_Curious access)
     bool AdvanceThroughCover(const Vector& destination);
 
@@ -247,6 +251,10 @@ private:
     Vector FindFlankPos(const Vector& selfPos, const Vector& enemyPos);
     Player* FindLeader();
     void ScanProjectiles();
+    
+    // Wall proximity detection for leaning
+    bool HasWallToSide(bool checkRight, float maxDist, float& outDist) const;
+    bool CanSeeAroundWall(bool leanRight, const Vector& targetPos) const;
     
     // Grenade trajectory helpers (adapted from Actor)
     static Vector CalcThrowVelocity(const Vector& vFrom, const Vector& vTo);

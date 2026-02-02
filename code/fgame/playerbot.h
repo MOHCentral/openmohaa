@@ -252,12 +252,6 @@ private:
     float       m_fGrenadeDanger;
     int         m_iGrenadeFleeStartTime;
 
-    static void InitState_Weapon(botfunc_t *func);
-    bool        CheckCondition_Weapon(void);
-    void        State_BeginWeapon(void);
-    void        State_EndWeapon(void);
-    void        State_Weapon(void);
-
     static void InitState_Tactical(botfunc_t *func);
     bool        CheckCondition_Tactical(void);
     void        State_BeginTactical(void);
