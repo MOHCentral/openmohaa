@@ -321,6 +321,14 @@ extern cvar_t *g_bot_instamsg_delay;
  */
 extern cvar_t *g_bot_initial_spawn_delay;
 
+/**
+ * @brief Overall bot skill level (0.0-1.0).
+ * Affects reaction time, accuracy, tactical decisions, and grenade usage.
+ * 0.0 = easiest (slow reactions, poor aim)
+ * 1.0 = hardest (fast reactions, good aim)
+ */
+extern cvar_t *g_bot_skill;
+
 extern cvar_t *g_rankedserver;
 extern cvar_t *g_spectatefollow_firstperson;
 

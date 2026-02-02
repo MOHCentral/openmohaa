@@ -171,6 +171,7 @@ private:
 
     // States
     int    m_iCuriousTime;
+    int    m_iCuriousEventType;  // AI_EVENT_* type we're investigating
     int    m_iAttackTime;
     int    m_iAttackStopAimTime;
     int    m_iLastBurstTime;
@@ -245,6 +246,11 @@ private:
     void        State_BeginGrenade(void);
     void        State_EndGrenade(void);
     void        State_Grenade(void);
+    
+    // Grenade state variables
+    Vector      m_vGrenadeFleeDir;
+    float       m_fGrenadeDanger;
+    int         m_iGrenadeFleeStartTime;
 
     static void InitState_Weapon(botfunc_t *func);
     bool        CheckCondition_Weapon(void);
@@ -257,6 +263,10 @@ private:
     void        State_BeginTactical(void);
     void        State_EndTactical(void);
     void        State_Tactical(void);
+    
+    // Tactical state variables  
+    int         m_iTacticalStateTime;
+    int         m_iTacticalMode;  // 0=balanced, 1=defensive, 2=aggressive
 
     void CheckStates(void);
 
