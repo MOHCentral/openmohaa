@@ -507,9 +507,22 @@ void BotTactics::BuildTree()
             bool targetInRoom = IsTargetInRoom(enemy->origin);
             bool selfInRoom = IsSelfInRoom(enemy->origin);
             
-            // Only throw if target is in room and we're safely outside
-            if (targetInRoom && !selfInRoom && decision.distanceToTarget > 250.0f) {
+            // Only throw if target is in room, we're safely outside, AND at safe distance
+            // Increased distance requirement to prevent indoor self-kills
+            if (targetInRoom && !selfInRoom && decision.distanceToTarget > GRENADE_BLAST_RADIUS + 150.0f) {
                 validGrenadeUse = true;
+            }
+        }
+        
+        // ADDITIONAL SAFETY: Never throw if we're in the same enclosed space
+        // Check if bot and target share the same room/area
+        if (validGrenadeUse) {
+            bool selfInAnyRoom = IsTargetInRoom(self->origin); // Check if bot is indoors
+            bool targetInRoom = IsTargetInRoom(enemy->origin);
+            
+            // If both bot and target are indoors and close, don't throw
+            if (selfInAnyRoom && targetInRoom && decision.distanceToTarget < 600.0f) {
+                validGrenadeUse = false;
             }
         }
         
@@ -821,6 +834,13 @@ void BotTactics::BuildTree()
                  Player* self = m_controller->getControlledEntity();
                  if (!self) return BT_FAILURE;
                  
+                 // Don't suppress with explosive weapons - too dangerous
+                 Weapon* activeWeapon = self->GetActiveWeapon(WEAPON_MAIN);
+                 if (activeWeapon && (activeWeapon->GetWeaponClass() & WEAPON_CLASS_HEAVY)) {
+                     m_isSuppressing = false;
+                     return BT_FAILURE;
+                 }
+                 
                  // Look at suppression target
                  m_controller->GetRotation().AimAt(m_suppressionPos);
                  
@@ -844,6 +864,39 @@ void BotTactics::BuildTree()
 
         Player* self = m_controller->getControlledEntity();
         if (!self) return BT_FAILURE;
+        
+        // EXPLOSIVE WEAPON SAFETY: Don't fire bazooka/rockets at close range
+        Weapon* activeWeapon = self->GetActiveWeapon(WEAPON_MAIN);
+        if (activeWeapon) {
+            int weaponClass = activeWeapon->GetWeaponClass();
+            
+            // Check if this is an explosive weapon (heavy weapons like bazooka)
+            if (weaponClass & WEAPON_CLASS_HEAVY) {
+                float distToEnemy = (enemy->origin - self->origin).length();
+                
+                // Don't fire rockets if enemy is too close - would kill self
+                if (distToEnemy < EXPLOSIVE_WEAPON_MIN_DIST) {
+                    // Try to switch to a safer weapon instead
+                    Weapon* safeWeapon = self->BestWeapon(activeWeapon, true, WEAPON_CLASS_PISTOL | WEAPON_CLASS_RIFLE | WEAPON_CLASS_SMG);
+                    if (safeWeapon && safeWeapon != activeWeapon) {
+                        self->useWeapon(safeWeapon, WEAPON_MAIN);
+                    }
+                    // Don't fire this frame - let weapon switch happen
+                    return BT_SUCCESS;
+                }
+                
+                // Also check if there's a wall between us and enemy that rocket would hit
+                trace_t trace = G_Trace(self->origin + Vector(0,0,self->viewheight), 
+                                        vec_zero, vec_zero, enemy->origin, self, MASK_SHOT, false, "ExplosiveCheck");
+                if (trace.fraction < 0.9f) {
+                    float hitDist = (Vector(trace.endpos) - self->origin).length();
+                    if (hitDist < EXPLOSIVE_WEAPON_MIN_DIST) {
+                        // Rocket would hit wall too close to us
+                        return BT_SUCCESS; // Skip firing
+                    }
+                }
+            }
+        }
 
         int currentTime = level.inttime;
         
@@ -1692,6 +1745,13 @@ GrenadeDecision BotTactics::EvaluateGrenadeThrow(const Vector& targetPos)
     // Distance checks
     if (decision.distanceToTarget < GRENADE_MIN_THROW_DIST) {
         // Too close - would hurt self
+        return decision;
+    }
+    
+    // CRITICAL SAFETY: Check if BOT would be in blast radius of the target
+    // This prevents throwing grenades while standing in the kill zone
+    if (decision.distanceToTarget < GRENADE_BLAST_RADIUS + GRENADE_SELF_SAFE_DIST) {
+        // Bot is too close to where grenade will land - would hurt self
         return decision;
     }
     if (decision.distanceToTarget > GRENADE_MAX_THROW_DIST) {

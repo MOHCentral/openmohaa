@@ -153,8 +153,10 @@ public:
 
 // Constants for grenade logic
 static const float GRENADE_BLAST_RADIUS = 256.0f;
-static const float GRENADE_MIN_THROW_DIST = 400.0f;  // Don't throw closer than this
-static const float GRENADE_MAX_THROW_DIST = 1200.0f; // Max effective throw distance
+static const float GRENADE_MIN_THROW_DIST = 1000.0f;  // Don't throw closer than this (doubled for safety)
+static const float GRENADE_SELF_SAFE_DIST = 700.0f;   // Bot must be this far from target to throw (doubled)
+static const float EXPLOSIVE_WEAPON_MIN_DIST = 400.0f;  // Minimum distance for bazooka/rockets
+static const float GRENADE_MAX_THROW_DIST = 1500.0f; // Max effective throw distance
 static const float GRENADE_CLUSTER_RADIUS = 300.0f;  // Enemies within this count as cluster
 static const int   GRENADE_COOLDOWN_MS = 8000;       // 8 seconds between throws
 static const float GRENADE_GRAVITY_MULT = 0.8f;      // Grenade gravity multiplier

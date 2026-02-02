@@ -171,12 +171,17 @@ Bots have an advanced tactical AI system that makes them behave more like real s
 
 ### Grenade usage
 
-Bots use grenades tactically:
+Bots use grenades tactically with strict safety rules:
 
 - **Cluster targets**: Only throw grenades when 2+ enemies are grouped together
 - **Room clearing**: Throw grenades into rooms where enemies are hiding (bot must be safely outside)
 - **Smoke grenades**: Use smoke for cover when flanking or advancing across open ground
 - **Grenade avoidance**: Flee from incoming grenades when detected
+- **Self-harm prevention**:
+  - Minimum throw distance of 1000 units
+  - Bot must be at least 700 units beyond blast radius
+  - Won't throw if bot and enemy are both indoors and close (< 600 units)
+  - Won't throw if standing in the same room as the target
 
 ### Squad coordination
 
@@ -215,6 +220,15 @@ Bots adjust their preferred combat distance based on their equipped weapon:
 - **SMGs** (Thompson, MP40, etc.): Prefer 400 units, will actively close distance to enemy
 - **Machine guns**: Prefer 500 units
 - **Pistols**: Prefer 300 units
+
+### Explosive weapon safety
+
+Bots with explosive weapons (bazookas, panzerschrecks) have additional safety logic:
+
+- **Minimum firing distance**: Won't fire rockets if enemy is within 400 units
+- **Wall detection**: Checks if a wall is too close in the line of fire to prevent splash damage
+- **Weapon switching**: If enemy is too close, bot will switch to pistol/rifle/SMG instead
+- **Suppression disabled**: Bots won't use explosive weapons for suppressive fire
 
 ### Pickup awareness
 
