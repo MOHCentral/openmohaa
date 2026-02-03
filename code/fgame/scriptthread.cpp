@@ -46,6 +46,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "slre.h"
 
+#ifdef USE_HTTP
+#include <curl/curl.h>
+#endif
+
 #include "md5.h"
 #include "../qcommon/crypto/picosha2.h"
 
@@ -2162,18 +2166,51 @@ Event EV_ScriptThread_CurlGet
 (
     "curl_get",
     EV_DEFAULT,
-    "ss",
-    "url callback_label",
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code).",
+    NULL,
+    NULL,
+    "Performs an HTTP GET request asynchronously.\n"
+    "Usage: curl_get url headers callback\n"
+    "Example: curl_get \"http://site.com\" (makearray \"Key\" \"Value\") \"callback\"",
     EV_NORMAL
 );
 Event EV_ScriptThread_CurlPost
 (
     "curl_post",
     EV_DEFAULT,
-    "sss",
-    "url post_data callback_label",
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code).",
+    NULL,
+    NULL,
+    "Performs an HTTP POST request asynchronously.\n"
+    "Usage: curl_post url headers data callback\n"
+    "Example: curl_post \"http://site.com\" (makearray \"Content-Type\" \"application/json\") \"{'a':1}\" \"callback\"",
+    EV_NORMAL
+);
+Event EV_ScriptThread_CurlCustom
+(
+    "curl_custom",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP custom request asynchronously.\n"
+    "Usage: curl_custom method url headers data callback\n"
+    "Example: curl_custom \"PUT\" \"http://site.com\" (makearray \"Key\" \"Value\") \"data\" \"callback\"",
+    EV_NORMAL
+);
+Event EV_ScriptThread_NetUrlEncode
+(
+    "net_url_encode",
+    EV_DEFAULT,
+    "s",
+    "string",
+    "Encodes a string for URL usage.",
+    EV_RETURN
+);
+Event EV_ScriptThread_CurlSetTimeout
+(
+    "curl_set_timeout",
+    EV_DEFAULT,
+    "i",
+    "timeout",
+    "Sets the timeout for curl requests in seconds.",
     EV_NORMAL
 );
 Event EV_ScriptThread_HttpCallback
@@ -2428,6 +2465,9 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
 #ifdef USE_HTTP
     {&EV_ScriptThread_CurlGet,                 &ScriptThread::CurlGet                 },
     {&EV_ScriptThread_CurlPost,                &ScriptThread::CurlPost                },
+    {&EV_ScriptThread_CurlCustom,              &ScriptThread::CurlCustom              },
+    {&EV_ScriptThread_NetUrlEncode,            &ScriptThread::NetUrlEncode            },
+    {&EV_ScriptThread_CurlSetTimeout,          &ScriptThread::CurlSetTimeout          },
 #endif
     {NULL,                                     NULL                                   }
 };
@@ -7653,13 +7693,27 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
 }
 
 #ifdef USE_HTTP
+static int s_curlTimeout = 30;
+
 void ScriptThread::CurlGet(Event *ev)
 {
     gi.Printf("ScriptThread::CurlGet: Called\n");
+
+    if (ev->NumArgs() < 3) {
+        throw ScriptException("Usage: curl_get url headers callback");
+    }
+
+    str url = ev->GetString(1);
+
     Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
-    newEvent->AddString(ev->GetString(1));
+    newEvent->AddString(url);
+
+    // Headers
     newEvent->AddValue(ev->GetValue(2));
     
+    // Callback
+    newEvent->AddString(ev->GetString(3));
+
     // Explicitly pass the source script filename
     ScriptClass *scriptClass = GetScriptClass();
     if (scriptClass && scriptClass->GetScript()) {
@@ -7671,16 +7725,30 @@ void ScriptThread::CurlGet(Event *ev)
         newEvent->AddString("");
     }
     
+    newEvent->AddInteger(s_curlTimeout);
+
     Director.ProcessEvent(newEvent);
 }
 
 void ScriptThread::CurlPost(Event *ev)
 {
     gi.Printf("ScriptThread::CurlPost: Called\n");
+
+    if (ev->NumArgs() < 4) {
+        throw ScriptException("Usage: curl_post url headers data callback");
+    }
+
+    str url = ev->GetString(1);
+
     Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
-    newEvent->AddString(ev->GetString(1));
-    newEvent->AddString(ev->GetString(2));
-    newEvent->AddValue(ev->GetValue(3));
+    newEvent->AddString(url);
+
+    // post_data
+    newEvent->AddString(ev->GetString(3));
+    // headers
+    newEvent->AddValue(ev->GetValue(2));
+    // callback
+    newEvent->AddString(ev->GetString(4));
     
     // Explicitly pass the source script filename
     ScriptClass *scriptClass = GetScriptClass();
@@ -7694,7 +7762,60 @@ void ScriptThread::CurlPost(Event *ev)
         newEvent->AddString("");
     }
     
+    newEvent->AddInteger(s_curlTimeout);
+
     Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::CurlCustom(Event *ev)
+{
+    gi.Printf("ScriptThread::CurlCustom: Called\n");
+
+    if (ev->NumArgs() != 5) {
+        throw ScriptException("Usage: curl_custom method url headers data callback");
+    }
+
+    Event *newEvent = new Event(EV_ScriptMaster_CurlCustom);
+    newEvent->AddString(ev->GetString(1)); // method
+    newEvent->AddString(ev->GetString(2)); // url
+    newEvent->AddValue(ev->GetValue(3));   // headers
+    newEvent->AddString(ev->GetString(4)); // data
+    newEvent->AddString(ev->GetString(5)); // callback
+
+    ScriptClass *scriptClass = GetScriptClass();
+    if (scriptClass && scriptClass->GetScript()) {
+        newEvent->AddString(scriptClass->GetScript()->Filename());
+    } else {
+        newEvent->AddString("");
+    }
+
+    newEvent->AddInteger(s_curlTimeout);
+
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::NetUrlEncode(Event *ev)
+{
+    str in = ev->GetString(1);
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        char *output = curl_easy_escape(curl, in.c_str(), in.length());
+        if (output) {
+            ev->AddString(output);
+            curl_free(output);
+        } else {
+            ev->AddString("");
+        }
+        curl_easy_cleanup(curl);
+    } else {
+        ev->AddString("");
+    }
+}
+
+void ScriptThread::CurlSetTimeout(Event *ev)
+{
+    s_curlTimeout = ev->GetInteger(1);
+    if (s_curlTimeout < 1) s_curlTimeout = 1;
 }
 #endif
 

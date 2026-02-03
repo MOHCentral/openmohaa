@@ -127,17 +127,25 @@ Event EV_Cache
 Event EV_ScriptMaster_CurlGet(
     "sm_curl_get",
     EV_DEFAULT,
-    "sVs",
-    "url callback_label source_script",
+    "sVssi",
+    "url headers callback_label source_script timeout",
     "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
 );
 
 Event EV_ScriptMaster_CurlPost(
     "sm_curl_post",
     EV_DEFAULT,
-    "ssVs",
-    "url post_data callback_label source_script",
+    "ssVssi",
+    "url post_data headers callback_label source_script timeout",
     "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
+);
+
+Event EV_ScriptMaster_CurlCustom(
+    "sm_curl_custom",
+    EV_DEFAULT,
+    "ssVsssi",
+    "method url headers post_data callback_label source_script timeout",
+    "Performs an HTTP custom request asynchronously and calls the label with the result (success, data, http_code)."
 );
 #endif
 
@@ -148,6 +156,7 @@ CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
 #ifdef USE_HTTP
     {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
     {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
+    {&EV_ScriptMaster_CurlCustom, &ScriptMaster::CurlCustom         },
 #endif
     {NULL,                      NULL                                }
 };
@@ -608,6 +617,27 @@ void ScriptMaster::Cache(Event *ev)
 }
 
 #ifdef USE_HTTP
+
+static void ExtractHeaders(Event *ev, int argIndex, std::vector<std::string>& headers) {
+    if (ev->NumArgs() >= argIndex && !ev->IsNilAt(argIndex)) {
+        ScriptVariable& var = ev->GetValue(argIndex);
+        if (var.GetType() == VARIABLE_ARRAY || var.GetType() == VARIABLE_CONSTARRAY) {
+             var.CastConstArrayValue();
+             int size = var.arraysize();
+             for (int i = 1; i <= size; i += 2) {
+                 std::string key = var[i]->stringValue();
+                 std::string value;
+                 if (i + 1 <= size) {
+                     value = var[i + 1]->stringValue();
+                 }
+                 if (!key.empty()) {
+                     headers.push_back(key + ": " + value);
+                 }
+             }
+        }
+    }
+}
+
 void ScriptMaster::CurlGet(Event *ev)
 {
     gi.Printf("ScriptMaster::CurlGet: Called\n");
@@ -621,30 +651,25 @@ void ScriptMaster::CurlGet(Event *ev)
     CurlTask task;
     task.url = url.c_str();
     
+    ExtractHeaders(ev, 2, task.headers);
+
+    task.callbackLabel = ev->GetString(3).c_str();
+
     // Get context from event argument
-    if (ev->NumArgs() >= 3) {
-        task.sourceScript = ev->GetString(3).c_str();
-        gi.Printf("ScriptMaster::CurlGet: Context passed in args: '%s'\n", task.sourceScript.c_str());
+    if (ev->NumArgs() >= 4) {
+        task.sourceScript = ev->GetString(4).c_str();
     } else {
-        gi.Printf("ScriptMaster::CurlGet: No context in args (NumArgs=%d).\n", ev->NumArgs());
         if (Director.CurrentThread()) {
              task.sourceScript = Director.CurrentThread()->FileName();
-             gi.Printf("ScriptMaster::CurlGet: Captured context from Director: '%s' (ThreadPtr=%p)\n", 
-                task.sourceScript.c_str(), Director.CurrentThread());
-        } else {
-             gi.Printf("ScriptMaster::CurlGet: Director.CurrentThread() is NULL.\n");
         }
     }
     
-    // Just get the string label, ExecuteRunning handles :: logic
-    task.callbackLabel = ev->GetString(2).c_str();
+    if (ev->NumArgs() >= 5) {
+        task.timeout = ev->GetInteger(5);
+    }
 
     task.isPost = false;
     
-    // Debug print
-    gi.Printf("ScriptMaster::CurlGet: FINAL URL='%s' Script='%s' Label='%s'\n", 
-        task.url.c_str(), task.sourceScript.c_str(), task.callbackLabel.c_str());
-
     g_CurlWorker.AddTask(task);
 }
 
@@ -662,29 +687,65 @@ void ScriptMaster::CurlPost(Event *ev)
     task.url = url.c_str();
     task.postData = ev->GetString(2).c_str();
 
+    ExtractHeaders(ev, 3, task.headers);
+
+    task.callbackLabel = ev->GetString(4).c_str();
+
     // Get context from event argument
-    if (ev->NumArgs() >= 4) {
-        task.sourceScript = ev->GetString(4).c_str();
-        gi.Printf("ScriptMaster::CurlPost: Context passed in args: '%s' (Arg4)\n", task.sourceScript.c_str());
+    if (ev->NumArgs() >= 5) {
+        task.sourceScript = ev->GetString(5).c_str();
     } else {
-        gi.Printf("ScriptMaster::CurlPost: No context in args (NumArgs=%d). Expected >= 4.\n", ev->NumArgs());
         if (Director.CurrentThread()) {
              task.sourceScript = Director.CurrentThread()->FileName();
-             gi.Printf("ScriptMaster::CurlPost: Captured context from Director: '%s' (ThreadPtr=%p)\n", 
-                task.sourceScript.c_str(), Director.CurrentThread());
-        } else {
-             gi.Printf("ScriptMaster::CurlPost: Director.CurrentThread() is NULL.\n");
         }
     }
     
-    // Just get the string label, ExecuteRunning handles :: logic
-    task.callbackLabel = ev->GetString(3).c_str();
-
-    // Debug print
-    gi.Printf("ScriptMaster::CurlPost: FINAL URL='%s' Script='%s' Label='%s'\n", 
-        task.url.c_str(), task.sourceScript.c_str(), task.callbackLabel.c_str());
+    if (ev->NumArgs() >= 6) {
+        task.timeout = ev->GetInteger(6);
+    }
 
     task.isPost = true;
+
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptMaster::CurlCustom(Event *ev)
+{
+    gi.Printf("Curl [custom] called\n");
+
+    str method = ev->GetString(1);
+    str url = ev->GetString(2);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        gi.Printf("CurlCustom: Invalid URL protocol (must be http or https): %s\n", url.c_str());
+        return;
+    }
+
+    CurlTask task;
+    task.customMethod = method.c_str();
+    task.url = url.c_str();
+
+    ExtractHeaders(ev, 3, task.headers);
+
+    task.postData = ev->GetString(4).c_str();
+    task.callbackLabel = ev->GetString(5).c_str();
+
+    // Get context from event argument
+    if (ev->NumArgs() >= 6) {
+        task.sourceScript = ev->GetString(6).c_str();
+    } else {
+        if (Director.CurrentThread()) {
+             task.sourceScript = Director.CurrentThread()->FileName();
+        }
+    }
+
+    if (ev->NumArgs() >= 7) {
+        task.timeout = ev->GetInteger(7);
+    }
+
+    // curl_post and curl_get set isPost automatically, but for custom, we rely on customMethod.
+    // However, if postData is present, libcurl might default to POST if we don't handle it carefully.
+    // In CurlWorker, we set CUSTOMREQUEST.
+    task.isPost = false; // We rely on postData presence in CurlWorker for custom methods
 
     g_CurlWorker.AddTask(task);
 }
