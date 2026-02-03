@@ -92,6 +92,7 @@ protected:
 #ifdef USE_HTTP
     void        CurlGet(Event *ev);
     void        CurlPost(Event *ev);
+    void        CurlCustom(Event *ev);
 #endif
 
 public:
