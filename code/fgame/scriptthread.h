@@ -363,6 +363,9 @@ public:
 #ifdef USE_HTTP
     void CurlGet(Event *ev);
     void CurlPost(Event *ev);
+    void CurlCustom(Event *ev);
+    void NetUrlEncode(Event *ev);
+    void CurlSetTimeout(Event *ev);
 #endif
 };
 

@@ -127,14 +127,37 @@ void CurlWorker::WorkLoop() {
                 curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
                 curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
 
+                // Timeout override
+                if (task.timeout > 0) {
+                    curl_easy_setopt(curl, CURLOPT_TIMEOUT, task.timeout);
+                }
+
+                // Headers
+                struct curl_slist *chunk = NULL;
+                for(const auto& header : task.headers) {
+                    chunk = curl_slist_append(chunk, header.c_str());
+                }
+                if (chunk) {
+                    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+                }
+
                 // Follow redirects
                 curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 
-                if (task.isPost) {
+                // Custom method
+                if (!task.customMethod.empty()) {
+                     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, task.customMethod.c_str());
+                }
+
+                if (task.isPost || !task.postData.empty()) {
                     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, task.postData.c_str());
                 }
 
                 res = curl_easy_perform(curl);
+
+                if (chunk) {
+                    curl_slist_free_all(chunk);
+                }
 
                 if (res == CURLE_OK) {
                     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);

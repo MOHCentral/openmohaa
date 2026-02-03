@@ -29,6 +29,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <atomic>
 #include <queue>
 #include <string>
+#include <vector>
 #include <curl/curl.h>
 
 struct CurlTask {
@@ -37,6 +38,9 @@ struct CurlTask {
     std::string sourceScript;
     std::string callbackLabel;
     bool isPost;
+    std::vector<std::string> headers;
+    std::string customMethod;
+    long timeout = 30;
 };
 
 struct CurlResult {
