@@ -3230,7 +3230,9 @@ void Actor::GetMoveInfo(mmove_t *mm)
 
             p = static_cast<Player *>(G_GetEntity(0));
 
-            if (!IsTeamMate(p)) {
+            // Fixed in OPM
+            //  Added teammate validity check
+            if (p && !IsTeamMate(p)) {
                 if (!m_bEnableEnemy) {
                     m_bDesiredEnableEnemy = true;
                     UpdateEnableEnemy();
@@ -3250,7 +3252,9 @@ void Actor::GetMoveInfo(mmove_t *mm)
                 m_Path.Clear();
                 p = static_cast<Player *>(G_GetEntity(0));
 
-                if (!IsTeamMate(p)) {
+                // Fixed in OPM
+                //  Added teammate validity check
+                if (p && !IsTeamMate(p)) {
                     if (!m_bEnableEnemy) {
                         m_bDesiredEnableEnemy = true;
                         UpdateEnableEnemy();
@@ -5106,7 +5110,7 @@ void Actor::HandlePain(Event *ev)
     }
 
     attacker = ev->GetEntity(1);
-    if (attacker && attacker->IsSubclassOfSentient() && IsTeamMate(static_cast<Sentient *>(attacker))) {
+    if (attacker && attacker->IsSubclassOfPlayer() && IsTeamMate(static_cast<Sentient *>(attacker))) {
         return;
     }
 
@@ -6096,7 +6100,9 @@ bool Actor::MoveOnPathWithSquad(void)
 
     pSquadMate = static_cast<Sentient *>(G_GetEntity(0));
 
-    if (IsTeamMate(pSquadMate)) {
+    // Fixed in OPM
+    //  Added teammate validity check
+    if (pSquadMate && IsTeamMate(pSquadMate)) {
         VectorSub2D(pSquadMate->origin, origin, vDelta);
         fDistSquared = VectorLength2DSquared(vDelta);
 
@@ -6172,7 +6178,9 @@ bool Actor::MoveToWaypointWithPlayer(void)
     }
 
     pSquadMate = static_cast<Sentient *>(G_GetEntity(0));
-    if (!IsTeamMate(pSquadMate)) {
+    // Fixed in OPM
+    //  Added teammate validity check
+    if (!pSquadMate || !IsTeamMate(pSquadMate)) {
         return true;
     }
 

@@ -329,6 +329,12 @@ extern cvar_t *g_bot_initial_spawn_delay;
  */
 extern cvar_t *g_bot_skill;
 
+/**
+ * @brief When enabled, the game no longer controls bots.
+ * 
+ */
+extern cvar_t *g_bot_manualmove;
+
 extern cvar_t *g_rankedserver;
 extern cvar_t *g_spectatefollow_firstperson;
 
