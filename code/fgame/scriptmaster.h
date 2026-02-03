@@ -38,6 +38,7 @@ void Hidemenu(const str& name, qboolean bForce);
 #ifdef USE_HTTP
 extern Event EV_ScriptMaster_CurlGet;
 extern Event EV_ScriptMaster_CurlPost;
+extern Event EV_ScriptMaster_CurlCustom;
 #endif
 
 #define MAX_VAR_STACK 1024

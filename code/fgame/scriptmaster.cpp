@@ -625,10 +625,10 @@ static void ExtractHeaders(Event *ev, int argIndex, std::vector<std::string>& he
              var.CastConstArrayValue();
              int size = var.arraysize();
              for (int i = 1; i <= size; i += 2) {
-                 std::string key = var[i]->stringValue();
+                 std::string key = var[i]->stringValue().c_str();
                  std::string value;
                  if (i + 1 <= size) {
-                     value = var[i + 1]->stringValue();
+                     value = var[i + 1]->stringValue().c_str();
                  }
                  if (!key.empty()) {
                      headers.push_back(key + ": " + value);
