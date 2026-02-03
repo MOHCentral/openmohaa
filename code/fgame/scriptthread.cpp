@@ -2168,7 +2168,9 @@ Event EV_ScriptThread_CurlGet
     EV_DEFAULT,
     NULL,
     NULL,
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code).",
+    "Performs an HTTP GET request asynchronously.\n"
+    "Usage: curl_get url headers callback\n"
+    "Example: curl_get \"http://site.com\" (makearray \"Key\" \"Value\") \"callback\"",
     EV_NORMAL
 );
 Event EV_ScriptThread_CurlPost
@@ -2177,7 +2179,9 @@ Event EV_ScriptThread_CurlPost
     EV_DEFAULT,
     NULL,
     NULL,
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code).",
+    "Performs an HTTP POST request asynchronously.\n"
+    "Usage: curl_post url headers data callback\n"
+    "Example: curl_post \"http://site.com\" (makearray \"Content-Type\" \"application/json\") \"{'a':1}\" \"callback\"",
     EV_NORMAL
 );
 Event EV_ScriptThread_CurlCustom
@@ -2186,7 +2190,9 @@ Event EV_ScriptThread_CurlCustom
     EV_DEFAULT,
     NULL,
     NULL,
-    "Performs an HTTP custom request asynchronously and calls the label with the result (success, data, http_code).",
+    "Performs an HTTP custom request asynchronously.\n"
+    "Usage: curl_custom method url headers data callback\n"
+    "Example: curl_custom \"PUT\" \"http://site.com\" (makearray \"Key\" \"Value\") \"data\" \"callback\"",
     EV_NORMAL
 );
 Event EV_ScriptThread_NetUrlEncode
@@ -7681,8 +7687,8 @@ void ScriptThread::CurlGet(Event *ev)
 {
     gi.Printf("ScriptThread::CurlGet: Called\n");
 
-    if (ev->NumArgs() < 2) {
-        throw ScriptException("Usage: curl_get url [headers] callback");
+    if (ev->NumArgs() < 3) {
+        throw ScriptException("Usage: curl_get url headers callback");
     }
 
     str url = ev->GetString(1);
@@ -7690,17 +7696,12 @@ void ScriptThread::CurlGet(Event *ev)
     Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
     newEvent->AddString(url);
 
-    int callbackIndex = 2;
-    if (ev->NumArgs() >= 3) {
-         // Headers provided
-         newEvent->AddValue(ev->GetValue(2));
-         callbackIndex = 3;
-    } else {
-         newEvent->AddNil();
-    }
-
-    newEvent->AddString(ev->GetString(callbackIndex));
+    // Headers
+    newEvent->AddValue(ev->GetValue(2));
     
+    // Callback
+    newEvent->AddString(ev->GetString(3));
+
     // Explicitly pass the source script filename
     ScriptClass *scriptClass = GetScriptClass();
     if (scriptClass && scriptClass->GetScript()) {
@@ -7721,8 +7722,8 @@ void ScriptThread::CurlPost(Event *ev)
 {
     gi.Printf("ScriptThread::CurlPost: Called\n");
 
-    if (ev->NumArgs() < 3) {
-        throw ScriptException("Usage: curl_post url [headers] data callback");
+    if (ev->NumArgs() < 4) {
+        throw ScriptException("Usage: curl_post url headers data callback");
     }
 
     str url = ev->GetString(1);
@@ -7730,23 +7731,12 @@ void ScriptThread::CurlPost(Event *ev)
     Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
     newEvent->AddString(url);
 
-    int dataIndex = 2;
-    int callbackIndex = 3;
-
-    if (ev->NumArgs() >= 4) {
-        // Headers provided: url(1), headers(2), data(3), callback(4)
-        dataIndex = 3;
-        callbackIndex = 4;
-
-        newEvent->AddString(ev->GetString(dataIndex)); // post_data
-        newEvent->AddValue(ev->GetValue(2)); // headers
-    } else {
-        // Legacy: url(1), data(2), callback(3)
-        newEvent->AddString(ev->GetString(2)); // post_data
-        newEvent->AddNil(); // headers
-    }
-
-    newEvent->AddString(ev->GetString(callbackIndex));
+    // post_data
+    newEvent->AddString(ev->GetString(3));
+    // headers
+    newEvent->AddValue(ev->GetValue(2));
+    // callback
+    newEvent->AddString(ev->GetString(4));
     
     // Explicitly pass the source script filename
     ScriptClass *scriptClass = GetScriptClass();
