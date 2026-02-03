@@ -226,6 +226,10 @@ public:
 
     bool m_bFootOnGround_Right;
     bool m_bFootOnGround_Left;
+
+    int m_iRightFootTag;
+    int m_iLeftFootTag;
+
     //
     // Added in OPM
     //
@@ -370,6 +374,7 @@ public:
 
     void FootstepMain(trace_t *trace, int iRunning, int iEquipment);
     void Footstep(const char *szTagName, int iRunning, int iEquipment);
+    void Footstep(int iTagNum, int iRunning, int iEquipment);
     void LandingSound(float volume, int iEquipment);
 
     const Container<int>&    getInventory() const;
