@@ -215,6 +215,7 @@ public:
 
     void Init(BotController* controller);
     void Update(usercmd_t* cmd);
+    void CheckMoveSafety(usercmd_t* cmd);
     void SetOrder(int orderType, Entity* target);
     Vector GetPredictedPos() const { return m_predictedPos; }
     

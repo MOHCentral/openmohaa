@@ -1163,6 +1163,9 @@ void BotTactics::Update(usercmd_t* cmd)
     if (m_controller->GetEnemy()) {
         ApplyCombatLean(cmd);
     }
+
+    // Safety check to prevent walking into walls
+    CheckMoveSafety(cmd);
 }
 
 void BotTactics::UpdatePrediction()
@@ -1242,15 +1245,20 @@ void BotTactics::ScanEnemies()
         // Skip visibility check for very distant players
         float distSq = (other->origin - self->origin).lengthSquared();
         static const float MAX_VISION_DIST_SQ = 4096.0f * 4096.0f; // 4096 units max vision
-        if (distSq > MAX_VISION_DIST_SQ) {
+
+        bool visible = false;
+        if (distSq < 250.0f * 250.0f) {
+            // Close range awareness - always detect enemies within range regardless of FOV
+            visible = true;
+        } else if (distSq > MAX_VISION_DIST_SQ) {
             // Too far to see, clear visibility but keep memory
             EnemyMemory& mem = m_enemyMemory[other->entnum];
             mem.currentlyVisible = false;
             continue;
+        } else {
+            visible = self->CanSee(other, 80, 2048, false);
         }
 
-        bool visible = self->CanSee(other, 80, 2048, false);
-        
         EnemyMemory& mem = m_enemyMemory[other->entnum];
         if (visible) {
             // Voice callout: "Enemy spotted!" when newly detecting an enemy
@@ -1745,6 +1753,15 @@ GrenadeDecision BotTactics::EvaluateGrenadeThrow(const Vector& targetPos)
     // Get throw origin (slightly in front and above eye level)
     Vector throwOrigin = self->origin;
     throwOrigin.z += self->viewheight * 0.9f;
+
+    // IMMEDIATE OBSTRUCTION CHECK
+    // Cast a short ray forward to ensure we aren't facing a wall
+    Vector forward;
+    self->angles.AngleVectors(&forward, NULL, NULL);
+    trace_t wallTrace = G_Trace(throwOrigin, vec_zero, vec_zero, throwOrigin + forward * 48.0f, self, MASK_SOLID, false, "GrenadeWallCheck");
+    if (wallTrace.fraction < 1.0f) {
+        return decision; // Blocked by wall immediately
+    }
 
     decision.distanceToTarget = (targetPos - throwOrigin).length();
 
@@ -3168,5 +3185,51 @@ void BotTactics::ApplyCombatLean(usercmd_t* cmd)
                 cmd->buttons &= ~(BUTTON_LEAN_LEFT | BUTTON_LEAN_RIGHT);
                 break;
         }
+    }
+}
+
+/*
+===============
+BotTactics::CheckMoveSafety
+
+Prevents the bot from walking into walls when using direct movement commands.
+Traces in the direction of intended movement and stops if blocked.
+===============
+*/
+void BotTactics::CheckMoveSafety(usercmd_t* cmd)
+{
+    if (!cmd || (cmd->forwardmove == 0 && cmd->rightmove == 0)) return;
+    
+    Player* self = m_controller->getControlledEntity();
+    if (!self) return;
+    
+    // Calculate wish direction relative to bot angles
+    Vector forward, right;
+    self->angles.AngleVectors(&forward, &right, NULL);
+    
+    // Normalize moves to -1.0 to 1.0 range for vector math
+    float fwd = (float)cmd->forwardmove / 127.0f;
+    float rt = (float)cmd->rightmove / 127.0f;
+    
+    Vector moveDir = forward * fwd + right * rt;
+    if (moveDir.lengthSquared() < 0.01f) return;
+    moveDir.normalize();
+    
+    // Trace ahead
+    // We trace from slightly elevated position to avoid ground clutter (stairs)
+    Vector start = self->origin + Vector(0, 0, 18); 
+    Vector end = start + moveDir * 64.0f; // Check 64 units ahead
+    
+    trace_t trace = G_Trace(start, self->mins, self->maxs, end, self, MASK_PLAYERSOLID, false, "CheckMoveSafety");
+    
+    if (trace.fraction < 1.0f && !trace.startsolid) {
+        // We hit something. Stop movement.
+        // Check if it's a step we can move up (handled by physics generally, but direct move might fight it)
+        // If the normal is verticalish, it's floor/slope.
+        if (trace.plane.normal[2] > 0.7f) return; 
+        
+        // It's a wall.
+        cmd->forwardmove = 0;
+        cmd->rightmove = 0;
     }
 }

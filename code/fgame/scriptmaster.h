@@ -39,6 +39,7 @@ void Hidemenu(const str& name, qboolean bForce);
 extern Event EV_ScriptMaster_CurlGet;
 extern Event EV_ScriptMaster_CurlPost;
 extern Event EV_ScriptMaster_CurlCustom;
+extern Event EV_ScriptMaster_CurlSetTimeout;
 #endif
 
 #define MAX_VAR_STACK 1024
@@ -94,6 +95,7 @@ protected:
     void        CurlGet(Event *ev);
     void        CurlPost(Event *ev);
     void        CurlCustom(Event *ev);
+    void        CurlSetTimeout(Event *ev);
 #endif
 
 public:

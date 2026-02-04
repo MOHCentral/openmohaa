@@ -124,28 +124,45 @@ Event EV_Cache
 );
 
 #ifdef USE_HTTP
+// Default timeout for curl requests (in seconds)
+static int s_curlTimeout = 30;
+
 Event EV_ScriptMaster_CurlGet(
-    "sm_curl_get",
+    "curl_get",
     EV_DEFAULT,
-    "sVssi",
-    "url headers callback_label source_script timeout",
-    "Performs an HTTP GET request asynchronously and calls the label with the result (success, data, http_code)."
+    "sVs",
+    "url headers callback_label",
+    "Performs an HTTP GET request asynchronously.\n"
+    "Usage: curl_get url headers callback\n"
+    "Calls the callback label with (success, data, http_code)."
 );
 
 Event EV_ScriptMaster_CurlPost(
-    "sm_curl_post",
+    "curl_post",
     EV_DEFAULT,
-    "ssVssi",
-    "url post_data headers callback_label source_script timeout",
-    "Performs an HTTP POST request asynchronously and calls the label with the result (success, data, http_code)."
+    "sVss",
+    "url headers post_data callback_label",
+    "Performs an HTTP POST request asynchronously.\n"
+    "Usage: curl_post url headers data callback\n"
+    "Calls the callback label with (success, data, http_code)."
 );
 
 Event EV_ScriptMaster_CurlCustom(
-    "sm_curl_custom",
+    "curl_custom",
     EV_DEFAULT,
-    "ssVsssi",
-    "method url headers post_data callback_label source_script timeout",
-    "Performs an HTTP custom request asynchronously and calls the label with the result (success, data, http_code)."
+    "ssVss",
+    "method url headers post_data callback_label",
+    "Performs an HTTP custom request asynchronously.\n"
+    "Usage: curl_custom method url headers data callback\n"
+    "Calls the callback label with (success, data, http_code)."
+);
+
+Event EV_ScriptMaster_CurlSetTimeout(
+    "curl_set_timeout",
+    EV_DEFAULT,
+    "i",
+    "timeout",
+    "Sets the default timeout for curl requests in seconds."
 );
 #endif
 
@@ -157,6 +174,7 @@ CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
     {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
     {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
     {&EV_ScriptMaster_CurlCustom, &ScriptMaster::CurlCustom         },
+    {&EV_ScriptMaster_CurlSetTimeout, &ScriptMaster::CurlSetTimeout },
 #endif
     {NULL,                      NULL                                }
 };
@@ -653,20 +671,23 @@ void ScriptMaster::CurlGet(Event *ev)
     
     ExtractHeaders(ev, 2, task.headers);
 
-    task.callbackLabel = ev->GetString(3).c_str();
-
-    // Get context from event argument
-    if (ev->NumArgs() >= 4) {
-        task.sourceScript = ev->GetString(4).c_str();
-    } else {
-        if (Director.CurrentThread()) {
-             task.sourceScript = Director.CurrentThread()->FileName();
+    gi.Printf("ScriptMaster::CurlGet: URL='%s'\n", task.url.c_str());
+    if (!task.headers.empty()) {
+        gi.Printf("ScriptMaster::CurlGet: Headers:\n");
+        for (const auto& header : task.headers) {
+            gi.Printf("  %s\n", header.c_str());
         }
     }
-    
-    if (ev->NumArgs() >= 5) {
-        task.timeout = ev->GetInteger(5);
+
+    task.callbackLabel = ev->GetString(3).c_str();
+
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
     }
+    
+    // Use default timeout
+    task.timeout = s_curlTimeout;
 
     task.isPost = false;
     
@@ -685,24 +706,29 @@ void ScriptMaster::CurlPost(Event *ev)
 
     CurlTask task;
     task.url = url.c_str();
-    task.postData = ev->GetString(2).c_str();
 
-    ExtractHeaders(ev, 3, task.headers);
+    // Headers are at arg 2 (array), post_data at arg 3 (string)
+    ExtractHeaders(ev, 2, task.headers);
+    task.postData = ev->GetString(3).c_str();
+
+    gi.Printf("ScriptMaster::CurlPost: URL='%s'\n", task.url.c_str());
+    gi.Printf("ScriptMaster::CurlPost: PostData='%s'\n", task.postData.c_str());
+    if (!task.headers.empty()) {
+        gi.Printf("ScriptMaster::CurlPost: Headers:\n");
+        for (const auto& header : task.headers) {
+            gi.Printf("  %s\n", header.c_str());
+        }
+    }
 
     task.callbackLabel = ev->GetString(4).c_str();
 
-    // Get context from event argument
-    if (ev->NumArgs() >= 5) {
-        task.sourceScript = ev->GetString(5).c_str();
-    } else {
-        if (Director.CurrentThread()) {
-             task.sourceScript = Director.CurrentThread()->FileName();
-        }
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
     }
     
-    if (ev->NumArgs() >= 6) {
-        task.timeout = ev->GetInteger(6);
-    }
+    // Use default timeout
+    task.timeout = s_curlTimeout;
 
     task.isPost = true;
 
@@ -729,18 +755,13 @@ void ScriptMaster::CurlCustom(Event *ev)
     task.postData = ev->GetString(4).c_str();
     task.callbackLabel = ev->GetString(5).c_str();
 
-    // Get context from event argument
-    if (ev->NumArgs() >= 6) {
-        task.sourceScript = ev->GetString(6).c_str();
-    } else {
-        if (Director.CurrentThread()) {
-             task.sourceScript = Director.CurrentThread()->FileName();
-        }
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
     }
 
-    if (ev->NumArgs() >= 7) {
-        task.timeout = ev->GetInteger(7);
-    }
+    // Use default timeout
+    task.timeout = s_curlTimeout;
 
     // curl_post and curl_get set isPost automatically, but for custom, we rely on customMethod.
     // However, if postData is present, libcurl might default to POST if we don't handle it carefully.
@@ -748,6 +769,15 @@ void ScriptMaster::CurlCustom(Event *ev)
     task.isPost = false; // We rely on postData presence in CurlWorker for custom methods
 
     g_CurlWorker.AddTask(task);
+}
+
+void ScriptMaster::CurlSetTimeout(Event *ev)
+{
+    s_curlTimeout = ev->GetInteger(1);
+    if (s_curlTimeout < 1) {
+        s_curlTimeout = 1;
+    }
+    gi.Printf("Curl timeout set to %d seconds\n", s_curlTimeout);
 }
 #endif
 
@@ -761,7 +791,7 @@ void ScriptMaster::InitConstStrings(void)
 
     static_assert(ARRAY_LEN(ConstStrings) == (STRING_LENGTH_ - 1), "Constant strings don't match. Make sure the 'const_str' enum match with the 'ConstStrings' string array");
 
-    for (i = 0; i < ARRAY_LEN(ConstStrings); i++) {
+    for (i = 0; (unsigned int)i < ARRAY_LEN(ConstStrings); i++) {
         AddString(ConstStrings[i]);
     }
 
@@ -1520,11 +1550,11 @@ void ScriptMaster::PrintThread(int iThreadNum)
     if (!vm->m_Thread->m_WaitForList) {
         status += "(none)\n";
     } else {
-        con_set_enum<const_str, ConList>    en = *vm->m_Thread->m_WaitForList;
+        con_set_enum<const_str, ConList>    waitListEnum = *vm->m_Thread->m_WaitForList;
         con_set<const_str, ConList>::Entry *entry;
         int                                 i = 0;
 
-        for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+        for (entry = waitListEnum.NextElement(); entry != NULL; entry = waitListEnum.NextElement()) {
             str& name = Director.GetString(entry->GetKey());
 
             if (i > 0) {

@@ -361,11 +361,8 @@ public:
     void FS_OpenAppend(Event *ev);
 
 #ifdef USE_HTTP
-    void CurlGet(Event *ev);
-    void CurlPost(Event *ev);
-    void CurlCustom(Event *ev);
+    // curl_get, curl_post, curl_custom, curl_set_timeout are now handled directly by ScriptMaster
     void NetUrlEncode(Event *ev);
-    void CurlSetTimeout(Event *ev);
 #endif
 };
 
