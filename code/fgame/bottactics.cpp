@@ -1893,8 +1893,22 @@ bool BotTactics::ShouldFleeFromGrenade(Vector& outFleeDir, float& outDanger) con
     }
 
     // Also do a fresh scan for grenades specifically
-    Entity* ent = findradius(NULL, self->origin, GRENADE_BLAST_RADIUS * 1.5f);
-    while (ent) {
+    // Optimization: Use gi.AreaEntities for spatial query instead of global scan O(N)
+    int entityList[MAX_GENTITIES];
+    float scanRadius = GRENADE_BLAST_RADIUS * 1.5f;
+    Vector mins = self->origin - Vector(scanRadius, scanRadius, scanRadius);
+    Vector maxs = self->origin + Vector(scanRadius, scanRadius, scanRadius);
+
+    int numEntities = gi.AreaEntities(mins, maxs, entityList, MAX_GENTITIES);
+
+    for (int i = 0; i < numEntities; i++) {
+        gentity_t* gent = &g_entities[entityList[i]];
+        if (!gent->inuse || !gent->entity) {
+            continue;
+        }
+
+        Entity* ent = gent->entity;
+
         if (ent->isSubclassOf(Projectile)) {
             Projectile* proj = static_cast<Projectile*>(ent);
             
@@ -1920,7 +1934,6 @@ bool BotTactics::ShouldFleeFromGrenade(Vector& outFleeDir, float& outDanger) con
                 }
             }
         }
-        ent = findradius(ent, self->origin, GRENADE_BLAST_RADIUS * 1.5f);
     }
 
     if (nearestThreat == vec_zero) {
