@@ -23,6 +23,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "ui_local.h"
 #include "../script/scriptexception.h"
 
+#ifdef GODOT_GDEXTENSION
+#include <ctype.h>
+#include <string.h>
+#endif
+
 Event EV_Layout_Menu
 (
     "menu",
@@ -219,6 +224,50 @@ void UILayout::Load(const char *filename, bool bFullLoad)
 
     m_script = new Script;
     m_script->LoadFile(filename);
+
+#ifdef GODOT_GDEXTENSION
+    if (!m_script->isValid() && filename && filename[0]) {
+        char fallback[256];
+        int  j = 0;
+        int  len = (int)strlen(filename);
+        int  start = 0;
+        int  end = len;
+
+        /* Strip optional surrounding quotes. */
+        if (len >= 2 && filename[0] == '"' && filename[len - 1] == '"') {
+            start = 1;
+            end = len - 1;
+        }
+
+        for (int i = start; i < end && j < (int)sizeof(fallback) - 1; ++i) {
+            char c = filename[i];
+            if (c == '\\') {
+                c = '/';
+            }
+            fallback[j++] = (char)tolower((unsigned char)c);
+        }
+        fallback[j] = '\0';
+
+        /* If a bare include is given, try under ui/. */
+        if (fallback[0] && !strchr(fallback, '/')) {
+            char prefixed[256];
+            Q_strncpyz(prefixed, "ui/", sizeof(prefixed));
+            Q_strncpyz(prefixed + 3, fallback, sizeof(prefixed) - 3);
+            Q_strncpyz(fallback, prefixed, sizeof(fallback));
+        }
+
+        if (fallback[0] && strcmp(fallback, filename) != 0) {
+            m_script->LoadFile(fallback);
+            if (m_script->isValid()) {
+                Com_Printf("[MoHAA][UI] Fallback loaded '%s' as '%s'\n", filename, fallback);
+            }
+        }
+
+        if (!m_script->isValid()) {
+            Com_Printf("[MoHAA][UI] Failed to load layout/include '%s'\n", filename);
+        }
+    }
+#endif
 
     ProcessCommands(bFullLoad);
 

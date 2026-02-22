@@ -1064,7 +1064,7 @@ extern	cvar_t* com_protocol;
 #ifdef LEGACY_PROTOCOL
 extern	cvar_t* com_legacyprotocol;
 #endif
-#ifndef DEDICATED
+#if !defined(DEDICATED) || defined(GODOT_GDEXTENSION)
 extern  cvar_t* con_autochat;
 #endif
 extern	cvar_t* com_target_game;
@@ -1152,6 +1152,9 @@ void *S_Malloc( int size );			// NOT 0 filled memory only for small allocations
 #endif
 void Z_Free( void *ptr );
 void Z_FreeTags( int tag );
+#ifdef GODOT_GDEXTENSION
+void Z_MarkShutdown( void );  /* Makes Z_Free a no-op; prevents crashes from global C++ dtors during exit(). */
+#endif
 int Z_AvailableMemory( void );
 void Z_LogHeap( void );
 
@@ -1374,8 +1377,14 @@ void	*Sys_GetBotLibAPI( void *parms );
 
 char	*Sys_GetCurrentUser( void );
 
+#ifdef GODOT_GDEXTENSION
+// Under Godot, Sys_Error / Sys_Quit use longjmp instead of exit()
+void	QDECL Sys_Error( const char *error, ...) Q_PRINTF_FUNC(1, 2);
+void	Sys_Quit (void);
+#else
 void	QDECL Sys_Error( const char *error, ...) Q_NO_RETURN Q_PRINTF_FUNC(1, 2);
 void	Sys_Quit (void) Q_NO_RETURN;
+#endif
 char	*Sys_GetClipboardData( void );	// note that this isn't journaled...
 
 void	Sys_Print( const char *msg );

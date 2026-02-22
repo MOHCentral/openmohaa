@@ -1696,9 +1696,11 @@ void R_Init( void ) {
 	backEndData->staticModelData = NULL;
 	R_InitNextFrame();
 
+#ifndef GODOT_GDEXTENSION
+	/* GL window + extension setup — skipped under Godot (no real GL context) */
 	InitOpenGL();
-
 	R_InitExtensions();
+#endif
 
 	R_InitImages();
 
@@ -1711,9 +1713,11 @@ void R_Init( void ) {
 	tr.pFontDebugStrings = R_LoadFont("verdana-14");
 	g_bInfoworldtris = qfalse;
 
+#ifndef GODOT_GDEXTENSION
 	err = qglGetError();
 	if ( err != GL_NO_ERROR )
 		ri.Printf (PRINT_ALL, "glGetError() = 0x%x\n", err);
+#endif
 
 	ri.Printf( PRINT_ALL, "----- finished R_Init -----\n" );
 }
@@ -1739,8 +1743,10 @@ void RE_Shutdown( qboolean destroyWindow ) {
 
 
 	if ( tr.registered ) {
+#ifndef GODOT_GDEXTENSION
 		R_IssuePendingRenderCommands();
 		R_DeleteTextures();
+#endif
 	}
 
 	// shut down platform specific OpenGL stuff
@@ -1843,6 +1849,11 @@ GetRefAPI
 
 @@@@@@@@@@@@@@@@@@@@@
 */
+#ifdef GODOT_GDEXTENSION
+/* Under GODOT_GDEXTENSION, GetRefAPI is provided by godot_renderer.c
+ * which returns GR_* capture functions. R_Init is also called from
+ * there (via Godot_Renderer_InitRealModules). */
+#else
 #ifdef USE_RENDERER_DLOPEN
 Q_EXPORT refexport_t* QDECL GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 #else
@@ -1975,3 +1986,4 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 
 	return &re;
 }
+#endif /* !GODOT_GDEXTENSION */

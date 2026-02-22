@@ -135,8 +135,6 @@ clientStatic_t		cls;
 clientGameExport_t	*cge;
 //vm_t				*cgvm;
 
-char				cl_reconnectArgs[MAX_OSPATH];
-
 // Structure containing functions exported from refresh DLL
 refexport_t	re;
 #ifdef USE_RENDERER_DLOPEN
@@ -1300,10 +1298,12 @@ CL_Reconnect_f
 ================
 */
 void CL_Reconnect_f( void ) {
-	if ( !strlen( cl_reconnectArgs ) )
+	if ( !strlen( clc.servername ) || !strcmp( clc.servername, "localhost" ) ) {
+		Com_Printf( "Can't reconnect to localhost.\n" );
 		return;
+	}
 	Cvar_Set("ui_singlePlayerActive", "0");
-	Cbuf_AddText( va("connect %s\n", cl_reconnectArgs ) );
+	Cbuf_AddText( va("connect %s\n", clc.servername ) );
 }
 
 /*
@@ -1314,22 +1314,6 @@ CL_Connect
 */
 void CL_Connect( const char *server, netadrtype_t family ) {
 	const char *serverString;
-
-	// save arguments for reconnect
-	switch(family)
-	{
-	case netadrtype_t::NA_IP:
-		Q_strncpyz( cl_reconnectArgs, "-4 ", sizeof( cl_reconnectArgs ) );
-		break;
-	case netadrtype_t::NA_IP6:
-		Q_strncpyz( cl_reconnectArgs, "-6 ", sizeof( cl_reconnectArgs ) );
-		break;
-	default:
-		cl_reconnectArgs[0] = 0;
-		break;
-	}
-
-	Q_strcat( cl_reconnectArgs, sizeof( cl_reconnectArgs ), server );
 
 	Cvar_Set( "ui_singlePlayerActive", "0" );
 
@@ -1408,9 +1392,14 @@ void CL_Connect_f(void) {
     int argc = Cmd_Argc();
     netadrtype_t family = NA_UNSPEC;
 
-	if ( argc != 2 && argc != 3 ) {
-		Com_Printf( "usage: connect [-4|-6] server\n");
-		return;	
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: connect [server]\n");
+		return;
+	}
+
+	if (argc != 2 && argc != 3) {
+		Com_Printf("usage: connect [-4|-6] server\n");
+		return;
 	}
 
 	if (argc == 2)

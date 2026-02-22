@@ -82,7 +82,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #   define PRODUCT_VERSION_3        PRODUCT_VERSION_2
 #endif
 
+#ifndef PRODUCT_VERSION_FULL
 #define PRODUCT_VERSION_FULL        PRODUCT_VERSION_3
+#endif
 
 #define PRODUCT_NAME_FULL		    PRODUCT_NAME " - v" PRODUCT_VERSION_1
 

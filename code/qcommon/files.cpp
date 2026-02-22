@@ -299,6 +299,9 @@ typedef struct {
 } fileHandleData_t;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
+#ifdef __EMSCRIPTEN__
+static int fs_zipCurrentPos[MAX_FILE_HANDLES];
+#endif
 
 // TTimo - https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=540
 // whether we did a reorder on the current search path when joining the server
@@ -995,6 +998,9 @@ void FS_FCloseFile( fileHandle_t f ) {
 
 	if (fsh[f].zipFile == qtrue) {
 		unzCloseCurrentFile( fsh[f].handleFiles.file.z );
+		#ifdef __EMSCRIPTEN__
+		fs_zipCurrentPos[f] = 0;
+		#endif
 		if ( fsh[f].handleFiles.unique ) {
 			unzClose( fsh[f].handleFiles.file.z );
 		}
@@ -1476,6 +1482,9 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					unzOpenCurrentFile(fsh[*file].handleFiles.file.z);
 					fsh[*file].zipFilePos = pakFile->pos;
 					fsh[*file].zipFileLen = pakFile->len;
+					#ifdef __EMSCRIPTEN__
+					fs_zipCurrentPos[*file] = 0;
+					#endif
 
 					if(fs_debug->integer)
 					{
@@ -1652,7 +1661,13 @@ size_t FS_Read( void *buffer, size_t len, fileHandle_t f ) {
 		}
 		return len;
 	} else {
-		return unzReadCurrentFile(fsh[f].handleFiles.file.z, buffer, ( unsigned int )len);
+		int zip_read = unzReadCurrentFile(fsh[f].handleFiles.file.z, buffer, ( unsigned int )len);
+		#ifdef __EMSCRIPTEN__
+		if (zip_read > 0) {
+			fs_zipCurrentPos[f] += zip_read;
+		}
+		#endif
+		return zip_read;
 	}
 }
 
@@ -1729,15 +1744,25 @@ FS_Seek
 =================
 */
 int FS_Seek( fileHandle_t f, long offset, int origin ) {
+	#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[FSDBG] enter FS_Seek f=%d offset=%ld origin=%d\n", f, offset, origin);
+	#endif
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 		return -1;
 	}
 
 	if (fsh[f].zipFile == qtrue) {
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek zip f=%d offset=%ld origin=%d cur=%d len=%d\n", f, offset, origin, FS_FTell(f), fsh[f].zipFileLen);
+		#endif
 		//FIXME: this is really, really crappy
 		//(but better than what was here before)
+		#ifdef __EMSCRIPTEN__
+		static byte buffer[PK3_SEEK_BUFFER_SIZE];
+		#else
 		byte	buffer[PK3_SEEK_BUFFER_SIZE];
+		#endif
 		int		remainder;
 		int		currentPosition = FS_FTell( f );
 
@@ -1776,8 +1801,20 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 				if ( remainder == currentPosition ) {
 					return offset;
 				}
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip setOffset pos=%d remainder=%d\n", fsh[f].zipFilePos, remainder);
+				#endif
 				unzSetOffset(fsh[f].handleFiles.file.z, fsh[f].zipFilePos);
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip unzSetOffset done\n");
+				#endif
 				unzOpenCurrentFile(fsh[f].handleFiles.file.z);
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip unzOpenCurrentFile done\n");
+				#endif
+				#ifdef __EMSCRIPTEN__
+				fs_zipCurrentPos[f] = 0;
+				#endif
 				//fallthrough
 
 			case FS_SEEK_END:
@@ -1786,7 +1823,13 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 					FS_Read( buffer, PK3_SEEK_BUFFER_SIZE, f );
 					remainder -= PK3_SEEK_BUFFER_SIZE;
 				}
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip draining remainder=%d\n", remainder);
+				#endif
 				FS_Read( buffer, remainder, f );
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip final read done\n");
+				#endif
 				return offset;
 
 			default:
@@ -1795,7 +1838,13 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 		}
 	} else {
 		FILE *file;
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular f=%d offset=%ld origin=%d\n", f, offset, origin);
+		#endif
 		file = FS_FileForHandle(f);
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular got FILE*\n");
+		#endif
 		int _origin = SEEK_SET;
 		switch( origin ) {
 		case FS_SEEK_CUR:
@@ -1812,7 +1861,11 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 			break;
 		}
 
-		return fseek( file, offset, _origin );
+		int seek_ret = fseek( file, offset, _origin );
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular fseek ret=%d\n", seek_ret);
+		#endif
+		return seek_ret;
 	}
 }
 
@@ -4255,7 +4308,11 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 int		FS_FTell( fileHandle_t f ) {
 	int pos;
 	if (fsh[f].zipFile == qtrue) {
+		#ifdef __EMSCRIPTEN__
+		pos = fs_zipCurrentPos[f];
+		#else
 		pos = unztell(fsh[f].handleFiles.file.z);
+		#endif
 	} else {
 		pos = ftell(fsh[f].handleFiles.file.o);
 	}

@@ -33,6 +33,28 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <chrono>
 
+#ifdef GODOT_GDEXTENSION
+// Scoreboard capture hooks — implemented in godot_scoreboard.c
+extern "C" {
+    void Godot_SB_SetVisible(int visible);
+    void Godot_SB_SetMenuName(const char *name);
+    void Godot_SB_ResetColumns(void);
+    void Godot_SB_SetColumn(int index, const char *name, int width);
+    void Godot_SB_SetLayout(float x, float y, float w, float h,
+                            float bgR, float bgG, float bgB, float bgA,
+                            float fR, float fG, float fB, float fA,
+                            int drawHeader);
+    void Godot_SB_SetItem(int index,
+                          const char *s1, const char *s2,
+                          const char *s3, const char *s4,
+                          const char *s5, const char *s6,
+                          const char *s7, const char *s8,
+                          const float *textColor, const float *backColor,
+                          int isHeader);
+    void Godot_SB_DeleteItemsAfter(int maxIndex);
+}
+#endif
+
 typedef struct {
     float             fadetime;
     float             starttime;
@@ -1203,6 +1225,15 @@ static UIRect2D getDefaultGMBoxRectangle(void)
 {
     UIRect2D dmRect = getDefaultDMBoxRectangle();
     float    height = uid.vidHeight * ui_compass_scale->value * 0.25f;
+
+#ifdef GODOT_GDEXTENSION
+    // Godot locks UI virtual resolution to 640x480 which causes the default scale math
+    // (~66px) to overlap the 128x128 compass. Ensure it clears the compass bounding box.
+    if ((uid.vidHeight == 480 || uid.bHighResScaling) && height < 140.0f * uid.scaleRes[1]) {
+        height = 140.0f * uid.scaleRes[1];
+    }
+#endif
+
     float    y      = dmRect.size.height + dmRect.pos.y;
 
     if (height < y) {
@@ -1223,6 +1254,14 @@ static UIRect2D getDefaultDMBoxRectangle(void)
     float screenWidth = getScreenWidth();
 
     width = screenWidth * uid.scaleRes[0] * ui_compass_scale->value * 0.2f;
+
+#ifdef GODOT_GDEXTENSION
+    // Godot locks UI virtual resolution to 640x480 which causes the default scale math
+    // (~70px) to overlap the 128x128 compass. Ensure it clears the compass bounding box.
+    if ((uid.vidWidth == 640 || uid.bHighResScaling) && width < 140.0f * uid.scaleRes[0]) {
+        width = 140.0f * uid.scaleRes[0];
+    }
+#endif
 
     return UIRect2D(width, 0, (screenWidth - (width + 192.0f)) * uid.scaleRes[0], 120.0f * uid.scaleRes[1]);
 }
@@ -1736,6 +1775,16 @@ void UI_ActivateView3D(void)
 
     view3d->setShow(true);
     uWinMan.ActivateControl(view3d);
+#ifdef GODOT_GDEXTENSION
+    /* Under Godot, ActivateControl() may not fire W_Activated if view3d
+       is already the active widget (the "wid == active" no-op path in
+       UIWindowManager::ActivateControl).  When that happens,
+       View3D::OnActivate never clears KEYCATCH_UI, so keys route to
+       UI_KeyEvent instead of game bindings (WASD etc).
+       Explicitly clear KEYCATCH_UI and switch to game mouse mode. */
+    Key_SetCatcher(Key_GetCatcher() & ~KEYCATCH_UI);
+    IN_MouseOff();
+#endif
 }
 
 /*
@@ -1830,35 +1879,47 @@ void UI_Update(void)
     //
     // draw the base HUD when in-game
     //
+#ifdef GODOT_GDEXTENSION
+    /* Under Godot the 2D overlay captures every DrawStretchPic /
+     * DrawBox call.  Use the HUD-only fast path when the game is
+     * active AND no menus or console are open.  If a menu is on the
+     * stack (player pressed ESC, options, etc.) or the console is
+     * visible, we fall through to the full UI_Update rendering so
+     * menus/console paint correctly. */
+    if (clc.state == CA_ACTIVE && !menuManager.CurrentMenu() && !UI_ConsoleIsVisible()) {
+        /* Safety net: clear KEYCATCH_UI when in gameplay with no menus
+         * and no console.  ActivateControl() may not fire
+         * View3D::OnActivate if view3d was already active, leaving
+         * KEYCATCH_UI stuck and routing WASD keys to UI_KeyEvent
+         * instead of game bindings. */
+        if (Key_GetCatcher() & KEYCATCH_UI) {
+            Key_SetCatcher(Key_GetCatcher() & ~KEYCATCH_UI);
+            IN_MouseOff();
+        }
+#else
     if (cls.no_menus && clc.state == CA_ACTIVE) {
+#endif
         view3d->setShow(true);
         frame = uWinMan.getFrame();
         view3d->Display(frame, 1.0);
 
-        if (ui_hud && !view3d->LetterboxActive()) {
-            // draw the health hud
-            if (hud_health) {
-                hud_health->ForceShow();
-                frame = uWinMan.getFrame();
-                hud_health->GetContainerWidget()->Display(frame, 1.0);
-            }
-
-            // draw the ammo hud
-            if (hud_ammo) {
-                hud_ammo->ForceShow();
-                frame = uWinMan.getFrame();
-                hud_ammo->GetContainerWidget()->Display(frame, 1.0);
-            }
-
-            // draw the compass hud
-            if (hud_compass) {
-                hud_compass->ForceShow();
-                frame = uWinMan.getFrame();
-                hud_compass->GetContainerWidget()->Display(frame, 1.0);
-            }
+        /* Skip menu / console / loading-screen logic — jump straight
+         * to the HUD update section so crosshair, weapons bar, ammo,
+         * compass, scoreboard, and uWinMan.UpdateViews() all run.
+         *
+         * We still need to show the message boxes and mini-console
+         * that are normally set up between here and the HUD section. */
+        if (fakk_console && mini_console) {
+            mini_console->setRealShow(ui_minicon->integer ? (fakk_console->getShow() ^ 1) : false);
         }
-
-        return;
+        if (gmbox) {
+            gmbox->setRealShow(true);
+        }
+        if (dmbox) {
+            dmbox->setRealShow(true);
+        }
+        currentMenu = NULL;
+        goto godot_hud_update;
     }
 
     if (fakk_console) {
@@ -1968,6 +2029,7 @@ void UI_Update(void)
         }
     }
 
+godot_hud_update:
     // Hide the HUD when necessary
     if (!ui_hud || clc.state != CA_ACTIVE || view3d->LetterboxActive() || (currentMenu && currentMenu->isFullscreen())
         || server_loading || ((cl.snap.ps.pm_flags & PMF_NO_HUD) || (cl.snap.ps.pm_flags & PMF_INTERMISSION))) {
@@ -2328,6 +2390,19 @@ void UI_Update(void)
         //
         str ammo = "hud_ammo_";
         ammo += CL_ConfigString(CS_WEAPONS + cl.snap.ps.activeItems[ITEM_WEAPON]);
+
+#ifdef GODOT_GDEXTENSION
+        {
+            static str last_logged_ammo;
+            if (ammo != last_logged_ammo) {
+                last_logged_ammo = ammo;
+                Menu *found = menuManager.FindMenu(ammo);
+                Com_Printf("[MoHAA][HUD-AMMO] weapon='%s' menu=%s hud_ammo=%s\n",
+                    ammo.c_str(), found ? "FOUND" : "NOT_FOUND",
+                    hud_ammo ? hud_ammo->m_name.c_str() : "NULL");
+            }
+        }
+#endif
 
         if (!hud_ammo || hud_ammo->m_name.icmp(ammo)) {
             Menu *ammoMenu = menuManager.FindMenu(ammo);
@@ -4398,6 +4473,10 @@ void UI_ShowScoreboard_f(const char *pszMenuName)
         if (scoreboardlist && scoreboardlist->IsVisible()) {
             scoreboardlist->setShow(false);
         }
+#ifdef GODOT_GDEXTENSION
+        // Godot capture: scoreboard hidden because a menu is active.
+        Godot_SB_SetVisible(0);
+#endif
     } else {
         if (scoreboard_menuname.length()) {
             scoreboard_menu = menuManager.FindMenu(scoreboard_menuname);
@@ -4414,6 +4493,13 @@ void UI_ShowScoreboard_f(const char *pszMenuName)
         if (scoreboardlist && !scoreboardlist->IsVisible()) {
             scoreboardlist->setShow(true);
         }
+#ifdef GODOT_GDEXTENSION
+        // Godot capture: scoreboard shown.
+        Godot_SB_SetVisible(1);
+        if (scoreboard_menuname.length()) {
+            Godot_SB_SetMenuName(scoreboard_menuname.c_str());
+        }
+#endif
     }
 }
 
@@ -4434,6 +4520,10 @@ void UI_HideScoreboard_f(void)
             scoreboard_menu->ForceHide();
         }
     }
+#ifdef GODOT_GDEXTENSION
+    // Godot capture: scoreboard hidden.
+    Godot_SB_SetVisible(0);
+#endif
 }
 
 class ScoreboardListItem : public UIListCtrlItem
@@ -4560,6 +4650,33 @@ void UI_CreateScoreboard(void)
     scoreboardlist->SetUseScrollBar(false);
     scoreboardlist->SetDrawHeader(scoreboard_header);
     scoreboardlist->setHeaderFont("facfont-20");
+
+#ifdef GODOT_GDEXTENSION
+    // Godot capture: store column definitions and layout for Godot-side rendering.
+    {
+        float sb_x, sb_y, sb_w, sb_h;
+        float sb_bgR, sb_bgG, sb_bgB, sb_bgA;
+        float sb_fR, sb_fG, sb_fB, sb_fA;
+        int   sb_colW;
+        const char *sb_colName;
+
+        cge->CG_GetScoreBoardPosition(&sb_x, &sb_y, &sb_w, &sb_h);
+        cge->CG_GetScoreBoardColor(&sb_bgR, &sb_bgG, &sb_bgB, &sb_bgA);
+        cge->CG_GetScoreBoardFontColor(&sb_fR, &sb_fG, &sb_fB, &sb_fA);
+
+        Godot_SB_SetLayout(sb_x, sb_y, sb_w, sb_h,
+                           sb_bgR, sb_bgG, sb_bgB, sb_bgA,
+                           sb_fR, sb_fG, sb_fB, sb_fA,
+                           cge->CG_GetScoreBoardDrawHeader());
+
+        Godot_SB_ResetColumns();
+        for (int ci = 0; ci < 8; ci++) {
+            sb_colName = cge->CG_GetColumnName(ci, &sb_colW);
+            if (!sb_colName) break;
+            Godot_SB_SetColumn(ci, sb_colName, sb_colW);
+        }
+    }
+#endif
 }
 
 /*
@@ -4657,6 +4774,14 @@ void UI_SetScoreBoardItem(
             pItem->SetTitleItem(bIsHeader);
         }
     }
+
+#ifdef GODOT_GDEXTENSION
+    // Godot capture: copy the item data to the scoreboard buffer.
+    Godot_SB_SetItem(iItemNumber,
+                     pszData1, pszData2, pszData3, pszData4,
+                     pszData5, pszData6, pszData7, pszData8,
+                     pTextColor, pBackColor, bIsHeader);
+#endif
 }
 
 /*
@@ -4669,6 +4794,10 @@ void UI_DeleteScoreBoardItems(int iMaxIndex)
     while (iMaxIndex + 1 <= scoreboardlist->getNumItems()) {
         scoreboardlist->DeleteItem(scoreboardlist->getNumItems());
     }
+#ifdef GODOT_GDEXTENSION
+    // Godot capture: trim captured items to match.
+    Godot_SB_DeleteItemsAfter(iMaxIndex);
+#endif
 }
 
 /*
@@ -4910,6 +5039,17 @@ CL_TryStartIntro
 */
 void CL_TryStartIntro(void)
 {
+#ifdef GODOT_GDEXTENSION
+    /* Under Godot we always skip the intro/title/legal screens and push
+       the main menu immediately.  The intro sequence depends on real
+       renderer fade effects and cinematic playback that our stub
+       renderer doesn't fully support.  Go straight to main menu. */
+    {
+        cls.startStage = 0;  /* mark intro as finished */
+        UI_PushMenu("main");
+        IN_MouseOn();
+    }
+#else
     if (developer->integer || !cl_playintro->integer) {
         UI_ToggleConsole();
     } else {
@@ -4917,6 +5057,7 @@ void CL_TryStartIntro(void)
         Cvar_Set(cl_playintro->name, "0");
         UI_StartIntro_f();
     }
+#endif
 }
 
 /*
@@ -5249,7 +5390,12 @@ void CL_InitializeUI(void)
     ui_minicon         = Cvar_Get("ui_minicon", "0", 1);
     ui_gmbox           = Cvar_Get("ui_gmbox", "1", 1);
     ui_consoleposition = Cvar_Get("ui_consoleposition", "", 1);
+#ifdef GODOT_GDEXTENSION
+    /* Under Godot, enable console by default for debugging access. */
+    ui_console         = Cvar_Get("ui_console", "1", 1);
+#else
     ui_console         = Cvar_Get("ui_console", "0", 1);
+#endif
     ui_crosshair       = Cvar_Get("ui_crosshair", "1", 1);
     ui_weaponsbar      = Cvar_Get("ui_weaponsbar", "1", 1);
     ui_weaponsbartime  = Cvar_Get("ui_weaponsbartime", "2500", 1);

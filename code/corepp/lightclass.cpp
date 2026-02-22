@@ -26,9 +26,19 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #    include "../fgame/g_local.h"
 
-#    define LIGHTCLASS_Printf  gi.Printf
-#    define LIGHTCLASS_DPrintf gi.DPrintf
-#    define LIGHTCLASS_Error   gi.Error
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+extern "C" void *Z_Malloc(int size);
+extern "C" void  Z_Free(void *ptr);
+#        define LIGHTCLASS_Printf  Com_Printf
+#        define LIGHTCLASS_DPrintf Com_DPrintf
+#        define LIGHTCLASS_Error   Com_Error
+#    else
+#        define LIGHTCLASS_Printf  gi.Printf
+#        define LIGHTCLASS_DPrintf gi.DPrintf
+#        define LIGHTCLASS_Error   gi.Error
+#    endif
 
 #elif defined(CGAME_DLL)
 
@@ -69,7 +79,11 @@ void *LightClass::operator new(size_t s)
     s += sizeof(size_t);
 
 #    ifdef GAME_DLL
+#        ifdef GODOT_GDEXTENSION
+    p = (size_t *)Z_Malloc(s);
+#        else
     p = (size_t *)gi.Malloc(s);
+#        endif
 #    elif defined(CGAME_DLL)
     p = (size_t *)cgi.Malloc(s);
 #    else
@@ -92,7 +106,11 @@ void LightClass::operator delete(void *ptr)
     numclassesallocated--;
 
 #    ifdef GAME_DLL
+#        ifdef GODOT_GDEXTENSION
+    Z_Free(p);
+#        else
     gi.Free(p);
+#        endif
 #    elif defined(CGAME_DLL)
     cgi.Free(p);
 #    else

@@ -23,11 +23,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #pragma once
 
+#ifdef __linux__
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#endif
+
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "../fgame/bg_public.h"
 #include "../fgame/g_public.h"
-#ifndef DEDICATED
+#if !defined(DEDICATED) || defined(GODOT_GDEXTENSION)
 #  include "../client/snd_local.h"
 #endif
 
@@ -318,7 +325,7 @@ typedef struct {
 	int				tm_offset;
 
 	nonpvs_sound_cache_t nonpvs_sound_cache[MAX_SOUNDS]; // Added in OPM
-#ifndef DEDICATED
+#if !defined(DEDICATED) || defined(GODOT_GDEXTENSION)
 	soundsystemsavegame_t	soundSystem;
 #endif
 	// Added in 2.0

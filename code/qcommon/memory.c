@@ -25,12 +25,32 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 
+#ifdef GODOT_GDEXTENSION
+/* Enable client memory paths (re.CountTextureMemory, etc.) under Godot. */
+#undef DEDICATED
+#endif
+
 #ifndef DEDICATED
 #  include "../client/client.h"
 #endif
 
 #define	ZONEID			0x7331
 #define ZONEID_CONST	0xC057
+
+#ifdef GODOT_GDEXTENSION
+/*
+ * Shutdown flag: once set, Z_Free becomes a no-op and Z_Malloc falls back to
+ * system malloc.  This prevents crashes from global C++ destructors
+ * (e.g. ~con_arrayset, ~MEM_BlockAlloc) that run during exit() *after*
+ * the engine and longjmp error-handling context have been torn down.
+ */
+static qboolean z_zone_shutting_down = qfalse;
+
+void Z_MarkShutdown(void)
+{
+    z_zone_shutting_down = qtrue;
+}
+#endif
 
 void Z_CheckHeap(void);
 
@@ -99,6 +119,14 @@ Z_Free
 */
 void Z_Free( void *ptr )
 {
+#ifdef GODOT_GDEXTENSION
+	/* During library teardown global C++ destructors may try to free zone
+	   memory after the engine context (longjmp buf, etc.) is gone.  Skip
+	   the free — the process is about to exit anyway. */
+	if( z_zone_shutting_down ) {
+		return;
+	}
+#endif
 	memblock_t *block = ( memblock_t * )( ( byte * )ptr - sizeof( memblock_t ) );
 
 	// don't free constant memory
@@ -158,6 +186,17 @@ void *Z_TagMallocDebug( int size, int tag, const char *label, const char *file, 
 void *Z_TagMalloc( int size, int tag ) {
 #endif
 	memblock_t *block;
+
+#ifdef GODOT_GDEXTENSION
+	/* During library teardown, fall back to raw malloc so any lazy
+	   allocation from global C++ destructors doesn't touch the zone
+	   linked list (which may be partially torn down). */
+	if( z_zone_shutting_down ) {
+		void *p = malloc( size );
+		if( p ) memset( p, 0, size );
+		return p;
+	}
+#endif
 
 	if( size <= 0 )
 	{

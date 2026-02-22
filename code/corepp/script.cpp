@@ -36,11 +36,27 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #    include "../fgame/g_local.h"
 
-#    define FILE_FS_FreeFile       gi.FS_FreeFile
-#    define FILE_FS_ReadFile(a, b) gi.FS_ReadFile(a, b, true)
-#    define FILE_Malloc            gi.Malloc
-#    define FILE_Free              gi.Free
-#    define FILE_Error             gi.Error
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+extern "C" {
+void  FS_FreeFile(void *buffer);
+long  FS_ReadFile(const char *qpath, void **buffer);
+void *Z_Malloc(int size);
+void  Z_Free(void *ptr);
+}
+#        define FILE_FS_FreeFile       FS_FreeFile
+#        define FILE_FS_ReadFile(a, b) FS_ReadFile(a, b)
+#        define FILE_Malloc            Z_Malloc
+#        define FILE_Free              Z_Free
+#        define FILE_Error             Com_Error
+#    else
+#        define FILE_FS_FreeFile       gi.FS_FreeFile
+#        define FILE_FS_ReadFile(a, b) gi.FS_ReadFile(a, b, true)
+#        define FILE_Malloc            gi.Malloc
+#        define FILE_Free              gi.Free
+#        define FILE_Error             gi.Error
+#    endif
 
 #elif defined(CGAME_DLL)
 

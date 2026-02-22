@@ -1543,6 +1543,40 @@ void ClientGameCommandManager::SpawnTempModel(int mcount)
 
         p->cgd.origin += p->cgd.velocity * (p->aliveTime / 1000.0) * current_entity_scale;
 
+#ifdef GODOT_GDEXTENSION
+        // Hook for Godot weapon effects (muzzle flash & shell casings)
+        // Divert specific effects to the high-fidelity Godot implementation
+        if (p->modelname.length()) {
+            const char *mn = p->modelname.c_str();
+            bool handled = false;
+
+            if (mn && (strstr(mn, "muzzle") || strstr(mn, "flash") || strstr(mn, "corona"))) {
+                // Muzzle flash
+                if (cgi.AddMuzzleFlash) {
+                     // Use m_spawnthing->axis[0] (forward) as direction
+                     cgi.AddMuzzleFlash(p->cgd.origin, m_spawnthing->axis[0], p->cgd.scale);
+                     handled = true;
+                }
+            }
+            else if (mn && (strstr(mn, "shell") || strstr(mn, "casing"))) {
+                // Shell casing
+                if (cgi.AddShellCasing) {
+                     int type = 0; // Default PISTOL
+                     if (strstr(mn, "rifle") || strstr(mn, "garand") || strstr(mn, "mauser") || strstr(mn, "springfield") || strstr(mn, "kar98") || strstr(mn, "bar") || strstr(mn, "mp44")) type = 1; // RIFLE
+                     else if (strstr(mn, "shotgun")) type = 2; // SHOTGUN
+
+                     cgi.AddShellCasing(p->cgd.origin, p->cgd.velocity, type);
+                     handled = true;
+                }
+            }
+
+            if (handled) {
+                FreeTempModel(p);
+                continue;
+            }
+        }
+#endif
+
         if (p->cgd.flags & T_AUTOCALCLIFE) {
             Vector  end, delta;
             float   length, speed;

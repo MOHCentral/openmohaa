@@ -601,17 +601,17 @@ bool DM_Team::IsEmpty(void) const
 int DM_Team::NumNotReady(void) const
 {
     Player *player;
-    int     nNotReady = 0;
+    int     num = 0;
 
     for (int i = 1; i <= m_players.NumObjects(); i++) {
         player = m_players.ObjectAt(i);
 
-        if (!player->IsReady()) {
-            nNotReady++;
+        if (player->IsReady()) {
+            i++;
         }
     }
 
-    return nNotReady;
+    return num;
 }
 
 void DM_Team::UpdateTeamStatus(void)

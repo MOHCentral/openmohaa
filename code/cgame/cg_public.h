@@ -232,6 +232,11 @@ functions exported to the main executable
         void (*R_GetLightingForSmoke)(vec3_t light, const vec3_t origin);
         int (*R_GatherLightSources)(const vec3_t pos, vec3_t *lightPos, vec3_t *lightIntensity, int maxLights);
 
+#ifdef GODOT_GDEXTENSION
+        void (*AddMuzzleFlash)(const vec3_t origin, const vec3_t dir, float intensity);
+        void (*AddShellCasing)(const vec3_t origin, const vec3_t velocity, int type);
+#endif
+
         // =========== sound function calls ===============
 
         void (*S_StartSound)(

@@ -39,6 +39,13 @@ Fax(949)798-4299
 
 #pragma once
 
+#ifdef __linux__
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -469,6 +469,15 @@ void UIFakkLabel::DrawStatbar(float frac)
     }
 
     if (!frac) {
+#ifdef GODOT_GDEXTENSION
+        {
+            static int zero_log = 0;
+            if (zero_log < 5 && (m_flags & WF_TILESHADER)) {
+                zero_log++;
+                Com_Printf("[MoHAA][STATBAR] DrawStatbar ZERO frac, tileShader, or=%d\n", m_statbar_or);
+            }
+        }
+#endif
         return;
     }
 
@@ -481,6 +490,22 @@ void UIFakkLabel::DrawStatbar(float frac)
     alpha = Q_clamp_float(alpha, 0, 1);
 
     col[3] = alpha;
+
+#ifdef GODOT_GDEXTENSION
+    if (m_flags & WF_TILESHADER) {
+        static int tile_log = 0;
+        if (tile_log < 10) {
+            tile_log++;
+            qhandle_t hMat = m_statbar_material ? m_statbar_material->GetMaterial() : 0;
+            int sw = hMat ? re.GetShaderWidth(hMat) : -1;
+            int sh = hMat ? re.GetShaderHeight(hMat) : -1;
+            Com_Printf("[MoHAA][STATBAR] DrawStatbar frac=%.3f or=%d mat=%d shaderWH=%dx%d frame=%.1fx%.1f vscale=%.3f,%.3f\n",
+                frac, m_statbar_or, hMat, sw, sh,
+                m_frame.size.width, m_frame.size.height,
+                m_vVirtualScale[0], m_vVirtualScale[1]);
+        }
+    }
+#endif
 
     if (m_statbar_material) {
         if (m_flags & WF_TILESHADER) {

@@ -47,3 +47,7 @@ out
 # Flex and Bison
 ####################
 /code/parser/generated
+
+*.os
+.sconsign.dblite
+bin/

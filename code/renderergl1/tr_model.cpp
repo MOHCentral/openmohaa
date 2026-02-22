@@ -608,6 +608,10 @@ RB_DrawSkeletor
 */
 void RB_DrawSkeletor(trRefEntity_t *ent)
 {
+#ifdef GODOT_GDEXTENSION
+    /* Debug skeleton visualisation requires real GL — no-op under Godot */
+    (void)ent;
+#else
     int         i;
     dtiki_t    *tiki;
     skeletor_c *skeletor;
@@ -708,6 +712,7 @@ void RB_DrawSkeletor(trRefEntity_t *ent)
         qglEnd();
         qglLineWidth(1);
     }
+#endif /* !GODOT_GDEXTENSION */
 }
 
 surfaceType_t skelSurface = SF_TIKI_SKEL;

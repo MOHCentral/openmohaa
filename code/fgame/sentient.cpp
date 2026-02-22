@@ -42,6 +42,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "object.h"
 #include "../corepp/tiki.h"
 #include "weapturret.h"
+#include "../qcommon/surface_types.h"
 
 Event EV_Sentient_ReloadWeapon
 (
@@ -916,6 +917,12 @@ void Sentient::AddItem(Item *object)
 
 void Sentient::RemoveItem(Item *object)
 {
+#ifdef GODOT_GDEXTENSION
+    // Fixed: object could be NULL if caller doesn't validate.
+    if (!object) {
+        return;
+    }
+#endif
     if (!inventory.IndexOfObject(object->entnum)) {
         return;
     }
@@ -938,6 +945,12 @@ void Sentient::RemoveWeapons(void)
         int     entnum = inventory.ObjectAt(i);
         Weapon *item   = (Weapon *)G_GetEntity(entnum);
 
+#ifdef GODOT_GDEXTENSION
+        // Fixed: G_GetEntity can return NULL for stale entity numbers.
+        if (!item) {
+            continue;
+        }
+#endif
         if (item->IsSubclassOfWeapon()) {
             item->Delete();
         }
@@ -950,6 +963,11 @@ Weapon *Sentient::GetWeapon(int index)
         int     entnum = inventory.ObjectAt(i);
         Weapon *item   = (Weapon *)G_GetEntity(entnum);
 
+#ifdef GODOT_GDEXTENSION
+        if (!item) {
+            continue;
+        }
+#endif
         if (item->IsSubclassOfWeapon()) {
             if (!index) {
                 return item;
@@ -971,7 +989,14 @@ Item *Sentient::FindItemByExternalName(const char *itemname)
     num = inventory.NumObjects();
     for (i = 1; i <= num; i++) {
         item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+#ifdef GODOT_GDEXTENSION
+        // Fixed: G_GetEntity can return NULL for stale entity numbers.
+        if (!item) {
+            continue;
+        }
+#else
         assert(item);
+#endif
         if (!Q_stricmp(item->getName(), itemname)) {
             return item;
         }
@@ -995,7 +1020,13 @@ Item *Sentient::FindItemByModelname(const char *mdl)
     num = inventory.NumObjects();
     for (i = 1; i <= num; i++) {
         item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+#ifdef GODOT_GDEXTENSION
+        if (!item) {
+            continue;
+        }
+#else
         assert(item);
+#endif
         if (!Q_stricmp(item->model, tmpmdl)) {
             return item;
         }
@@ -1013,7 +1044,13 @@ Item *Sentient::FindItemByClassName(const char *classname)
     num = inventory.NumObjects();
     for (i = 1; i <= num; i++) {
         item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+#ifdef GODOT_GDEXTENSION
+        if (!item) {
+            continue;
+        }
+#else
         assert(item);
+#endif
         if (!Q_stricmp(item->edict->entname, classname)) {
             return item;
         }
@@ -1050,6 +1087,12 @@ void Sentient::FreeInventory(void)
     num = inventory.NumObjects();
     for (i = num; i > 0; i--) {
         item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+#ifdef GODOT_GDEXTENSION
+        // Fixed: G_GetEntity can return NULL for stale entity numbers.
+        if (!item) {
+            continue;
+        }
+#endif
         item->Delete();
     }
     inventory.ClearObjectList();
@@ -2004,6 +2047,12 @@ void Sentient::DropInventoryItems(void)
     num = inventory.NumObjects();
     for (i = num; i >= 1; i--) {
         item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+#ifdef GODOT_GDEXTENSION
+        // Fixed: G_GetEntity can return NULL for stale entity numbers.
+        if (!item) {
+            continue;
+        }
+#endif
         // Added in 2.30
         //  Force drop the item when specified
         if (m_bForceDropWeapon && item->IsSubclassOfWeapon()) {
@@ -3103,56 +3152,7 @@ void Sentient::FootstepMain(trace_t *trace, int iRunning, int iEquipment)
         }
     } else {
         surftype = trace->surfaceFlags & MASK_SURF_TYPE;
-        switch (surftype) {
-        case SURF_FOLIAGE:
-            sSoundName += "foliage";
-            break;
-        case SURF_SNOW:
-            sSoundName += "snow";
-            break;
-        case SURF_CARPET:
-            sSoundName += "carpet";
-            break;
-        case SURF_SAND:
-            sSoundName += "sand";
-            break;
-        case SURF_PUDDLE:
-            sSoundName += "puddle";
-            break;
-        case SURF_GLASS:
-            sSoundName += "glass";
-            break;
-        case SURF_GRAVEL:
-            sSoundName += "gravel";
-            break;
-        case SURF_MUD:
-            sSoundName += "mud";
-            break;
-        case SURF_DIRT:
-            sSoundName += "dirt";
-            break;
-        case SURF_GRILL:
-            sSoundName += "grill";
-            break;
-        case SURF_GRASS:
-            sSoundName += "grass";
-            break;
-        case SURF_ROCK:
-            sSoundName += "stone";
-            break;
-        case SURF_PAPER:
-            sSoundName += "paper";
-            break;
-        case SURF_WOOD:
-            sSoundName += "wood";
-            break;
-        case SURF_METAL:
-            sSoundName += "metal";
-            break;
-        default:
-            sSoundName += "stone";
-            break;
-        }
+        sSoundName += SurfaceFlag_ToSoundSuffix(surftype);
     }
 
     if (iRunning) {
@@ -3284,56 +3284,7 @@ void Sentient::LandingSound(float volume, int iEquipment)
         }
     } else {
         surftype = trace.surfaceFlags & MASK_SURF_TYPE;
-        switch (surftype) {
-        case SURF_FOLIAGE:
-            sSoundName += "foliage";
-            break;
-        case SURF_SNOW:
-            sSoundName += "snow";
-            break;
-        case SURF_CARPET:
-            sSoundName += "carpet";
-            break;
-        case SURF_SAND:
-            sSoundName += "sand";
-            break;
-        case SURF_PUDDLE:
-            sSoundName += "puddle";
-            break;
-        case SURF_GLASS:
-            sSoundName += "glass";
-            break;
-        case SURF_GRAVEL:
-            sSoundName += "gravel";
-            break;
-        case SURF_MUD:
-            sSoundName += "mud";
-            break;
-        case SURF_DIRT:
-            sSoundName += "dirt";
-            break;
-        case SURF_GRILL:
-            sSoundName += "grill";
-            break;
-        case SURF_GRASS:
-            sSoundName += "grass";
-            break;
-        case SURF_ROCK:
-            sSoundName += "stone";
-            break;
-        case SURF_PAPER:
-            sSoundName += "paper";
-            break;
-        case SURF_WOOD:
-            sSoundName += "wood";
-            break;
-        case SURF_METAL:
-            sSoundName += "metal";
-            break;
-        default:
-            sSoundName += "stone";
-            break;
-        }
+        sSoundName += SurfaceFlag_ToSoundSuffix(surftype);
     }
 
     PlayNonPvsSound(sSoundName, volume);

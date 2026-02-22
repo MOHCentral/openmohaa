@@ -312,7 +312,15 @@ Sys_Quit
 */
 void Sys_Quit( void )
 {
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, do NOT call exit(). Signal a graceful shutdown.
+	extern void Godot_SysQuit(void);
+	Godot_SysQuit();
+	// Should never return (longjmp), but just in case:
+	return;
+#else
 	Sys_Exit( 0 );
+#endif
 }
 
 /*
@@ -424,8 +432,13 @@ Sys_Print
 */
 void Sys_Print( const char *msg )
 {
+#ifdef GODOT_GDEXTENSION
+	extern void Godot_SysPrint(const char *msg);
+	Godot_SysPrint( msg );
+#else
 	CON_LogWrite( msg );
 	CON_Print( msg );
+#endif
 }
 
 /*
@@ -442,9 +455,19 @@ void Sys_Error( const char *error, ... )
 	Q_vsnprintf (string, sizeof(string), error, argptr);
 	va_end (argptr);
 
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, do NOT call exit(). Instead, notify the extension
+	// and longjmp back to the frame boundary so Godot stays alive.
+	extern void Godot_SysError(const char *error);
+	Godot_SysError( string );
+	// Godot_SysError does longjmp — should never reach here.
+	// If it somehow does, abort as a last resort.
+	abort();
+#else
 	Sys_ErrorDialog( string );
 
 	Sys_Exit( 3 );
+#endif
 }
 
 #if 0
@@ -768,10 +791,26 @@ void Sys_SigHandler( int signum )
 		VM_Forced_Unload_Done();
 	}
 
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, notify the extension instead of calling exit()
+	if( signum == SIGTERM || signum == SIGINT )
+	{
+		extern void Godot_SysQuit(void);
+		Godot_SysQuit();
+	}
+	else
+	{
+		char errstr[128];
+		snprintf(errstr, sizeof(errstr), "Received signal %d", signum);
+		extern void Godot_SysError(const char *error);
+		Godot_SysError( errstr );
+	}
+#else
 	if( signum == SIGTERM || signum == SIGINT )
 		Sys_Exit( 1 );
 	else
 		Sys_Exit( 2 );
+#endif
 }
 
 /*
@@ -779,6 +818,7 @@ void Sys_SigHandler( int signum )
 main
 =================
 */
+#ifndef GODOT_GDEXTENSION
 int main( int argc, char **argv )
 {
 	int   i;
@@ -896,3 +936,4 @@ int main( int argc, char **argv )
 
 	return 0;
 }
+#endif /* GODOT_GDEXTENSION */

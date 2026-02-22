@@ -23,6 +23,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef __Q_PLATFORM_H
 #define __Q_PLATFORM_H
 
+#include <stdio.h>
+#include <math.h>
+
 // this is for determining if we have an asm version of a C function
 #define idx64 0
 #define C_ONLY

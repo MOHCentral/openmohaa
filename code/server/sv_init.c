@@ -696,12 +696,28 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 	ge->Cleanup( keep_scripts );
 	ge->SetTime( svs.startTime, svs.time );
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] post-SetTime keep_scripts=%d differentmap=%d\n", (int)keep_scripts, (int)differentmap);
+#endif
+
 	UI_LoadResource( "*133" );
 
 	SV_ClearModelUserCounts();
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] SV_ClearModelUserCounts done\n");
+#endif
+
 	TIKI_End();
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] TIKI_End done\n");
+#endif
 	TIKI_Begin();
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] TIKI_Begin done\n");
+#endif
 
 	UI_LoadResource( "*134" );
 
@@ -710,13 +726,31 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 		char filename[ MAX_QPATH ];
 
 		TIKI_FreeAll();
-		if ( CL_UseLargeLightmap( mapname ) ) {
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] TIKI_FreeAll done\n");
+#endif
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+			// Web build: avoid CL_UseLargeLightmap() probe here. On Emscripten this
+			// path can abort the map spawn before CM_LoadMap() and leave sv.state dead.
 			Com_sprintf( filename, sizeof( filename ), "maps/%s.bsp", mapname );
-		} else {
-			// Added in 2.0
-			Com_sprintf( filename, sizeof( filename ), "maps/%s_sml.bsp", mapname );
-		}
+		#else
+			if ( CL_UseLargeLightmap( mapname ) ) {
+				Com_sprintf( filename, sizeof( filename ), "maps/%s.bsp", mapname );
+			} else {
+				// Added in 2.0
+				Com_sprintf( filename, sizeof( filename ), "maps/%s_sml.bsp", mapname );
+			}
+		#endif
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] about to CM_LoadMap: %s\n", filename);
+#endif
 		CM_LoadMap( filename, qfalse, &checksum );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] CM_LoadMap done: %s checksum=%d\n", filename, checksum);
+#endif
 
 		// set checksum
 		Cvar_Set( "sv_mapChecksum", va( "%i", checksum ) );
@@ -763,8 +797,16 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 	// set game dll map
 	ge->SetMap( sv_mapname->string );
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] ge->SetMap done: %s\n", sv_mapname->string);
+#endif
+
 	if( !keep_scripts ) {
 		ge->Precache();
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] ge->Precache done\n");
+#endif
 	}
 
 	UI_LoadResource( "*138" );
@@ -795,6 +837,10 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 
 		// tell the game dll to spawn entities
 		ge->SpawnEntities( CM_EntityString(), svs.time );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] ge->SpawnEntities done\n");
+#endif
 
 		UI_LoadResource( "*140" );
 
@@ -832,6 +878,10 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 				Com_Error(ERR_DROP, "%s", p);
 			}
 		}
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] ge->RunFrame warmup done\n");
+#endif
 
 		svs.mapTime = svs.time - svs.startTime;
 	}
@@ -924,6 +974,10 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 		sv.state = SS_LOADING2;
 		sv.restarting = qfalse;
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[SVDBG] switched to SS_LOADING2\n");
+#endif
+
 		// send a heartbeat now so the master will get up to date info
 		SV_Heartbeat_f();
 
@@ -931,6 +985,10 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 
 		if( g_gametype->integer != GT_SINGLE_PLAYER ) {
 			ge->RegisterSounds();
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+			Com_Printf("[SVDBG] ge->RegisterSounds done\n");
+#endif
 		}
 	}
 	else
@@ -969,6 +1027,10 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 
 	iEnd = Sys_Milliseconds();
 	Com_Printf( "------ Server Initialization Complete ------ %5.2f seconds\n", ( float )iEnd / 1000.0f );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[SVDBG] SV_SpawnServer reached completion\n");
+#endif
 
 	UI_LoadResource( "*143" );
 

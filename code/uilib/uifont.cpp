@@ -571,6 +571,11 @@ int UIFont::getCharWidth(unsigned short ch)
         index      = m_font->charTable[code].index;
         indirected = m_font->charTable[code].loc;
     } else {
+#ifdef GODOT_GDEXTENSION
+        if (!m_font->sgl[0] || ch >= 256) {
+            return 0;
+        }
+#endif
         indirected = m_font->sgl[0]->indirection[ch];
         if (indirected < 0 || indirected > 255) {
             return 0;
@@ -704,6 +709,11 @@ float UI_FontgetCharWidthf(fontheader_t *font, unsigned short uch)
         index      = font->charTable[code].index;
         indirected = font->charTable[code].loc;
     } else {
+#ifdef GODOT_GDEXTENSION
+        if (!font->sgl[0] || uch >= 256) {
+            return 0.f;
+        }
+#endif
         indirected = font->sgl[0]->indirection[uch];
         if (indirected < 0 || indirected > 255) {
             return 0.f;

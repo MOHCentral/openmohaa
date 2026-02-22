@@ -24,7 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../script/scriptvariable.h"
 #include "../script/scriptexception.h"
-#include "Linklist.h"
+#include "linklist.h"
 
 #ifdef WITH_SCRIPT_ENGINE
 #    include "../fgame/archive.h"
@@ -39,7 +39,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #    include "../fgame/consoleevent.h"
 #    include "../fgame/animationevent.h"
 
-#    define LISTENER_Cvar_Get gi.Cvar_Get
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use Cvar_Get directly since gi function pointers
+// are not yet populated when L_InitEvents is called from CL_Init.
+extern "C" cvar_t *Cvar_Get(const char *var_name, const char *value, int flags);
+#        define LISTENER_Cvar_Get Cvar_Get
+#    else
+#        define LISTENER_Cvar_Get gi.Cvar_Get
+#    endif
 
 #elif defined(CGAME_DLL)
 
@@ -543,11 +550,19 @@ void L_ClearEventList()
 
     LL_Reset(&Event::EventQueue, next, prev);
 
+#ifdef GODOT_GDEXTENSION
+    // Monolithic build: the block allocators are shared between fgame,
+    // client, and UI code.  FreeAll() would destroy ALL Event objects
+    // including those stored in UI signal connections (UConnection::m_events)
+    // which must survive across map transitions.  The while-loop above
+    // already properly deletes each queued event individually.
+#else
     Event_allocator.FreeAll();
 
 #if defined(GAME_DLL)
     AnimationEvent_allocator.FreeAll();
     ConsoleEvent_allocator.FreeAll();
+#endif
 #endif
 }
 
@@ -564,8 +579,18 @@ void L_InitEvents(void)
     g_watch      = LISTENER_Cvar_Get("g_watch", "0", 0);
     g_eventstats = LISTENER_Cvar_Get("g_eventstats", "0", 0);
 
+#ifdef GODOT_GDEXTENSION
+    // Monolithic build: event definitions persist across map reloads
+    // because DataNodeList is consumed once by LoadEvents() and static
+    // constructors do not re-run.  Only load on the first call.
+    if (Event::NumEventCommands() <= 1) {
+        Event::LoadEvents();
+        ClassDef::BuildEventResponses();
+    }
+#else
     Event::LoadEvents();
     ClassDef::BuildEventResponses();
+#endif
 
     LL_Reset(&Event::EventQueue, next, prev);
 
@@ -616,6 +641,12 @@ void L_ShutdownEvents(void)
 
     L_ClearEventList();
 
+#ifdef GODOT_GDEXTENSION
+    // Monolithic build: DataNodeList is consumed once by LoadEvents()
+    // and cannot be rebuilt (static constructors only run at library load).
+    // Preserve commandList/eventDefList so subsequent L_InitEvents() calls
+    // (triggered by map reloads) have valid event data.
+#else
     Event::commandList.clear();
     Event::eventDefList.clear();
 #ifdef WITH_SCRIPT_ENGINE
@@ -623,6 +654,7 @@ void L_ShutdownEvents(void)
     Event::returnCommandList.clear();
     Event::getterCommandList.clear();
     Event::setterCommandList.clear();
+#endif
 #endif
 
     Listener::EventSystemStarted = false;

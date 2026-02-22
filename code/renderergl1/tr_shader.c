@@ -1674,10 +1674,12 @@ static qboolean ParseStage(shaderStage_t* stage, char** text, qboolean picmip)
         }
         else if (!Q_stricmp(token, "nextBundle"))
         {
+#ifndef GODOT_GDEXTENSION
 			if (!qglActiveTextureARB) {
 				ri.Printf(PRINT_ALL, "WARNING: " PRODUCT_NAME " requires a video card with multitexturing capability\n");
 				return qfalse;
 			}
+#endif
 
 			token = COM_ParseExt(text, qfalse);
 			if (token[0] && !Q_stricmp(token, "add")) {
@@ -3196,9 +3198,14 @@ static shader_t *FinishShader( void ) {
 		//
 		// look for multitexture potential
 		//
+#ifdef GODOT_GDEXTENSION
+		// No GL context, but CollapseMultitexture is data-only — safe to run.
+		CollapseMultitexture(&stage);
+#else
 		if (qglActiveTextureARB) {
 			CollapseMultitexture(&stage);
 		}
+#endif
 	}
 
 	for (i = 0; i < stage; i++) {

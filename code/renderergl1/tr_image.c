@@ -131,6 +131,7 @@ void GL_TextureMode( const char *string ) {
 	gl_filter_max = modes[i].maximize;
 
 	// change all the existing mipmap texture objects
+#ifndef GODOT_GDEXTENSION
 	for ( i = 0 ; i < tr.numImages ; i++ ) {
 		glt = &tr.images[ i ];
 		if ( glt->numMipmaps && glt->texnum ) {
@@ -139,6 +140,7 @@ void GL_TextureMode( const char *string ) {
 			qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, gl_filter_max);
 		}
 	}
+#endif
 }
 
 /*
@@ -886,7 +888,12 @@ image_t* R_CreateImageOld(
     // Fixed in OPM / ioquake3
     //  Original mohaa uses a fixed texnum instead of generating one regardless of the platform.
     //  Here, by using glGenTextures, it will guarantee the uniqueness of the texture
+#ifdef GODOT_GDEXTENSION
+    /* No GL context under Godot — use index-based texnum */
+    image->texnum = 1024 + i;
+#else
     qglGenTextures(1, &image->texnum);
+#endif
 
 	image->numMipmaps = numMipmaps;
 	image->allowPicmip = allowPicmip;
@@ -907,6 +914,13 @@ image_t* R_CreateImageOld(
 		image->TMU = 0;
 	}
 
+#ifdef GODOT_GDEXTENSION
+	/* No GL context — just set upload dimensions to match source */
+	image->uploadWidth = width;
+	image->uploadHeight = height;
+	image->internalFormat = GL_RGBA;
+	image->bytesUsed = width * height * 4;
+#else
 	if ( qglActiveTextureARB ) {
 		GL_SelectTexture( image->TMU );
 	}
@@ -955,6 +969,7 @@ image_t* R_CreateImageOld(
 	if ( image->TMU == 1 ) {
 		GL_SelectTexture( 0 );
 	}
+#endif
 
 	hash = generateHashValue(name);
 	image->next = hashTable[hash];
@@ -1864,6 +1879,8 @@ static void LoadTGA ( const char *name, byte **pic, int *width, int *height)
   ri.FS_FreeFile (buffer);
 }
 
+
+
 /* Catching errors, as done in libjpeg's example.c */
 typedef struct q_jpeg_error_mgr_s
 {
@@ -2139,7 +2156,6 @@ boolean empty_output_buffer (j_compress_ptr cinfo)
 {
   return TRUE;
 }
-
 #if 0
 /*
  * Compression initialization.
@@ -2900,9 +2916,11 @@ R_FreeImage
 ===============
 */
 void R_FreeImage(image_t* image) {
+#ifndef GODOT_GDEXTENSION
 	if (image->texnum) {
 		qglDeleteTextures(1, &image->texnum);
 	}
+#endif
 
     R_DeleteImageFromHash(image);
 	memset(image, 0, sizeof(image_t));
@@ -2924,6 +2942,7 @@ void R_DeleteTextures( void ) {
 	tr.numImages = 0;
 
 	Com_Memset( glState.currenttextures, 0, sizeof( glState.currenttextures ) );
+#ifndef GODOT_GDEXTENSION
 	if ( qglBindTexture ) {
 		if ( qglActiveTextureARB ) {
 			GL_SelectTexture( 1 );
@@ -2934,6 +2953,7 @@ void R_DeleteTextures( void ) {
 			qglBindTexture( GL_TEXTURE_2D, 0 );
 		}
 	}
+#endif
 }
 
 /*

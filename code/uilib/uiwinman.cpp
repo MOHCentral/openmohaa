@@ -288,6 +288,33 @@ void UIWindowManager::ServiceEvents(void)
     pos.y   = uid.mouseY;
     buttons = uid.mouseFlags;
 
+#ifdef GODOT_GDEXTENSION
+    static int se_debug_counter = 0;
+    if (++se_debug_counter >= 60) {
+        se_debug_counter = 0;
+        Com_DPrintf("[UI-SE] pos=(%d,%d) hasMouse=%d buttons=0x%x children=%d\n",
+            (int)pos.x, (int)pos.y, (int)uid.uiHasMouse, buttons,
+            (int)m_children.NumObjects());
+        for (int _i = 1; _i <= m_children.NumObjects(); _i++) {
+            UIWidget *ch = m_children.ObjectAt(_i);
+            if (!ch) continue;
+            Com_DPrintf("[UI-SE]   ch[%d] vis=%d name='%s' frame=(%.0f,%.0f,%.0fx%.0f)\n",
+                _i, (int)ch->IsVisible(), ch->getName(),
+                ch->m_frame.pos.x, ch->m_frame.pos.y,
+                ch->m_frame.size.width, ch->m_frame.size.height);
+        }
+        SafePtr<UIWidget> responder = getResponder(pos);
+        if (responder.Pointer()) {
+            Com_DPrintf("[UI-SE] -> responder='%s' frame=(%.0f,%.0f,%.0fx%.0f)\n",
+                responder->getName(),
+                responder->m_frame.pos.x, responder->m_frame.pos.y,
+                responder->m_frame.size.width, responder->m_frame.size.height);
+        } else {
+            Com_DPrintf("[UI-SE] -> no responder\n");
+        }
+    }
+#endif
+
     if (m_bindactive) {
         view = m_bindactive;
     } else {

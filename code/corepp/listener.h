@@ -679,13 +679,26 @@ extern MEM_BlockAlloc<Event> Event_allocator;
 //
 // game dll specific defines
 //
-#    define EVENT_DebugPrintf gi.DebugPrintf
-#    define EVENT_DPrintf     gi.DPrintf
-#    define EVENT_Printf      gi.Printf
-#    define EVENT_time        level.time
-#    define EVENT_msec        level.inttime
-#    define EVENT_realtime    gi.Milliseconds()
-#    define EVENT_Error       gi.Error
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+extern "C" int Sys_Milliseconds(void);
+#        define EVENT_DebugPrintf Com_DebugPrintf
+#        define EVENT_DPrintf     Com_DPrintf
+#        define EVENT_Printf      Com_Printf
+#        define EVENT_time        level.time
+#        define EVENT_msec        level.inttime
+#        define EVENT_realtime    Sys_Milliseconds()
+#        define EVENT_Error       Com_Error
+#    else
+#        define EVENT_DebugPrintf gi.DebugPrintf
+#        define EVENT_DPrintf     gi.DPrintf
+#        define EVENT_Printf      gi.Printf
+#        define EVENT_time        level.time
+#        define EVENT_msec        level.inttime
+#        define EVENT_realtime    gi.Milliseconds()
+#        define EVENT_Error       gi.Error
+#    endif
 
 #    define EVENT_FILENAME    "events.txt"
 

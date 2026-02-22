@@ -481,6 +481,13 @@ when the UI catcher is active.
 =================
 */
 void CL_UpdateMouse() {
+#ifdef GODOT_GDEXTENSION
+    /* Under Godot, cursor position is tracked via SE_MOUSE events injected
+       from godot_input_bridge.c → CL_MouseEvent().  Calling IN_GetMousePosition()
+       here would clobber the accumulated position with (0,0) because the
+       Godot stub has no SDL-like absolute position source.  Skip entirely. */
+    return;
+#else
     if (!(Key_GetCatcher() & KEYCATCH_UI)) {
         return;
     }
@@ -496,6 +503,7 @@ void CL_UpdateMouse() {
     }
 
     IN_GetMousePosition(&cl.mousex, &cl.mousey);
+#endif
 }
 
 /*

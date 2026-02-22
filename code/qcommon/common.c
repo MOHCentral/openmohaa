@@ -25,6 +25,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "q_version.h"
 #include <setjmp.h>
+
+#ifdef GODOT_GDEXTENSION
+/* In the Godot GDExtension build, the client subsystem is active.
+ * We un-define DEDICATED for this translation unit so that CL_Init,
+ * CL_Frame, S_Init, etc. are called from Com_Init / Com_Frame.
+ * Platform-specific SDL code lives in sys files which retain DEDICATED. */
+#undef DEDICATED
+#endif
 #ifndef _WIN32
 #include <netinet/in.h>
 #include <sys/stat.h> // umask
@@ -491,6 +499,10 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	va_start (argptr,fmt);
 	Q_vsnprintf (com_errorMessage,sizeof(com_errorMessage),fmt,argptr);
 	va_end (argptr);
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[COM_ERROR] code=%d message=%s\n", code, com_errorMessage);
+#endif
 
 	if (code != ERR_DISCONNECT && code != ERR_NEED_CD)
 		Cvar_Set("com_errorMessage", com_errorMessage);
@@ -2319,10 +2331,16 @@ void Com_Frame( void ) {
         else
             timeVal = Com_TimeVal(minMsec);
 
+#ifdef GODOT_GDEXTENSION
+        // Under Godot, never block — Godot drives the frame rate.
+        NET_Sleep(0);
+        break;
+#else
         if (com_busyWait->integer || timeVal < 1)
             NET_Sleep(0);
         else
             NET_Sleep(timeVal - 1);
+#endif
     } while (Com_TimeVal(minMsec));
 
     IN_Frame();

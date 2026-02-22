@@ -187,7 +187,13 @@ void Health::ArchiveStatic(Archiver& arc)
 void Health::DoRemoveProcess()
 {
     if (g_gametype->integer != GT_SINGLE_PLAYER) {
+#ifdef GODOT_GDEXTENSION
+        // Fixed: upstream has infinite recursion here (calls itself instead of base/remove).
+        // In multiplayer, just post a remove event instead of queueing.
+        PostEvent(EV_Remove, EV_REMOVE);
+#else
         DoRemoveProcess();
+#endif
     } else {
         AddToHealthQueue();
     }

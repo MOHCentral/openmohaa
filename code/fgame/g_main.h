@@ -36,6 +36,15 @@ extern game_export_t globals;
 extern int           g_protocol;
 extern target_game_e g_target_game;
 
+#ifdef GODOT_GDEXTENSION
+// During library teardown, gi.Malloc/Free may be NULL (engine already shut down).
+// These safe wrappers fall back to system malloc/free to prevent SIGSEGV from
+// global C++ destructors (e.g. ScriptMaster) that allocate during cleanup.
+#include <cstdlib>
+static inline void *gi_Malloc_Safe(int size) { return gi.Malloc ? gi.Malloc(size) : malloc(size); }
+static inline void  gi_Free_Safe(void *ptr)  { if (gi.Free) gi.Free(ptr); else free(ptr); }
+#endif
+
 extern qboolean g_iInThinks;
 extern qboolean g_bBeforeThinks;
 
