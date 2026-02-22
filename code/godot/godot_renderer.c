@@ -62,6 +62,7 @@ typedef struct {
     float         spriteWidth;     /* source image pixel width  */
     float         spriteHeight;    /* source image pixel height */
     float         spriteScale;     /* shader spritescale keyword (default 1.0) */
+    int           realModelHandle; /* Handle in tr.models[] for engine pipeline use */
 } gr_model_t;
 
 static gr_model_t gr_models[GR_MAX_MODELS];
@@ -140,6 +141,14 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
             mod->type = GR_MOD_SPRITE;
             mod->shaderHandle = GR_RegisterShader( shadername );
 
+            /* Also register in the real tr.models[] table so that the
+             * engine's RB_DrawSprite can be called for verification and
+             * eventual pipeline capture. */
+            {
+                extern int Godot_RealModel_RegisterSprite(const char *name);
+                mod->realModelHandle = Godot_RealModel_RegisterSprite( name );
+            }
+
             /* Retrieve source image dimensions and spritescale from the real
              * shader_t data.  This mirrors SPR_RegisterSprite (tr_sprite.c):
              * the quad half-extents are (width*0.5*scale, height*0.5*scale)
@@ -162,9 +171,10 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
             }
             
             ri.Printf( PRINT_DEVELOPER,
-                "[GodotRenderer] RegisterModel SPRITE: %s -> shader '%s' (handle #%d) dims=%dx%d spriteScale=%.2f\n",
+                "[GodotRenderer] RegisterModel SPRITE: %s -> shader '%s' (handle #%d) dims=%dx%d spriteScale=%.2f realH=%d\n",
                 name, shadername, mod->shaderHandle,
-                (int)mod->spriteWidth, (int)mod->spriteHeight, mod->spriteScale );
+                (int)mod->spriteWidth, (int)mod->spriteHeight, mod->spriteScale,
+                mod->realModelHandle );
             return mod->index;
         }
     }
@@ -1031,6 +1041,15 @@ static void GR_RenderScene( const refdef_t *fd )
     gr_farplane_bias = fd->farplane_bias;
     VectorCopy( fd->farplane_color, gr_farplane_color );
     gr_farplane_cull = fd->farplane_cull;
+
+    /* Set up the real renderer's backend view params so that
+     * Godot_ComputeSpriteQuad() (and future engine pipeline
+     * capture functions) produce correct camera-facing geometry. */
+    {
+        extern void Godot_Backend_SetupView(const float vieworg[3],
+            const float viewaxis[3][3]);
+        Godot_Backend_SetupView( fd->vieworg, fd->viewaxis );
+    }
 
     gr_hasNewFrame = qtrue;
     gr_frameCount++;
@@ -3200,6 +3219,15 @@ int Godot_Model_GetShaderHandle( int hModel )
 {
     if ( hModel < 1 || hModel >= gr_numModels ) return 0;
     return gr_models[hModel].shaderHandle;
+}
+
+/* Return the real tr.models[] handle for engine pipeline capture.
+ * Currently populated for GR_MOD_SPRITE only (via Godot_RealModel_RegisterSprite).
+ * Returns 0 if no real handle was registered. */
+int Godot_Model_GetRealHandle( int hModel )
+{
+    if ( hModel < 1 || hModel >= gr_numModels ) return 0;
+    return gr_models[hModel].realModelHandle;
 }
 
 /* Register a model by name (TIKI, brush, or sprite) and return its handle.

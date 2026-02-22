@@ -121,3 +121,20 @@ void Godot_VFX_GetSprite(int idx,
         }
     }
 }
+
+/* Return the model handle (gr_models[] index) for a sprite at the given
+ * filtered index.  Used to look up the realModelHandle for engine pipeline
+ * capture via Godot_Model_GetRealHandle(). */
+int Godot_VFX_GetSpriteModelHandle(int idx)
+{
+    if (idx < 0 || idx >= vfx_sprite_count) return 0;
+
+    int entIdx = vfx_sprite_indices[idx];
+    float origin[3], axis[9], scaleVal;
+    int hModel, entityNumber, renderfx;
+    unsigned char rgba[4];
+
+    Godot_Renderer_GetEntity(entIdx, origin, axis, &scaleVal,
+                             &hModel, &entityNumber, rgba, &renderfx);
+    return hModel;
+}

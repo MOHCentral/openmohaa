@@ -213,6 +213,8 @@ renderer_sources = [
     "code/renderergl1/godot_shader_accessors.c",
     # Accessor bridge: reads tr.world BSP data for Godot-side queries
     "code/renderergl1/godot_bsp_accessors.c",
+    # Render capture: engine pipeline sprite/entity vertex computation
+    "code/renderergl1/godot_render_capture.c",
 ]
 sources.extend(renderer_sources)
 

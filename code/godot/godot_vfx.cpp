@@ -55,6 +55,18 @@ extern "C" {
     int  Godot_Sprite_GetEngineSize(const char *shader_name,
                                     int *out_width, int *out_height,
                                     float *out_sprite_scale);
+
+    /* Engine pipeline capture (godot_render_capture.c) */
+    int  Godot_RealModel_GetSpriteDims(int realHandle,
+                                       float *out_width, float *out_height,
+                                       float *out_sprite_scale);
+    int  Godot_ComputeSpriteQuad(int realModelHandle,
+                                 const float origin[3], float entityScale,
+                                 const float entityAxis[3][3],
+                                 const unsigned char rgba[4],
+                                 float out_xyz[4][3], float out_uv[4][2]);
+    int  Godot_VFX_GetSpriteModelHandle(int idx);
+    int  Godot_Model_GetRealHandle(int hModel);
 }
 
 /* ── Constants ── */
@@ -564,14 +576,17 @@ void Godot_VFX_Update(float delta)
         mi->set_visible(true);
     }
 
-    /* Per-frame aggregate diagnostics — log max sprite extent and scale
-     * for the first 120 frames that have sprites (after that, quiet). */
+    /* Per-frame diagnostics — log sprite details and verify against
+     * engine's real model data.  Active for the first 300 frames that
+     * have sprites, then quiet. */
     {
         static int diag_frame_count = 0;
-        if (count > 0 && diag_frame_count < 120) {
+        if (count > 0 && diag_frame_count < 300) {
             diag_frame_count++;
             float max_extent = 0.0f, max_scale = 0.0f, min_scale = 999.0f;
             int   max_extent_idx = -1;
+            const char *max_shader_name = "";
+
             for (int j = 0; j < count && j < VFX_SPRITE_POOL_SIZE; j++) {
                 float oj[3] = {0}, rj = 0, rotj = 0, sj = 1.0f;
                 int shj = 0;
@@ -580,18 +595,41 @@ void Godot_VFX_Update(float delta)
                 if (shj > 0 && sj > 0.0001f) {
                     VfxSpriteSize szj = vfx_get_sprite_size(shj);
                     float ext = (float)szj.width * sj * szj.sprite_scale * MOHAA_UNIT_SCALE;
-                    if (ext > max_extent) { max_extent = ext; max_extent_idx = j; }
+                    if (ext > max_extent) {
+                        max_extent = ext;
+                        max_extent_idx = j;
+                        max_shader_name = Godot_Renderer_GetShaderName(shj);
+                    }
                     if (sj > max_scale) max_scale = sj;
                     if (sj < min_scale) min_scale = sj;
                 }
             }
-            if (max_extent > 0.5f) {
-                /* Only log when sprites are > 0.5m (potential "huge" sprites) */
-                UtilityFunctions::print(String("[VFX-FRAME] n=") + String::num_int64(count) +
+
+            /* Log sprites > 0.5m with shader name and engine verification */
+            if (max_extent > 0.5f && max_extent_idx >= 0) {
+                /* Get engine-pipeline sprite data for comparison */
+                int hModel = Godot_VFX_GetSpriteModelHandle(max_extent_idx);
+                int realH = (hModel > 0) ? Godot_Model_GetRealHandle(hModel) : 0;
+                float eng_w = 0, eng_h = 0, eng_sc = 0;
+                int have_real = 0;
+                if (realH > 0) {
+                    have_real = Godot_RealModel_GetSpriteDims(realH,
+                        &eng_w, &eng_h, &eng_sc);
+                }
+
+                UtilityFunctions::print(
+                    String("[VFX-DIAG] n=") + String::num_int64(count) +
                     " max_extent=" + String::num(max_extent, 3) + "m" +
-                    " min_entityScale=" + String::num(min_scale, 4) +
-                    " max_entityScale=" + String::num(max_scale, 4) +
-                    " biggest_sprite_idx=" + String::num_int64(max_extent_idx));
+                    " shader='" + String(max_shader_name ? max_shader_name : "?") + "'" +
+                    " entScale=" + String::num(max_scale, 4) +
+                    " hModel=" + String::num_int64(hModel) +
+                    " realH=" + String::num_int64(realH) +
+                    (have_real ? (
+                        String(" engine_w=") + String::num(eng_w, 0) +
+                        " engine_h=" + String::num(eng_h, 0) +
+                        " engine_spriteScale=" + String::num(eng_sc, 3)
+                    ) : String(" (no real model)"))
+                );
             }
         }
     }

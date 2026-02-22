@@ -37,9 +37,7 @@ extern "C" {
 #include <errno.h>
 #include <unistd.h>
 #include <libgen.h>
-#ifdef __EMSCRIPTEN__
 #include <dlfcn.h>
-#endif
 
 // ──────────────────────────────────────────────
 //  UpdateChecker stubs — the real implementation in sys_update_checker.cpp
@@ -145,27 +143,47 @@ void *Sys_GetCGameAPI(void *parms) {
     }
 #else
 
-    /* Try fs_homedatapath/game/, fs_basepath/game/, and fs_homepath/game/ */
+    /* Try next to the GDExtension .so first (e.g. project/bin/cgame.so),
+       then fall back to fs_homedatapath/game/, fs_basepath/game/, fs_homepath/game/.
+       This keeps the main/ game directory free of build artifacts. */
     {
         char libPath[1024];
-        const char *gameDir = Cvar_VariableString("fs_game");
-        const char *paths[3];
-        int i;
+        Dl_info dlInfo;
 
-        if (!gameDir || !*gameDir) gameDir = "main";
+        /* Locate the directory containing the GDExtension library itself. */
+        if (dladdr((void *)Sys_GetCGameAPI, &dlInfo) && dlInfo.dli_fname) {
+            char pathBuf[1024];
+            Q_strncpyz(pathBuf, dlInfo.dli_fname, sizeof(pathBuf));
+            char *dir = dirname(pathBuf);
+            Com_sprintf(libPath, sizeof(libPath), "%s/%s", dir, gamename);
+            Com_Printf("GDExtension: trying cgame next to library at \"%s\"...\n", libPath);
+            cgame_library = Sys_LoadLibrary(libPath);
+            if (!cgame_library) {
+                const char *dlErr = Sys_LibraryError();
+                Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+            }
+        }
 
-        paths[0] = Cvar_VariableString("fs_homedatapath");
-        paths[1] = Cvar_VariableString("fs_basepath");
-        paths[2] = Cvar_VariableString("fs_homepath");
+        if (!cgame_library) {
+            const char *gameDir = Cvar_VariableString("fs_game");
+            const char *paths[3];
+            int i;
 
-        for (i = 0; i < 3 && !cgame_library; i++) {
-            if (paths[i] && *paths[i]) {
-                Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDir, gamename);
-                Com_Printf("GDExtension: trying cgame at \"%s\"...\n", libPath);
-                cgame_library = Sys_LoadLibrary(libPath);
-                if (!cgame_library) {
-                    const char *dlErr = Sys_LibraryError();
-                    Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+            if (!gameDir || !*gameDir) gameDir = "main";
+
+            paths[0] = Cvar_VariableString("fs_homedatapath");
+            paths[1] = Cvar_VariableString("fs_basepath");
+            paths[2] = Cvar_VariableString("fs_homepath");
+
+            for (i = 0; i < 3 && !cgame_library; i++) {
+                if (paths[i] && *paths[i]) {
+                    Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDir, gamename);
+                    Com_Printf("GDExtension: trying cgame at \"%s\"...\n", libPath);
+                    cgame_library = Sys_LoadLibrary(libPath);
+                    if (!cgame_library) {
+                        const char *dlErr = Sys_LibraryError();
+                        Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+                    }
                 }
             }
         }
