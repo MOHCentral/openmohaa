@@ -207,9 +207,6 @@ void Godot_WeaponEffects_Cleanup() {
      * scene tree, so we only need to deactivate. */
     for (int i = 0; i < MUZZLE_FLASH_MAX; i++) {
         s_flashes[i].active = false;
-        if (s_flashes[i].mesh) {
-            s_flashes[i].mesh->set_visible(false);
-        }
         if (s_flashes[i].light) {
             s_flashes[i].light->set_visible(false);
         }
@@ -240,13 +237,12 @@ void Godot_MuzzleFlash_Spawn(const Vector3 &position,
     MuzzleFlashSlot &slot = s_flashes[s_flash_next];
     s_flash_next = (s_flash_next + 1) % MUZZLE_FLASH_MAX;
 
-    /* Position the quad slightly ahead of the muzzle */
+    /* Position slightly ahead of the muzzle */
     Vector3 pos = position + direction.normalized() * 0.05f;
 
-    slot.mesh->set_global_transform(Transform3D(Basis(), pos));
-    slot.mesh->set_scale(Vector3(1.0f, 1.0f, 1.0f));
-    slot.mesh->set_visible(true);
-
+    /* Only spawn the dynamic light — the muzzle flash sprite itself is
+     * rendered through the normal VFX module at the correct engine-parity
+     * size (was previously a hardcoded 0.25 m quad that ignored SFX scale). */
     slot.light->set_global_transform(Transform3D(Basis(), pos));
     slot.light->set_param(Light3D::PARAM_ENERGY, intensity);
     slot.light->set_visible(true);
@@ -265,21 +261,15 @@ void Godot_MuzzleFlash_Update(float delta) {
 
         slot.age += delta;
         if (slot.age >= MUZZLE_FLASH_LIFETIME) {
-            /* expired — hide and deactivate */
-            slot.mesh->set_visible(false);
+            /* expired — hide light and deactivate */
             slot.light->set_visible(false);
             slot.active = false;
             continue;
         }
 
-        /* fade out alpha + light energy linearly */
+        /* Dim the light linearly over its lifetime */
         float t = slot.age / MUZZLE_FLASH_LIFETIME;  /* 0→1 */
         float alpha = 1.0f - t;
-
-        /* Scale billboard quad down as it fades (visual fade substitute) */
-        slot.mesh->set_scale(Vector3(alpha, alpha, alpha));
-
-        /* Dim the light proportionally from its initial energy */
         slot.light->set_param(Light3D::PARAM_ENERGY,
                               slot.initial_energy * alpha);
     }

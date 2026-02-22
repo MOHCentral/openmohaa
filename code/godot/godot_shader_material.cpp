@@ -708,8 +708,29 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         code += "    vec4 result = vec4(0.0);\n";
     }
 
-    /* Output */
-    code += "\n    ALBEDO = result.rgb;\n";
+    /* Output — gamma-to-linear conversion.
+     *
+     * MOHAA's original renderer works entirely in gamma space: textures
+     * are gamma-encoded, lightmaps are gamma-encoded, and the framebuffer
+     * output is gamma-encoded.  All compositing (blend, mul, add) happens
+     * in gamma space.
+     *
+     * Godot Forward+ works in linear space internally and applies a
+     * linear→sRGB conversion at output.  Our samplers intentionally lack
+     * the `source_color` hint so textures are read as raw gamma values,
+     * preserving MOHAA's gamma-space compositing math.  Without this
+     * correction the output chain would be:
+     *     display = sRGB_encode(gamma_tex × gamma_lm)
+     * which brightens mid-tones (~47% at value 0.5).
+     *
+     * By converting the gamma-space result to linear here, the output
+     * chain becomes:
+     *     display = sRGB_encode(pow(gamma_result, 2.2)) ≈ gamma_result
+     * which matches the original MOHAA output. */
+    code += "\n    // Gamma→linear: compensate for Godot's sRGB output encode\n";
+    code += "    result.rgb = pow(max(result.rgb, vec3(0.0)), vec3(2.2));\n";
+
+    code += "    ALBEDO = result.rgb;\n";
 
     if (props->transparency == SHADER_ALPHA_BLEND ||
         props->transparency == SHADER_ADDITIVE ||

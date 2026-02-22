@@ -1544,19 +1544,19 @@ void ClientGameCommandManager::SpawnTempModel(int mcount)
         p->cgd.origin += p->cgd.velocity * (p->aliveTime / 1000.0) * current_entity_scale;
 
 #ifdef GODOT_GDEXTENSION
-        // Hook for Godot weapon effects (muzzle flash & shell casings)
-        // Divert specific effects to the high-fidelity Godot implementation
+        // Hook for Godot weapon effects (muzzle flash, shell casings)
         if (p->modelname.length()) {
             const char *mn = p->modelname.c_str();
             bool handled = false;
 
             if (mn && (strstr(mn, "muzzle") || strstr(mn, "flash") || strstr(mn, "corona"))) {
-                // Muzzle flash
+                // Spawn dynamic light only — the sprite itself continues through
+                // normal tempmodel processing so the VFX module renders it at the
+                // correct engine-parity size (the old hardcoded 0.25 m quad was wrong).
                 if (cgi.AddMuzzleFlash) {
-                     // Use m_spawnthing->axis[0] (forward) as direction
                      cgi.AddMuzzleFlash(p->cgd.origin, m_spawnthing->axis[0], p->cgd.scale);
-                     handled = true;
                 }
+                // handled stays false: sprite renders via VFX module
             }
             else if (mn && (strstr(mn, "shell") || strstr(mn, "casing"))) {
                 // Shell casing
