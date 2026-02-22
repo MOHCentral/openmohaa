@@ -58,6 +58,10 @@ typedef struct {
     qboolean      serveronly;
     dtiki_t      *tiki;       /* only set for GR_MOD_TIKI */
     int           shaderHandle;
+    /* Sprite model dimensions (GR_MOD_SPRITE only) — from image width/height */
+    float         spriteWidth;     /* source image pixel width  */
+    float         spriteHeight;    /* source image pixel height */
+    float         spriteScale;     /* shader spritescale keyword (default 1.0) */
 } gr_model_t;
 
 static gr_model_t gr_models[GR_MAX_MODELS];
@@ -135,10 +139,32 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
 
             mod->type = GR_MOD_SPRITE;
             mod->shaderHandle = GR_RegisterShader( shadername );
+
+            /* Retrieve source image dimensions and spritescale from the real
+             * shader_t data.  This mirrors SPR_RegisterSprite (tr_sprite.c):
+             * the quad half-extents are (width*0.5*scale, height*0.5*scale)
+             * in engine inches. */
+            {
+                int iw = 0, ih = 0;
+                float ss = 1.0f;
+                extern int Godot_Sprite_GetEngineSize(const char *shader_name,
+                    int *out_width, int *out_height, float *out_sprite_scale);
+                if ( Godot_Sprite_GetEngineSize( shadername, &iw, &ih, &ss ) ) {
+                    mod->spriteWidth  = (float)iw;
+                    mod->spriteHeight = (float)ih;
+                    mod->spriteScale  = (ss > 0.0f) ? ss : 1.0f;
+                } else {
+                    /* Fallback: assume a reasonable default */
+                    mod->spriteWidth  = 64.0f;
+                    mod->spriteHeight = 64.0f;
+                    mod->spriteScale  = 1.0f;
+                }
+            }
             
             ri.Printf( PRINT_DEVELOPER,
-                "[GodotRenderer] RegisterModel SPRITE: %s -> shader '%s' (handle #%d)\n",
-                name, shadername, mod->shaderHandle );
+                "[GodotRenderer] RegisterModel SPRITE: %s -> shader '%s' (handle #%d) dims=%dx%d spriteScale=%.2f\n",
+                name, shadername, mod->shaderHandle,
+                (int)mod->spriteWidth, (int)mod->spriteHeight, mod->spriteScale );
             return mod->index;
         }
     }
@@ -2841,6 +2867,21 @@ int Godot_Model_GetSpriteShader( int hModel )
         return gr_models[hModel].shaderHandle;
     }
     return 0;
+}
+
+/* Get sprite model dimensions (image-based sizing) for GR_MOD_SPRITE models.
+ * Returns 1 if model is a sprite with valid dimensions, 0 otherwise. */
+int Godot_Model_GetSpriteDims( int hModel,
+                               float *outWidth, float *outHeight,
+                               float *outSpriteScale )
+{
+    if ( hModel < 0 || hModel >= gr_numModels ) return 0;
+    if ( gr_models[hModel].type != GR_MOD_SPRITE ) return 0;
+    if ( gr_models[hModel].spriteWidth <= 0.0f ) return 0;
+    if ( outWidth )       *outWidth       = gr_models[hModel].spriteWidth;
+    if ( outHeight )      *outHeight      = gr_models[hModel].spriteHeight;
+    if ( outSpriteScale ) *outSpriteScale = gr_models[hModel].spriteScale;
+    return 1;
 }
 
 /* Phase 26: Shader remap query — check if a shader name has been remapped */
