@@ -1947,12 +1947,26 @@ void MoHAARunner::update_entities() {
                 mi->set_visible(false);
                 continue;
             }
-            // Engine radius is already the half-extent (see RB_SurfaceSprite:
-            // VectorScale(axis, radius, left/up) → quad spans -radius to +radius).
-            // We build vertices at ±half, so half = radius converted to metres.
 
             // Use customShader if set, else extract the registered shader from the sprite model handle
             int spriteShader = (customShader > 0) ? customShader : Godot_Model_GetSpriteShader(hModel);
+
+            // [DIAG] Temporary debug log for sprite sizing
+            {
+                static int sprite_diag_count = 0;
+                if (sprite_diag_count < 50) {
+                    const char *sn = (spriteShader > 0) ? Godot_Renderer_GetShaderName(spriteShader) : "(none)";
+                    const char *mn = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(String("[DIAG-SPRITE] i=") + String::num_int64(i) +
+                        " radius=" + String::num(radius, 2) +
+                        " scale=" + String::num(scale, 3) +
+                        " hModel=" + String::num_int64(hModel) +
+                        " modelName='" + String(mn ? mn : "(null)") + "'" +
+                        " shader='" + String(sn ? sn : "(null)") + "'" +
+                        " half_m=" + String::num(radius * MOHAA_UNIT_SCALE, 4));
+                    sprite_diag_count++;
+                }
+            }
 
             float half = radius * MOHAA_UNIT_SCALE;
 
@@ -2708,6 +2722,24 @@ void MoHAARunner::update_entities() {
             // already baked into the mesh vertices by godot_skel_model.cpp)
             float s = (scale > 0.001f ? scale : 1.0f);
 
+            // [DIAG] Log entity transforms with unusual scale values
+            {
+                static int model_diag_count = 0;
+                if (model_diag_count < 30 && (scale > 2.0f || scale < 0.1f)) {
+                    const char *mn = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(String("[DIAG-MODEL] i=") + String::num_int64(i) +
+                        " scale=" + String::num(scale, 3) +
+                        " s_applied=" + String::num(s, 3) +
+                        " hModel=" + String::num_int64(hModel) +
+                        " name='" + String(mn ? mn : "(null)") + "'" +
+                        " pos=(" + String::num(origin[0],1) + "," + String::num(origin[1],1) + "," + String::num(origin[2],1) + ")" +
+                        " axLen=(" + String::num(sqrtf(axis[0]*axis[0]+axis[1]*axis[1]+axis[2]*axis[2]),3) + "," +
+                        String::num(sqrtf(axis[3]*axis[3]+axis[4]*axis[4]+axis[5]*axis[5]),3) + "," +
+                        String::num(sqrtf(axis[6]*axis[6]+axis[7]*axis[7]+axis[8]*axis[8]),3) + ")");
+                    model_diag_count++;
+                }
+            }
+
             Basis basis(right_g * s, up_g * s, back_g * s);
             mi->set_global_transform(Transform3D(basis, pos));
         }
@@ -3216,6 +3248,30 @@ void MoHAARunner::update_polys() {
 
         // Clamp to 4 max (quads is the common case)
         if (numVerts > 4) numVerts = 4;
+
+        // [DIAG] Temporary debug log for poly sizing
+        {
+            static int poly_diag_count = 0;
+            if (poly_diag_count < 30) {
+                const char *sn = (hShader > 0) ? Godot_Renderer_GetShaderName(hShader) : "(none)";
+                // Compute poly extent (bounding box diagonal in engine units)
+                float minX=1e9, minY=1e9, minZ=1e9, maxX=-1e9, maxY=-1e9, maxZ=-1e9;
+                for (int v = 0; v < numVerts; v++) {
+                    float px=positions[v*3+0], py=positions[v*3+1], pz=positions[v*3+2];
+                    if (px<minX) minX=px; if (px>maxX) maxX=px;
+                    if (py<minY) minY=py; if (py>maxY) maxY=py;
+                    if (pz<minZ) minZ=pz; if (pz>maxZ) maxZ=pz;
+                }
+                float span = sqrtf((maxX-minX)*(maxX-minX)+(maxY-minY)*(maxY-minY)+(maxZ-minZ)*(maxZ-minZ));
+                UtilityFunctions::print(String("[DIAG-POLY] i=") + String::num_int64(i) +
+                    " nv=" + String::num_int64(numVerts) +
+                    " shader='" + String(sn ? sn : "(null)") + "'" +
+                    " span_inches=" + String::num(span, 1) +
+                    " span_m=" + String::num(span * (1.0f/39.37f), 3) +
+                    " v0=(" + String::num(positions[0],1) + "," + String::num(positions[1],1) + "," + String::num(positions[2],1) + ")");
+                poly_diag_count++;
+            }
+        }
 
         // Build an ArrayMesh triangle fan from the poly vertices
         PackedVector3Array gPos;
