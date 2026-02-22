@@ -51,3 +51,4 @@ out
 *.os
 .sconsign.dblite
 bin/
+*.o
