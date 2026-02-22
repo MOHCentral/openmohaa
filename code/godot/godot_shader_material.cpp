@@ -18,8 +18,34 @@
 #include <unordered_map>
 
 #include <godot_cpp/variant/utility_functions.hpp>
+#include <godot_cpp/classes/rendering_server.hpp>
 
 using namespace godot;
+
+/* ===================================================================
+ *  Renderer colour-space detection
+ *
+ *  Forward+ / Mobile work in linear space and apply a linear→sRGB
+ *  conversion at output.  Our shaders composite in gamma space, so
+ *  the final result needs a pow(2.2) gamma→linear conversion before
+ *  being written to ALBEDO — the sRGB encode undoes it.
+ *
+ *  The GL Compatibility renderer (used on WebGL2) handles colour
+ *  space differently: the sRGB output conversion is either absent or
+ *  applied at a different stage.  The pow(2.2) double-darkens the
+ *  output.  On this backend we skip the conversion.
+ * ================================================================ */
+static int s_needs_gamma_to_linear = -1;  /* -1 = not yet checked */
+
+static bool needs_gamma_to_linear_conversion() {
+    if (s_needs_gamma_to_linear < 0) {
+        /* RenderingDevice is only available on RD-based backends
+         * (Forward+ and Mobile).  Returns nullptr on GL Compatibility. */
+        RenderingServer *rs = RenderingServer::get_singleton();
+        s_needs_gamma_to_linear = (rs && rs->get_rendering_device() != nullptr) ? 1 : 0;
+    }
+    return s_needs_gamma_to_linear != 0;
+}
 
 /* ===================================================================
  *  Internal shader cache — avoids regenerating identical shaders
@@ -708,7 +734,7 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         code += "    vec4 result = vec4(0.0);\n";
     }
 
-    /* Output — gamma-to-linear conversion.
+    /* Output — gamma-to-linear conversion (Forward+ / Mobile only).
      *
      * MOHAA's original renderer works entirely in gamma space: textures
      * are gamma-encoded, lightmaps are gamma-encoded, and the framebuffer
@@ -726,9 +752,15 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
      * By converting the gamma-space result to linear here, the output
      * chain becomes:
      *     display = sRGB_encode(pow(gamma_result, 2.2)) ≈ gamma_result
-     * which matches the original MOHAA output. */
-    code += "\n    // Gamma→linear: compensate for Godot's sRGB output encode\n";
-    code += "    result.rgb = pow(max(result.rgb, vec3(0.0)), vec3(2.2));\n";
+     * which matches the original MOHAA output.
+     *
+     * The GL Compatibility renderer (WebGL2) handles colour space
+     * differently — the pow(2.2) double-darkens the image.  We skip
+     * the conversion on that backend. */
+    if (needs_gamma_to_linear_conversion()) {
+        code += "\n    // Gamma→linear: compensate for Godot's sRGB output encode\n";
+        code += "    result.rgb = pow(max(result.rgb, vec3(0.0)), vec3(2.2));\n";
+    }
 
     code += "    ALBEDO = result.rgb;\n";
 

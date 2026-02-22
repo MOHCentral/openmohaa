@@ -734,6 +734,9 @@ void SV_SpawnServer( const char *server, qboolean loadgame, qboolean restart, qb
 			// Web build: avoid CL_UseLargeLightmap() probe here. On Emscripten this
 			// path can abort the map spawn before CM_LoadMap() and leave sv.state dead.
 			Com_sprintf( filename, sizeof( filename ), "maps/%s.bsp", mapname );
+			if( FS_ReadFile( filename, NULL ) == -1 ) {
+				Com_sprintf( filename, sizeof( filename ), "maps/%s_sml.bsp", mapname );
+			}
 		#else
 			if ( CL_UseLargeLightmap( mapname ) ) {
 				Com_sprintf( filename, sizeof( filename ), "maps/%s.bsp", mapname );

@@ -133,6 +133,8 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
                     name, mod->index );
                 return mod->index;
             }
+            ri.Printf( PRINT_ALL,
+                "[GodotRenderer] TIKI load failed: %s\n", name );
         } else if ( !Q_stricmp( ext, "spr" ) ) {
             /* Sprites: The shader name is the sprite filename without the .spr extension. */
             char shadername[256];
@@ -180,7 +182,7 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
     }
 
     /* Unknown type or load failure */
-    ri.Printf( PRINT_DEVELOPER,
+    ri.Printf( PRINT_ALL,
         "[GodotRenderer] RegisterModel FAILED: %s\n", name );
     mod->type = GR_MOD_BAD;
     return 0;
@@ -771,6 +773,17 @@ static void GR_LoadWorld( const char *name )
         gr_worldMapName[0] = '\0';
     }
     gr_worldMapLoaded = ( name && name[0] ) ? qtrue : qfalse;
+
+    /* Load the BSP into the real renderer's tr.world so that
+     * R_MarkFragments (decals/bullet holes) can walk the BSP tree.
+     * All GL calls in the load path are stubbed via tr_godot_gl_stubs.c.
+     * The Godot-side BSP mesh builder (godot_bsp_mesh.cpp) separately
+     * creates Godot MeshInstance3D nodes — this call populates the
+     * internal renderer data structures only. */
+    if ( name && name[0] ) {
+        extern void RE_LoadWorldMap( const char *name );
+        RE_LoadWorldMap( name );
+    }
 }
 
 static void GR_SetWorldVisData( const byte *vis )

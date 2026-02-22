@@ -3144,13 +3144,15 @@ void MoHAARunner::update_polys() {
 
     for (int i = 0; i < poly_count; i++) {
         int hShader = 0;
-        float positions[4 * 3];    // max 4 verts (quads)
-        float texcoords[4 * 2];
-        unsigned char colors[4 * 4];
+        // Mark fragments from BSP clipping can produce up to 8 verts
+        // (MAX_VERTS_ON_POLY in cg_local.h)
+        float positions[8 * 3];
+        float texcoords[8 * 2];
+        unsigned char colors[8 * 4];
 
         int numVerts = Godot_Renderer_GetPoly(i, &hShader,
                                                positions, texcoords,
-                                               colors, 4);
+                                               colors, 8);
 
         MeshInstance3D *mi = poly_meshes[i];
 
@@ -3159,8 +3161,7 @@ void MoHAARunner::update_polys() {
             continue;
         }
 
-        // Clamp to 4 max (quads is the common case)
-        if (numVerts > 4) numVerts = 4;
+        if (numVerts > 8) numVerts = 8;
 
         // Build an ArrayMesh triangle fan from the poly vertices
         PackedVector3Array gPos;
@@ -6371,18 +6372,15 @@ void MoHAARunner::_process(double delta) {
         overlay_prev_frame = overlay_active;  // save for next frame's pre-frame poll
         bool engine_wants_gui = Godot_Client_GetGuiMouse() != 0;
         bool should_capture = !(overlay_active || engine_wants_gui);
-        bool allow_capture = true;
-#ifdef __EMSCRIPTEN__
-        // Browser pointer lock requires a user gesture. Automatic capture
-        // from the per-frame engine state can throw and break frame flow.
-        allow_capture = false;
-#endif
-        bool applied_capture = should_capture && allow_capture;
-        if (applied_capture != mouse_captured) {
-            mouse_captured = applied_capture;
+        // Unified mouse-capture logic for ALL platforms (including web).
+        // On web, Godot's JS layer defers requestPointerLock() to the next
+        // user gesture (click) when MOUSE_MODE_CAPTURED is set.  This is safe
+        // to call from _process() — it stores intent, not an immediate lock.
+        if (should_capture != mouse_captured) {
+            mouse_captured = should_capture;
             Input *input = Input::get_singleton();
             if (input) {
-                if (applied_capture) {
+                if (should_capture) {
                     input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
                 } else {
                     input->set_mouse_mode(Input::MOUSE_MODE_VISIBLE);
@@ -6390,6 +6388,19 @@ void MoHAARunner::_process(double delta) {
             }
             Godot_ResetMousePosition();
         }
+#ifdef __EMSCRIPTEN__
+        // On web, the browser can release pointer lock asynchronously
+        // (Escape key, Alt-Tab, focus loss).  When that happens the actual
+        // mouse mode reverts to VISIBLE even though mouse_captured is true.
+        // Re-assert CAPTURED so Godot's JS layer will re-lock on the next
+        // user click.  This is cheap (just stores intent, no DOM call).
+        else if (mouse_captured) {
+            Input *input = Input::get_singleton();
+            if (input && input->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
+                input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
+            }
+        }
+#endif
     }
 
     // Post-frame poll: keeps button transition state in sync for events that
@@ -6860,17 +6871,11 @@ godot::String MoHAARunner::vfs_get_gamedir() const {
 // ──────────────────────────────────────────────
 
 void MoHAARunner::set_mouse_captured(bool p_captured) {
-    bool requested_capture = p_captured;
-#ifdef __EMSCRIPTEN__
-    // On web, only capture after explicit in-canvas user gesture; avoid
-    // forcing pointer lock from scripts because browsers may reject it.
-    requested_capture = false;
-#endif
-    mouse_captured = requested_capture;
+    mouse_captured = p_captured;
     Input *input = Input::get_singleton();
     if (!input) return;
 
-    if (requested_capture) {
+    if (p_captured) {
         input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
     } else {
         input->set_mouse_mode(Input::MOUSE_MODE_VISIBLE);
@@ -7597,6 +7602,21 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
                 Godot_InjectMouseButton(godot_button, 0);
             }
         }
+
+#ifdef __EMSCRIPTEN__
+        // On web, pointer lock requires a user gesture (click/keydown).
+        // _input() runs inside the browser's DOM event handler, which is the
+        // only context where requestPointerLock() is allowed.  If we want
+        // capture but the browser doesn't have it yet, re-assert the mode
+        // NOW — inside the gesture context — so the lock actually activates.
+        if (pressed && !overlay_active) {
+            Input *inp = Input::get_singleton();
+            if (inp && inp->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
+                inp->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
+                mouse_captured = true;
+            }
+        }
+#endif
 
         Viewport *vp = get_viewport();
         if (vp) vp->set_input_as_handled();

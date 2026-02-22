@@ -933,8 +933,14 @@ void SV_ClientEnterWorld( client_t *client, usercmd_t *cmd ) {
 
 	//
 	// Added in OPM
-	//  In a dedicated server, start the game when the first client enters the game
-	if (com_dedicated->integer) {
+	//  Start the game when the first client enters the world.
+	//  - Dedicated server: always (server doesn't call SV_ServerLoaded at spawn time)
+	//  - Non-dedicated SP (g_gametype == GT_SINGLE_PLAYER): SV_SpawnServer skips
+	//    SV_ServerLoaded() for SP, so it must fire here when the local client enters.
+	//    SV_ServerLoaded() is idempotent (guarded by sv.state == SS_GAME check).
+	//  - Non-dedicated MP: SV_SpawnServer already called SV_ServerLoaded(); the
+	//    idempotency guard makes this a safe no-op.
+	if (com_dedicated->integer || g_gametype->integer == GT_SINGLE_PLAYER) {
 		SV_ServerLoaded();
 	}
 }

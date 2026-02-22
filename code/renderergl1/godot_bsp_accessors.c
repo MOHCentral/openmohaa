@@ -274,8 +274,14 @@ int Godot_BSP_GetNumClusters(void)
 
 int Godot_BSP_InPVS(const float p1[3], const float p2[3])
 {
-    if (!tr.world) return 1;
-    return R_inPVS(p1, p2) ? 1 : 0;
+    /* PVS culling via R_inPVS is disabled for now.
+     * RE_LoadWorldMap populates tr.world but R_PointInLeaf crashes
+     * during BSP node tree traversal (inlined DotProduct → segfault).
+     * Returning 1 (always visible) is correct — just disables PVS
+     * culling, which is a performance optimisation only.
+     * TODO: Investigate BSP node tree integrity after RE_LoadWorldMap. */
+    (void)p1; (void)p2;
+    return 1;
 }
 
 /* ===================================================================

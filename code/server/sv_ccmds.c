@@ -194,11 +194,18 @@ static void SV_Map_f( void ) {
 	// make sure the level exists before trying to change, so that
 	// a typo at the server console won't end the game
 	// Added in 2.0
-	if ( CL_UseLargeLightmap( mapname ) ) {
+	#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
 		Com_sprintf( expanded, sizeof( expanded ), "maps/%s.bsp", map );
-	} else {
-		Com_sprintf( expanded, sizeof( expanded ), "maps/%s_sml.bsp", map );
-	}
+		if( FS_ReadFile( expanded, NULL ) == -1 ) {
+			Com_sprintf( expanded, sizeof( expanded ), "maps/%s_sml.bsp", map );
+		}
+	#else
+		if ( CL_UseLargeLightmap( mapname ) ) {
+			Com_sprintf( expanded, sizeof( expanded ), "maps/%s.bsp", map );
+		} else {
+			Com_sprintf( expanded, sizeof( expanded ), "maps/%s_sml.bsp", map );
+		}
+	#endif
 	if( FS_ReadFile( expanded, NULL ) == -1 ) {
 		Com_Printf( "Can't find map %s\n", expanded );
 		return;

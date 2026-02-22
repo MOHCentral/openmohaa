@@ -1549,16 +1549,7 @@ void ClientGameCommandManager::SpawnTempModel(int mcount)
             const char *mn = p->modelname.c_str();
             bool handled = false;
 
-            if (mn && (strstr(mn, "muzzle") || strstr(mn, "flash") || strstr(mn, "corona"))) {
-                // Spawn dynamic light only — the sprite itself continues through
-                // normal tempmodel processing so the VFX module renders it at the
-                // correct engine-parity size (the old hardcoded 0.25 m quad was wrong).
-                if (cgi.AddMuzzleFlash) {
-                     cgi.AddMuzzleFlash(p->cgd.origin, m_spawnthing->axis[0], p->cgd.scale);
-                }
-                // handled stays false: sprite renders via VFX module
-            }
-            else if (mn && (strstr(mn, "shell") || strstr(mn, "casing"))) {
+            if (mn && (strstr(mn, "shell") || strstr(mn, "casing"))) {
                 // Shell casing
                 if (cgi.AddShellCasing) {
                      int type = 0; // Default PISTOL
