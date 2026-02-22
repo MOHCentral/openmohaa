@@ -470,7 +470,9 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 #endif
 
 	// Debug builds should stop on this
+#ifndef GODOT_GDEXTENSION
 	assert(code != ERR_FATAL);
+#endif
 
 	Cvar_Set( "com_errorCode", va( "%i", code ) );
 
@@ -547,6 +549,12 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	} else {
 		CL_Shutdown (va("Client fatal crashed: %s", com_errorMessage), qtrue, qtrue);
 		SV_Shutdown (va("Server fatal crashed: %s", com_errorMessage));
+#ifdef GODOT_GDEXTENSION
+		/* Under Godot, recover from ERR_FATAL via longjmp rather than aborting. */
+		FS_PureServerSetLoadedPaks("", "");
+		com_errorEntered = qfalse;
+		longjmp(abortframe, -1);
+#endif
 	}
 
 	Com_Shutdown ();

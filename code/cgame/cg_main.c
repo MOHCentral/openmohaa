@@ -811,6 +811,9 @@ GetCGameAPI
 The only exported function from this module
 ================
 */
+#ifdef GODOT_GDEXTENSION
+__attribute__((visibility("default")))
+#endif
 clientGameExport_t *GetCGameAPI(void)
 {
     cge.CG_Init                     = CG_Init;

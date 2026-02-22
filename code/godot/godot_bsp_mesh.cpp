@@ -1404,9 +1404,12 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             float y0 = (float)((int)patch->y << 6);
             float z0 = (float)patch->iBaseHeight;
 
-            // Determine PVS cluster for this terrain patch from its centre
-            float terrain_centre[3] = { x0 + 256.0f, y0 + 256.0f, z0 + 128.0f };
-            int terrain_cluster = Godot_BSP_PointCluster(terrain_centre);
+            // Terrain patches span large 512x512 areas and frequently cross
+            // cluster boundaries. A single centre-point cluster assignment can
+            // cull visible ground incorrectly (notably in training). Keep
+            // terrain in the always-visible group (-1) until per-leaf terrain
+            // ownership is implemented.
+            int terrain_cluster = -1;
 
             // Get or create shader batch for this cluster — keyed by
             // (shaderNum, lightmapNum) to avoid lightmap tile mismatches.

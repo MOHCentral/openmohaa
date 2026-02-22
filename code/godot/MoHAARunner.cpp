@@ -1852,7 +1852,6 @@ void MoHAARunner::update_entities() {
     }
 
     // Update positions for active entities this frame
-    int dbg_reached_modtype = 0, dbg_reached_visible = 0, dbg_brush_path = 0;
     for (int i = 0; i < ent_count; i++) {
         float origin[3], axis[9], scale = 1.0f;
         int hModel = 0, entityNumber = 0, renderfx = 0;
@@ -2330,10 +2329,8 @@ void MoHAARunner::update_entities() {
 
         // Try to get the actual skeletal model mesh from cache
         int modType = Godot_Model_GetType(hModel);
-        dbg_reached_modtype++;
 
         if (modType == 1 /* GR_MOD_BRUSH */) {
-            dbg_brush_path++;
             // ── Brush model (door, mover, platform, etc.) ──
             // Extract submodel number from name (e.g. "*5" → 5)
             const char *modName = Godot_Model_GetName(hModel);
@@ -3011,7 +3008,6 @@ void MoHAARunner::update_entities() {
         }
 
         mi->set_visible(true);
-        dbg_reached_visible++;
 
         // One-shot per-entity log: verify brush entities are visible
         static std::unordered_set<int> logged_visible_ents;
@@ -3034,78 +3030,6 @@ void MoHAARunner::update_entities() {
         }
 
         entity_cache_keys[i] = key;
-    }
-
-    // One-shot per-map diagnostic: log entity type breakdown
-    {
-        // DEBUG: stderr trace of entity loop stage counters (unbuffered)
-        static int dbg_loop_frame = 0;
-        dbg_loop_frame++;
-        if (dbg_loop_frame <= 3 && ent_count > 0) {
-            fprintf(stderr, "[ENT-LOOP] frame=%d total=%d modtype=%d brush=%d visible=%d\n",
-                    dbg_loop_frame, ent_count, dbg_reached_modtype, dbg_brush_path, dbg_reached_visible);
-        }
-
-        static int diag_frame_count = 0;
-        static bool diag_done = false;
-        if (!diag_done && ent_count > 0) {
-            diag_frame_count++;
-            // Wait a few frames for entities to fully populate
-            if (diag_frame_count == 30) {
-                diag_done = true;
-                int n_brush = 0, n_tiki = 0, n_sprite = 0, n_beam = 0, n_other = 0;
-                for (int d = 0; d < ent_count; d++) {
-                    float dorg[3], dax[9], dsc = 1; int dhm = 0, den = 0, drf = 0;
-                    unsigned char drg[4];
-                    int drt = Godot_Renderer_GetEntity(d, dorg, dax, &dsc, &dhm, &den, drg, &drf);
-                    if (drt == 0 /* RT_MODEL */ && dhm > 0) {
-                        int dmt = Godot_Model_GetType(dhm);
-                        if (dmt == 1) n_brush++;
-                        else if (dmt == 2) n_tiki++;
-                        else if (dmt == 3) n_sprite++;
-                        else n_other++;
-                    } else if (drt == 3) n_sprite++;
-                    else if (drt == 4) n_beam++;
-                    else n_other++;
-                }
-                UtilityFunctions::print(String("[MoHAA-DIAG] Entity breakdown: ") +
-                    String::num_int64(ent_count) + " total, " +
-                    String::num_int64(n_brush) + " brush, " +
-                    String::num_int64(n_tiki) + " tiki, " +
-                    String::num_int64(n_sprite) + " sprite, " +
-                    String::num_int64(n_beam) + " beam, " +
-                    String::num_int64(n_other) + " other");
-            }
-        }
-    }
-
-    // ── Renderfx diagnostic: log weapon entities once per session ──
-    {
-        static int rfx_diag_frames = 0;
-        static bool rfx_logged_summary = false;
-        rfx_diag_frames++;
-        // Log a summary after 60 frames (about 1 second)
-        if (!rfx_logged_summary && rfx_diag_frames > 60) {
-            rfx_logged_summary = true;
-            int n_fp = 0, n_dh = 0, n_tp = 0, n_shad = 0;
-            for (int i = 0; i < ent_count; i++) {
-                int rfx = 0;
-                Godot_Renderer_GetEntity(i, nullptr, nullptr, nullptr,
-                                         nullptr, nullptr, nullptr, &rfx);
-                if (rfx & 0x02) n_fp++;
-                if (rfx & 0x04) n_dh++;
-                if (rfx & 0x01) n_tp++;
-                if (rfx & 0x800) n_shad++;
-            }
-            UtilityFunctions::print(
-                String("[MoHAA-RFX] Entity renderfx summary after ") +
-                String::num_int64(rfx_diag_frames) + " frames: " +
-                String::num_int64(ent_count) + " total, " +
-                String::num_int64(n_fp) + " RF_FIRST_PERSON, " +
-                String::num_int64(n_dh) + " RF_DEPTHHACK, " +
-                String::num_int64(n_tp) + " RF_THIRD_PERSON, " +
-                String::num_int64(n_shad) + " RF_SHADOW");
-        }
     }
 
     // Hide excess pool meshes from previous frame
@@ -6987,14 +6911,8 @@ void MoHAARunner::update_input_routing() {
 
 void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
 #ifdef __EMSCRIPTEN__
-    static int s_poll_frame = 0;
-    s_poll_frame++;
-
-    Input *input = Input::get_singleton();
     Viewport *vp = get_viewport();
-    if (!input || !vp) {
-        if (s_poll_frame % 120 == 1)
-            fprintf(stderr, "[MoHAA-mouse] poll: no input/viewport\n");
+    if (!vp) {
         return;
     }
 
@@ -7013,16 +6931,6 @@ void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
     int gui_mouse_active = Godot_Client_GetGuiMouse();
     bool should_poll = overlay_active || (gui_mouse_active != 0);
 
-    if (s_poll_frame % 120 == 1) {
-        int kc = Godot_Client_GetKeyCatchers();
-        update_ui_transform();
-        fprintf(stderr,
-            "[MoHAA-mouse] frame=%d overlay=%d gui_mouse=%d keyCatchers=0x%x "
-            "pos=(%.0f,%.0f) scale=(%.2f,%.2f) vid=%dx%d\n",
-            s_poll_frame, (int)overlay_active, gui_mouse_active, kc,
-            pos.x, pos.y, ui_scale_x, ui_scale_y, ui_vid_w, ui_vid_h);
-    }
-
     if (should_poll) {
         update_ui_transform();
         float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
@@ -7034,22 +6942,6 @@ void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
         if (ex >= ui_vid_w) ex = ui_vid_w - 1;
         if (ey >= ui_vid_h) ey = ui_vid_h - 1;
         Godot_Client_SetMousePos(ex, ey);
-
-        if (s_poll_frame % 120 == 1)
-            fprintf(stderr, "[MoHAA-mouse] -> engine cursor (%d, %d)\n", ex, ey);
-
-        const int tracked_buttons[] = {1, 2, 3, 8, 9};
-        for (int i = 0; i < 5; i++) {
-            int b = tracked_buttons[i];
-            bool now_pressed = input->is_mouse_button_pressed((MouseButton)b);
-            bool prev_pressed = mouse_poll_prev_buttons[b];
-            if (now_pressed != prev_pressed) {
-                Godot_InjectMouseButton(b, now_pressed ? 1 : 0);
-                mouse_poll_prev_buttons[b] = now_pressed;
-                fprintf(stderr, "[MoHAA-mouse] button %d %s\n",
-                    b, now_pressed ? "DOWN" : "UP");
-            }
-        }
     } else {
         for (int b = 0; b < 10; b++) {
             mouse_poll_prev_buttons[b] = false;
@@ -7655,9 +7547,6 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
     // ── Mouse motion ──
     InputEventMouseMotion *motion_event = Object::cast_to<InputEventMouseMotion>(p_event.ptr());
     if (motion_event) {
-#ifdef __EMSCRIPTEN__
-        return;
-#endif
         if (!overlay_active) {
             Vector2 rel = motion_event->get_relative();
             Godot_InjectMouseMotion((int)rel.x, (int)rel.y);
@@ -7684,14 +7573,6 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
     if (button_event) {
         int godot_button = (int)button_event->get_button_index();
         bool pressed = button_event->is_pressed();
-
-#ifdef __EMSCRIPTEN__
-        if (godot_button >= 4 && godot_button <= 5 && pressed) {
-            Godot_InjectMouseButton(godot_button, 1);
-            Godot_InjectMouseButton(godot_button, 0);
-        }
-        return;
-#endif
 
         if (overlay_active) {
             Vector2 pos = button_event->get_position();

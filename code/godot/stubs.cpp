@@ -138,7 +138,28 @@ void *Sys_GetCGameAPI(void *parms) {
             return (void *)getCGameAPI();
         }
 
-        Com_Printf("GDExtension: Sys_GetCGameAPI — GetCGameAPI not found in preloaded globals (skipping runtime dlopen on web)\n");
+        // Fallback: try dlopen on known VFS paths (cgame.so is preloaded into
+        // the Emscripten virtual FS by the pk3 preloader in build-web.sh).
+        const char *web_paths[] = {
+            "/main/cgame.so",
+            "main/cgame.so",
+            "/cgame.so",
+            NULL,
+        };
+        for (int wi = 0; web_paths[wi]; wi++) {
+            void *wlib = dlopen(web_paths[wi], RTLD_NOW | RTLD_GLOBAL);
+            if (wlib) {
+                getCGameAPI = (GetCGameAPI_t)dlsym(wlib, "GetCGameAPI");
+                if (!getCGameAPI) getCGameAPI = (GetCGameAPI_t)dlsym(wlib, "_GetCGameAPI");
+                if (getCGameAPI) {
+                    cgame_library = wlib;
+                    Com_Printf("GDExtension: Sys_GetCGameAPI — dlopen('%s') OK\n", web_paths[wi]);
+                    return (void *)getCGameAPI();
+                }
+                dlclose(wlib);
+            }
+        }
+        Com_Printf("GDExtension: Sys_GetCGameAPI — cgame not loadable on web (checked RTLD_DEFAULT + dlopen paths)\n");
         return NULL;
     }
 #else

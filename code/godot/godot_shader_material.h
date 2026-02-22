@@ -46,7 +46,7 @@ using namespace godot;
  * Uniform naming convention:
  *   stage0_tex, stage1_tex, ...        — primary texture per stage
  *   stage0_frame0, stage0_frame1, ...  — animMap frame textures
- *   overbright_factor                  — lightmap overbright multiplier (default 2.0)
+ *   overbright_factor                  — lightmap overbright multiplier (default 1.0; baked into texture)
  *   entity_color                       — vec4 for rgbGen/alphaGen entity
  *
  * Returns null Ref if props is NULL or has no stages.

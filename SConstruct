@@ -439,7 +439,7 @@ elif env["platform"] == "web":
     # Inherit the PATH that contains emcc/em++
     if "ENV" in env and "PATH" in env["ENV"]:
         cgame_env["ENV"]["PATH"] = env["ENV"]["PATH"]
-    cgame_env.Append(CPPDEFINES=["__EMSCRIPTEN__", "_LINUX", "__linux__"])
+    cgame_env.Append(CPPDEFINES=["__EMSCRIPTEN__", "_LINUX", "__linux__", "GODOT_GDEXTENSION"])
     # -pthread is REQUIRED: the main Godot WASM module uses SharedArrayBuffer
     # (shared memory). Without -pthread, cgame.so declares it imports unshared
     # memory, causing a LinkError ("imported shared memory but unshared required")
@@ -464,6 +464,7 @@ elif env["platform"] == "web":
         "-sDISABLE_EXCEPTION_CATCHING=0",
         "-sSUPPORT_LONGJMP=emscripten",
         "-Wl,--allow-multiple-definition",
+        "-sEXPORTED_FUNCTIONS=['_GetCGameAPI']",
     ])
     # Use .wasm suffix so the web cgame artifact (bin/libcgame.wasm) cannot be
     # confused with the native ELF build (bin/libcgame.so).  build-web.sh checks

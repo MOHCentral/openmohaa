@@ -460,14 +460,15 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
          * Strip the suffix (_ft/_bk/_rt/_lf/_up/_dn) and extension. */
         const char *skyname = sh->sky.outerbox[0]->imgName;
         Q_strncpyz(out->sky_env, skyname, sizeof(out->sky_env));
-        /* Remove the _XX suffix (last 3 chars if they match _ft etc.) */
+        /* Strip file extension first, THEN strip the _XX direction suffix.
+         * Order matters: imgName may be "env/mohday2_rt.tga"; if we check
+         * len-3 before removing .tga we land on the dot, not the underscore. */
+        char *dot = strrchr(out->sky_env, '.');
+        if (dot) *dot = '\0';
         int len = (int)strlen(out->sky_env);
         if (len >= 3 && out->sky_env[len - 3] == '_') {
             out->sky_env[len - 3] = '\0';
         }
-        /* Also strip any file extension */
-        char *dot = strrchr(out->sky_env, '.');
-        if (dot) *dot = '\0';
     }
 
     /* Surface parms */

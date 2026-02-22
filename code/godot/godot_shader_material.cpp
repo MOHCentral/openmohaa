@@ -618,7 +618,10 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         }
     }
     if (has_lightmap)
-        code += "uniform float overbright_factor = 2.0;\n";
+        /* Overbright is already baked into lightmap textures (<<1 in
+         * load_lightmaps, matching R_ColorShiftLightingBytes).  No
+         * additional multiply needed — factor = 1.0. */
+        code += "uniform float overbright_factor = 1.0;\n";
 
     if (needs_entity_color(props))
         code += "uniform vec4 entity_color = vec4(1.0, 1.0, 1.0, 1.0);\n";
