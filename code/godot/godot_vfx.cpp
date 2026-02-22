@@ -67,6 +67,7 @@ extern "C" {
                                  float out_xyz[4][3], float out_uv[4][2]);
     int  Godot_VFX_GetSpriteModelHandle(int idx);
     int  Godot_Model_GetRealHandle(int hModel);
+    void Godot_VFX_GetSpriteAxis(int idx, float *out_axis);
 }
 
 /* ── Constants ── */
@@ -478,9 +479,71 @@ void Godot_VFX_Update(float delta)
          * Note: refEntity_t.radius is NOT used for sprite sizing in the real
          * renderer (RB_DrawSprite uses only entity.scale × shader.spritescale
          * × image pixels).  cgame sets radius to arbitrary values (4.0 for
-         * tempmodels, 0.0 for volumetric smoke) — it is purely for culling. */
+         * tempmodels, 0.0 for volumetric smoke) — it is purely for culling.
+         *
+         * Engine-vert path: when a real model handle exists in tr.models[],
+         * we call the engine's RB_DrawSprite() to get exact world-space
+         * quad vertices.  This handles all 4 sprite orientation modes
+         * (PARALLEL, PARALLEL_ORIENTED, ORIENTED, PARALLEL_UPRIGHT) and
+         * produces identical geometry to the original renderer.  The Basis
+         * is extracted from the quad vertices instead of using billboard. */
+
+        /* Try engine-vert path first */
+        bool use_engine_verts = false;
+        Vector3 engine_right, engine_up, engine_center;
+
+        {
+            int hModel = Godot_VFX_GetSpriteModelHandle(i);
+            int realH  = (hModel > 0) ? Godot_Model_GetRealHandle(hModel) : 0;
+            if (realH > 0) {
+                float entAxis[9];
+                Godot_VFX_GetSpriteAxis(i, entAxis);
+                /* Reshape flat [9] into [3][3] for the engine call */
+                float axis33[3][3];
+                memcpy(axis33, entAxis, sizeof(axis33));
+
+                float out_xyz[4][3];
+                float out_uv[4][2];
+                if (Godot_ComputeSpriteQuad(realH, origin, entityScale,
+                                            axis33, rgba, out_xyz, out_uv))
+                {
+                    /* Engine verts are in id Tech coords (inches).
+                     * Extract right and up vectors from the quad:
+                     *   point[0] = origin + up - right  (UV 0,0)
+                     *   point[1] = origin + up + right  (UV 1,0)
+                     *   point[2] = origin - up - right  (UV 0,1)
+                     *   point[3] = origin - up + right  (UV 1,1)
+                     *
+                     * right_id = (point[1] - point[0]) / 2
+                     * up_id    = (point[0] - point[2]) / 2
+                     *
+                     * Convert these direction vectors to Godot space and use
+                     * them as Basis columns for the unit quad.  The unit quad
+                     * spans ±0.5 so the Basis must be full extent (not half). */
+                    float right_id[3], up_id[3];
+                    for (int c = 0; c < 3; c++) {
+                        right_id[c] = (out_xyz[1][c] - out_xyz[0][c]);
+                        up_id[c]    = (out_xyz[0][c] - out_xyz[2][c]);
+                    }
+                    /* Convert id Tech direction vectors to Godot space.
+                     * id_to_godot applies: gx = -iy*S, gy = iz*S, gz = -ix*S */
+                    engine_right = Vector3(
+                        -right_id[1] * MOHAA_UNIT_SCALE,
+                         right_id[2] * MOHAA_UNIT_SCALE,
+                        -right_id[0] * MOHAA_UNIT_SCALE);
+                    engine_up = Vector3(
+                        -up_id[1] * MOHAA_UNIT_SCALE,
+                         up_id[2] * MOHAA_UNIT_SCALE,
+                        -up_id[0] * MOHAA_UNIT_SCALE);
+                    engine_center = id_to_godot(origin[0], origin[1], origin[2]);
+                    use_engine_verts = true;
+                }
+            }
+        }
+
+        /* Fallback sizing for billboard path */
         float sprite_w = 0.0f, sprite_h = 0.0f;
-        if (shaderHandle > 0) {
+        if (!use_engine_verts && shaderHandle > 0) {
             VfxSpriteSize sz = vfx_get_sprite_size(shaderHandle);
             if (sz.width > 0 && sz.height > 0) {
                 sprite_w = (float)sz.width  * entityScale * sz.sprite_scale * MOHAA_UNIT_SCALE;
@@ -488,23 +551,31 @@ void Godot_VFX_Update(float delta)
             }
         }
 
-        if (sprite_w < 0.0001f || sprite_h < 0.0001f) {
+        if (!use_engine_verts && (sprite_w < 0.0001f || sprite_h < 0.0001f)) {
             mi->set_visible(false);
             continue;
         }
 
         /* Coordinate conversion + positioning */
-        Vector3 pos = id_to_godot(origin[0], origin[1], origin[2]);
+        Vector3 pos = use_engine_verts ? engine_center
+                                       : id_to_godot(origin[0], origin[1], origin[2]);
 
-        /* Cached billboard material (keyed by shader handle + RGBA) */
+        /* Cached material (keyed by shader handle + RGBA + engine-vert flag).
+         * Engine-vert materials have no billboard mode (geometry is pre-oriented).
+         * Billboard materials use BILLBOARD_ENABLED as before. */
         uint64_t mkey = vfx_mat_key(shaderHandle, rgba);
+        if (!use_engine_verts) mkey |= (1ULL << 63);  /* bit 63 = billboard */
         Ref<StandardMaterial3D> mat;
         auto mit = vfx_mat_cache.find(mkey);
         if (mit != vfx_mat_cache.end()) {
             mat = mit->second;
         } else {
             mat.instantiate();
-            mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+            /* Engine-vert sprites are pre-oriented — no billboard.
+             * Fallback sprites use Godot's billboard to face camera. */
+            if (!use_engine_verts) {
+                mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+            }
             mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
             mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
             mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
@@ -550,9 +621,10 @@ void Godot_VFX_Update(float delta)
                                 mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                                 break;
                         }
-                        /* autosprite/autosprite2 deform — already billboard, but
-                         * autosprite2 should use fixed-Y billboard mode */
-                        if (sp->has_deform && sp->deform_type == 4) {
+                        /* autosprite/autosprite2 deform — only relevant for
+                         * billboard (fallback) path; engine verts already
+                         * handle orientation correctly. */
+                        if (!use_engine_verts && sp->has_deform && sp->deform_type == 4) {
                             mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_FIXED_Y);
                         }
                     }
@@ -568,10 +640,23 @@ void Godot_VFX_Update(float delta)
 
         mi->set_surface_override_material(0, mat);
 
-        /* Build transform: position + per-axis scale (width × height) */
-        Basis basis;
-        basis.scale(Vector3(sprite_w, sprite_h, 1.0f));
-        mi->set_global_transform(Transform3D(basis, pos));
+        if (use_engine_verts) {
+            /* Engine-vert path: Basis columns from the pre-computed quad.
+             * engine_right = full width vector, engine_up = full height vector.
+             * The unit quad spans ±0.5, so these become the X and Y columns.
+             * Z column = normal direction (cross product), unit length. */
+            Vector3 normal = engine_right.cross(engine_up);
+            float nlen = normal.length();
+            if (nlen > 0.0001f) normal /= nlen;
+            else normal = Vector3(0, 0, 1);
+            Basis basis(engine_right, engine_up, normal);
+            mi->set_global_transform(Transform3D(basis, pos));
+        } else {
+            /* Fallback billboard path: scale the unit quad by width × height. */
+            Basis basis;
+            basis.scale(Vector3(sprite_w, sprite_h, 1.0f));
+            mi->set_global_transform(Transform3D(basis, pos));
+        }
 
         mi->set_visible(true);
     }

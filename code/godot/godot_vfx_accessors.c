@@ -138,3 +138,18 @@ int Godot_VFX_GetSpriteModelHandle(int idx)
                              &hModel, &entityNumber, rgba, &renderfx);
     return hModel;
 }
+
+/* Return the entity axis[3][3] for a sprite at the given filtered index.
+ * Needed by Godot_ComputeSpriteQuad() for oriented sprite types. */
+void Godot_VFX_GetSpriteAxis(int idx, float *out_axis)
+{
+    if (idx < 0 || idx >= vfx_sprite_count || !out_axis) return;
+
+    int entIdx = vfx_sprite_indices[idx];
+    float origin[3], scaleVal;
+    int hModel, entityNumber, renderfx;
+    unsigned char rgba[4];
+
+    Godot_Renderer_GetEntity(entIdx, origin, out_axis, &scaleVal,
+                             &hModel, &entityNumber, rgba, &renderfx);
+}
