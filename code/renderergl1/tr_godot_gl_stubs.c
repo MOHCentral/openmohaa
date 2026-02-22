@@ -188,7 +188,9 @@ void RB_RenderFlares(void) {}
 
 void RB_RenderThread(void) {}
 
-void RB_DrawSprite(const refSprite_t *spr) { (void)spr; }
+/* RB_DrawSprite is NOT stubbed — the real tr_sprite.c implementation is
+ * linked so that Godot_ComputeSpriteQuad() can call it and capture the
+ * exact engine-computed quad vertices (including proper orientation modes). */
 void RB_DrawSwipeSurface(surfaceType_t *pswipe) { (void)pswipe; }
 
 void RB_SkelMesh(skelSurfaceGame_t *sf) { (void)sf; }
