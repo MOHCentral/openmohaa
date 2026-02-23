@@ -1815,10 +1815,13 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // RF_THIRD_PERSON (0x0002): local player body — not culled here (no mirrors in our renderer)
-        // RF_FIRST_PERSON (0x0004): view weapon — route to weapon SubViewport
-        // RF_DEPTHHACK    (0x0008): view weapon depth hack — route to weapon SubViewport
-        // RF_DONTDRAW     (0x0080): skip rendering entirely
+        // RF_THIRD_PERSON    (0x0002): local player body — not culled here (no mirrors in our renderer)
+        // RF_FIRST_PERSON   (0x0004): view weapon — route to weapon SubViewport
+        // RF_DEPTHHACK      (0x0008): view weapon depth hack — route to weapon SubViewport
+        // RF_LIGHTING_ORIGIN (0x0080): use refEntity->lightingOrigin for light sampling (tr_types.h)
+        //   NOTE: RF_DONTDRAW (q_shared.h, (1<<7)=0x80) lives in entityState_t.renderfx, NOT
+        //   refEntity_t.renderfx.  The cgame filters RF_DONTDRAW entities before calling
+        //   R_AddRefEntityToScene, so they never reach this buffer.  Do NOT hide on bit 0x80.
 
         // NOTE: Entity PVS culling is intentionally NOT performed here.
         // The original MOHAA renderer (tr_main.c::R_AddRefEntityToScene) does
@@ -2197,12 +2200,6 @@ void MoHAARunner::update_entities() {
             // Beam vertices are already in world space — use identity transform
             mi->set_global_transform(Transform3D());
             mi->set_visible(true);
-            continue;
-        }
-
-        // 
-        if (renderfx & 0x80) {  // RF_DONTDRAW
-            mi->set_visible(false);
             continue;
         }
 
@@ -2720,8 +2717,8 @@ void MoHAARunner::update_entities() {
         {
             // Determine lighting sample position in id Tech 3 coordinates
             float light_pos[3] = { origin[0], origin[1], origin[2] };
-            // RF_LIGHTING_ORIGIN (1<<19 = 0x80000, per q_shared.h): sample at lightingOrigin
-            if (renderfx & (1 << 19)) {
+            // RF_LIGHTING_ORIGIN (0x0080 per tr_types.h): sample at lightingOrigin
+            if (renderfx & 0x0080) {
                 Godot_Renderer_GetEntityLightingOrigin(i, light_pos);
             }
             float lr, lg, lb;
@@ -4274,7 +4271,9 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                                 strcmp(name, "$whiteimage") == 0);
         if (!is_white_shader) {
             for (int i = 0; i < num_texture_paths && !is_white_shader; i++) {
-                if (texture_paths[i] && strstr(texture_paths[i], "sprites/white"))
+                if (!texture_paths[i]) continue;
+                if (strstr(texture_paths[i], "sprites/white") ||
+                    strcmp(texture_paths[i], "*white") == 0)
                     is_white_shader = true;
             }
         }
@@ -4304,15 +4303,14 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                 dbg += String(texture_paths[i]);
             }
             UtilityFunctions::print(dbg);
-            UtilityFunctions::print(String("[MoHAA][2D] FALLING BACK to $whiteimage for ") + String(name ? name : "NULL"));
         }
-        Ref<ImageTexture> fallback_tex = get_shader_texture(Godot_Renderer_RegisterShader("$whiteimage"));
-        if (!fallback_tex.is_null()) {
-            shader_textures[shader_handle] = fallback_tex;
-            shader_texture_has_alpha[shader_handle] = false;
-            s_shader_texture_loaded_names[shader_handle] = name ? name : "";
-        }
-        return fallback_tex;
+        // Return null — callers already guard with .is_valid(), so missing
+        // textures are silently skipped rather than rendering a white box.
+        // Do NOT cache the failure: allows the next frame to retry the VFS
+        // lookup, so a texture that was unavailable on first access (e.g.
+        // due to shader registration ordering) succeeds once the renderer
+        // is fully initialised.
+        return Ref<ImageTexture>();
     }
 
     if (!tex.is_null()) {
