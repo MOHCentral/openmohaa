@@ -35,14 +35,28 @@ static cvar_t  *net_ws_relay = NULL;
 static qboolean ws_was_connected = qfalse;
 
 /*
- * Build a full ws:// URL from the cvar value (which stores only host:port
- * because the Quake command parser treats // as a comment delimiter).
+ * Build a WebSocket URL from the cvar value.
+ *
+ * Two accepted formats (the cvar never stores the scheme because the Quake
+ * command parser treats // as a comment delimiter):
+ *
+ *   host:port          →  ws://host:port        (legacy LAN/direct relay)
+ *   host/path          →  wss://host/path        (HTTPS reverse-proxy relay)
+ *   host:port/path     →  wss://host:port/path   (HTTPS with non-standard port)
+ *
+ * Rule: if the value contains a '/' it is a path-based (TLS) endpoint.
  * Returns a pointer to a static buffer — valid until the next call.
  */
 static const char *NET_WS_BuildURL(const char *hostport)
 {
     static char url[512];
-    Com_sprintf(url, sizeof(url), "ws://%s", hostport);
+    if (strchr(hostport, '/')) {
+        /* Path present → secure WebSocket via HTTPS reverse-proxy */
+        Com_sprintf(url, sizeof(url), "wss://%s", hostport);
+    } else {
+        /* host:port only → plain WebSocket (LAN / direct connection) */
+        Com_sprintf(url, sizeof(url), "ws://%s", hostport);
+    }
     return url;
 }
 
