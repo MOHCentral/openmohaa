@@ -145,6 +145,31 @@ int Godot_Skel_GetSurfaceInfo(void *tikiPtr, int meshIndex, int surfIndex,
     return 1;
 }
 
+/* Return the shader name for a specific skin slot on a surface.
+ * iShaderNum is the resolved slot index (skinNum + (bsurf & 3), clamped to numskins-1).
+ * This mirrors tr_model.cpp::R_AddSkelSurfaces: shader = dsurf->hShader[iShaderNum].
+ * Returns 1 on success, 0 if no shader data is available. */
+int Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfIndex,
+                                        int iShaderNum,
+                                        char *shaderName, int shaderNameLen)
+{
+    dtiki_t *tiki = (dtiki_t *)tikiPtr;
+    if (!tiki || meshIndex < 0 || meshIndex >= tiki->numMeshes)
+        return 0;
+
+    dtikisurface_t *dsurf = GetTikiSurfaceShader(tiki, meshIndex, surfIndex);
+    if (!dsurf || dsurf->numskins <= 0)
+        return 0;
+
+    if (iShaderNum < 0)                   iShaderNum = 0;
+    if (iShaderNum >= dsurf->numskins)    iShaderNum = 0;
+
+    if (shaderName && shaderNameLen > 0)
+        Q_strncpyz(shaderName, dsurf->shader[iShaderNum], shaderNameLen);
+
+    return 1;
+}
+
 /* Copy bind-pose vertex data into caller-provided flat arrays.
  * positions: [numVerts * 3]  (x,y,z per vertex)
  * normals:   [numVerts * 3]  (nx,ny,nz per vertex)
@@ -203,11 +228,27 @@ int Godot_Skel_GetSurfaceVertices(void *tikiPtr, int meshIndex, int surfIndex,
         return 0;  /* No vertex data at all — genuine failure. */
     }
 
-    /* Get bind-pose bone transforms via TIKI_GetSkelAnimFrame. */
+    /* Get bind-pose bone transforms via TIKI_GetSkelAnimFrame.
+     *
+     * Initialise to IDENTITY matrices first — not zero.  For static TIKIs
+     * (e.g. dropped weapons, props) TIKI_GetSkelAnimFrame2 prints "Bad anim in
+     * static model" and returns WITHOUT filling the bones array.  If the array
+     * is all-zeros every skinned vertex collapses to (0,0,0) and the mesh is
+     * invisible.  With identity bones the vertex position equals the raw
+     * weight->offset, which IS the bind-pose model-space position. */
     skelBoneCache_t bones[128];
-    memset(bones, 0, sizeof(bones));
+    for (int _b = 0; _b < 128; _b++) {
+        bones[_b].offset[0] = 0.0f; bones[_b].offset[1] = 0.0f;
+        bones[_b].offset[2] = 0.0f; bones[_b].offset[3] = 0.0f;
+        bones[_b].matrix[0][0] = 1.0f; bones[_b].matrix[0][1] = 0.0f;
+        bones[_b].matrix[0][2] = 0.0f; bones[_b].matrix[0][3] = 0.0f;
+        bones[_b].matrix[1][0] = 0.0f; bones[_b].matrix[1][1] = 1.0f;
+        bones[_b].matrix[1][2] = 0.0f; bones[_b].matrix[1][3] = 0.0f;
+        bones[_b].matrix[2][0] = 0.0f; bones[_b].matrix[2][1] = 0.0f;
+        bones[_b].matrix[2][2] = 1.0f; bones[_b].matrix[2][3] = 0.0f;
+    }
     if (!Godot_RI_GetSkelAnimFrame(tikiPtr, bones, NULL)) {
-        return 0;  /* Skeleton not ready. */
+        return 0;  /* ri callback not available — genuine failure. */
     }
 
     /* Walk the variable-stride pVerts and skin each vertex. */

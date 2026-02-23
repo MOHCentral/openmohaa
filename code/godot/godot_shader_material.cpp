@@ -509,10 +509,14 @@ static std::string gen_blend_code(int stage_idx, const MohaaShaderStage *s) {
     }
 
     /* Detect common blend patterns for cleaner code */
-    /* GL_ONE GL_ONE → additive */
+    /* GL_ONE GL_ONE → screen blend (prevents clipping to white).
+     * In multi-pass GL, this pass ran additively over the already-blended
+     * framebuffer.  In single-pass GLSL we have no access to the
+     * framebuffer backdrop, so straight += doubles bright textures to
+     * white.  Screen blend (a + b - a*b) is a non-clipping equivalent. */
     if (s->blendSrc == BLEND_ONE && s->blendDst == BLEND_ONE) {
-        return "    result.rgb += s" + si + ".rgb;\n"
-               "    result.a += s" + si + ".a;\n";
+        return "    result.rgb = result.rgb + s" + si + ".rgb - result.rgb * s" + si + ".rgb;\n"
+               "    result.a = clamp(result.a + s" + si + ".a, 0.0, 1.0);\n";
     }
     /* GL_DST_COLOR GL_ZERO → modulate */
     if (s->blendSrc == BLEND_DST_COLOR && s->blendDst == BLEND_ZERO) {

@@ -58,6 +58,7 @@ using namespace godot;
 extern "C" {
     long Godot_VFS_ReadFile(const char *qpath, void **out_buffer);
     void Godot_VFS_FreeFile(void *buffer);
+    int  Godot_ShaderProps_GetTextureMap(const char *shader_name, char *out_path, int out_size);
 }
 
 /* ===================================================================
@@ -781,6 +782,35 @@ static Ref<ArrayMesh> batches_to_array_mesh(
         const GodotShaderProps *sp = batch.shader_name
             ? Godot_ShaderProps_Find(batch.shader_name) : nullptr;
 
+        /* [SEA-DIAG] One-shot diagnostic for deepblue sea shaders */
+        if (batch.shader_name && (strstr(batch.shader_name, "deepblue") || strstr(batch.shader_name, "deepBlue"))) {
+            static bool sea_diag_done = false;
+            if (!sea_diag_done) {
+                sea_diag_done = true;
+                String msg = String("[SEA-DIAG] shader='") + batch.shader_name + "'";
+                if (!sp) {
+                    msg += " sp=NULL";
+                } else {
+                    msg += " stages=" + String::num_int64(sp->stage_count);
+                    msg += " nolightmap=" + String::num_int64(sp->no_lightmap);
+                    for (int _i = 0; _i < sp->stage_count; _i++) {
+                        const MohaaShaderStage *_s = &sp->stages[_i];
+                        msg += String("\n  stage[") + String::num_int64(_i) + "]"
+                             + " active=" + String::num_int64(_s->active)
+                             + " isLm=" + String::num_int64(_s->isLightmap)
+                             + " map='" + _s->map + "'"
+                             + " animCnt=" + String::num_int64(_s->animMapFrameCount)
+                             + " animFreq=" + String::num_real(_s->animMapFreq)
+                             + " blendSrc=" + String::num_int64(_s->blendSrc)
+                             + " blendDst=" + String::num_int64(_s->blendDst);
+                        for (int _f = 0; _f < _s->animMapFrameCount && _f < 4; _f++)
+                            msg += String(" frame[") + String::num_int64(_f) + "]='" + _s->animMapFrames[_f] + "'";
+                    }
+                }
+                UtilityFunctions::print(msg);
+            }
+        }
+
         /* Check whether the shader definition includes a lightmap stage.
          * MOHAA terrain (and some surfaces) rely on the engine's rendering
          * code to apply lightmap modulation via TMU1, so their .shader
@@ -824,6 +854,9 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                             if (ftex.is_valid()) {
                                 smat->set_shader_parameter(
                                     String("stage") + idx + "_frame" + String::num_int64(f), ftex);
+                            } else if (batch.shader_name) {
+                                printf("[BSP-TEX-FAIL] shader='%s' stage=%d animFrame[%d]='%s'\n",
+                                       batch.shader_name, si, f, stage->animMapFrames[f]);
                             }
                         }
                     } else if (stage->isLightmap) {
@@ -914,8 +947,44 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                     has_texture = true;
                     tex_ok++;
                 } else {
-                    tex_bad++;
-
+                    // shader_name is an abstract identifier (e.g. water/animated
+                    // surface) — resolve via shader props to find the actual
+                    // texture file path (first non-lightmap, non-animMap stage)
+                    // or the first animMap frame.
+                    char resolved_path[256] = {0};
+                    bool resolved = false;
+                    if (sp) {
+                        // Try the declared stage map path first.
+                        if (Godot_ShaderProps_GetTextureMap(batch.shader_name,
+                                resolved_path, sizeof(resolved_path)) && resolved_path[0]) {
+                            Ref<ImageTexture> sp_tex = load_texture(resolved_path);
+                            if (sp_tex.is_valid()) {
+                                mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, sp_tex);
+                                has_texture = true;
+                                resolved = true;
+                                tex_ok++;
+                            }
+                        }
+                        // If still not found, walk stages for animMap first frame.
+                        if (!resolved) {
+                            for (int st = 0; st < sp->stage_count && !resolved; st++) {
+                                if (!sp->stages[st].active) continue;
+                                if (sp->stages[st].isLightmap) continue;
+                                if (sp->stages[st].animMapFrameCount > 0 &&
+                                    sp->stages[st].animMapFrames[0][0]) {
+                                    Ref<ImageTexture> af_tex = load_texture(
+                                        sp->stages[st].animMapFrames[0]);
+                                    if (af_tex.is_valid()) {
+                                        mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, af_tex);
+                                        has_texture = true;
+                                        resolved = true;
+                                        tex_ok++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!has_texture) tex_bad++;
                 }
 
                 if (sp) {

@@ -928,13 +928,14 @@ const char *Godot_ShaderProps_GetSkyEnv(void) {
         static char s_skyEnv[MAX_QPATH];
         const char *skyname = sh->sky.outerbox[0]->imgName;
         Q_strncpyz(s_skyEnv, skyname, sizeof(s_skyEnv));
-        /* Strip _ft/_bk/_rt/_lf/_up/_dn suffix */
+        /* Strip file extension FIRST, then strip _ft/_bk/_rt/_lf/_up/_dn suffix.
+         * Order matters: imgName is e.g. "env/mohday1_rt.tga" — if we check
+         * len-3 before removing .tga we hit the extension, not the suffix. */
+        char *dot = strrchr(s_skyEnv, '.');
+        if (dot) *dot = '\0';
         int len = (int)strlen(s_skyEnv);
         if (len >= 3 && s_skyEnv[len - 3] == '_')
             s_skyEnv[len - 3] = '\0';
-        /* Strip file extension */
-        char *dot = strrchr(s_skyEnv, '.');
-        if (dot) *dot = '\0';
         return s_skyEnv;
     }
 
@@ -975,13 +976,22 @@ int Godot_ShaderProps_GetTextureMap(const char *shader_name, char *out_path, int
         const struct MohaaShaderStage *st = &sp->stages[i];
         if (!st->active) continue;
         if (st->isLightmap) continue;
-        if (st->map[0] == '\0') continue;
         if (st->map[0] == '$') continue;
 
-        {
+        if (st->map[0] != '\0') {
             int len = (int)strlen(st->map);
             if (len >= out_size) len = out_size - 1;
             memcpy(out_path, st->map, len);
+            out_path[len] = '\0';
+            return 1;
+        }
+
+        /* animMap stage: map[] is empty but frames are present — return
+         * the first frame as a representative texture path. */
+        if (st->animMapFrameCount > 0 && st->animMapFrames[0][0]) {
+            int len = (int)strlen(st->animMapFrames[0]);
+            if (len >= out_size) len = out_size - 1;
+            memcpy(out_path, st->animMapFrames[0], len);
             out_path[len] = '\0';
             return 1;
         }

@@ -296,7 +296,26 @@ typedef struct {
 	int			zipFileLen;
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
+	char		auditSource[MAX_OSPATH];
 } fileHandleData_t;
+
+typedef struct fsAssetAuditEntry_s {
+	char *qpath;
+	char *source;
+	unsigned int reads;
+	unsigned int bytes;
+	struct fsAssetAuditEntry_s *next;
+} fsAssetAuditEntry_t;
+
+#define FS_ASSET_AUDIT_HASH_SIZE 8192
+
+static cvar_t *fs_assetAudit;
+static cvar_t *fs_assetAuditFile;
+static char fs_assetAuditSessionStamp[32];
+static fsAssetAuditEntry_t *fs_assetAuditHash[FS_ASSET_AUDIT_HASH_SIZE];
+static int fs_assetAuditUniqueCount;
+static unsigned int fs_assetAuditTotalReads;
+static unsigned int fs_assetAuditTotalBytes;
 
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
 #ifdef __EMSCRIPTEN__
@@ -432,6 +451,275 @@ static long FS_HashFileName( const char *fname, int hashSize ) {
 	hash = (hash ^ (hash >> 10) ^ (hash >> 20));
 	hash &= (hashSize-1);
 	return hash;
+}
+
+/*
+================
+FS_AssetAudit_Enabled
+================
+*/
+static qboolean FS_AssetAudit_Enabled( void ) {
+	return fs_assetAudit && fs_assetAudit->integer;
+}
+
+/*
+================
+FS_AssetAudit_ClearInternal
+================
+*/
+static void FS_AssetAudit_ClearInternal( void ) {
+	int i;
+
+	for ( i = 0; i < FS_ASSET_AUDIT_HASH_SIZE; i++ ) {
+		fsAssetAuditEntry_t *entry = fs_assetAuditHash[i];
+
+		while ( entry ) {
+			fsAssetAuditEntry_t *next = entry->next;
+			Z_Free( entry->qpath );
+			Z_Free( entry->source );
+			Z_Free( entry );
+			entry = next;
+		}
+
+		fs_assetAuditHash[i] = NULL;
+	}
+
+	fs_assetAuditUniqueCount = 0;
+	fs_assetAuditTotalReads = 0;
+	fs_assetAuditTotalBytes = 0;
+}
+
+/*
+================
+FS_AssetAudit_Record
+================
+*/
+static void FS_AssetAudit_Record( const char *qpath, const char *source, size_t bytesRead ) {
+	long hash;
+	fsAssetAuditEntry_t *entry;
+
+	if ( !FS_AssetAudit_Enabled() || !qpath || !qpath[0] || bytesRead == 0 ) {
+		return;
+	}
+
+	hash = FS_HashFileName( qpath, FS_ASSET_AUDIT_HASH_SIZE );
+	for ( entry = fs_assetAuditHash[hash]; entry; entry = entry->next ) {
+		if ( !FS_FilenameCompare( entry->qpath, qpath ) ) {
+			entry->reads++;
+			entry->bytes += (unsigned int)bytesRead;
+			fs_assetAuditTotalReads++;
+			fs_assetAuditTotalBytes += (unsigned int)bytesRead;
+			return;
+		}
+	}
+
+	entry = (fsAssetAuditEntry_t*)Z_Malloc( sizeof( *entry ) );
+	entry->qpath = CopyString( qpath );
+	entry->source = CopyString( source && source[0] ? source : "unknown" );
+	entry->reads = 1;
+	entry->bytes = (unsigned int)bytesRead;
+	entry->next = fs_assetAuditHash[hash];
+	fs_assetAuditHash[hash] = entry;
+
+	fs_assetAuditUniqueCount++;
+	fs_assetAuditTotalReads++;
+	fs_assetAuditTotalBytes += (unsigned int)bytesRead;
+}
+
+/*
+================
+FS_AssetAudit_SortCmp
+================
+*/
+static int QDECL FS_AssetAudit_SortCmp( const void *a, const void *b ) {
+	const fsAssetAuditEntry_t *ea = *(const fsAssetAuditEntry_t *const *)a;
+	const fsAssetAuditEntry_t *eb = *(const fsAssetAuditEntry_t *const *)b;
+	return Q_stricmp( ea->qpath, eb->qpath );
+}
+
+/*
+================
+FS_AssetAudit_InitSessionStamp
+================
+*/
+static void FS_AssetAudit_InitSessionStamp( void ) {
+	qtime_t qt;
+
+	Com_RealTime( &qt );
+	Com_sprintf(
+		fs_assetAuditSessionStamp,
+		sizeof( fs_assetAuditSessionStamp ),
+		"%04d%02d%02d_%02d%02d%02d",
+		1900 + qt.tm_year,
+		qt.tm_mon + 1,
+		qt.tm_mday,
+		qt.tm_hour,
+		qt.tm_min,
+		qt.tm_sec
+	);
+}
+
+/*
+================
+FS_AssetAudit_BuildSessionFileName
+================
+*/
+static void FS_AssetAudit_BuildSessionFileName( char *out, int outSize ) {
+	const char *name;
+	const char *dot;
+	const char *slash;
+	const char *bslash;
+	const char *lastSep;
+
+	name = fs_assetAuditFile ? fs_assetAuditFile->string : "asset_usage_keep_list.txt";
+	dot = strrchr( name, '.' );
+	slash = strrchr( name, '/' );
+	bslash = strrchr( name, '\\' );
+	lastSep = slash;
+	if ( bslash && ( !lastSep || bslash > lastSep ) ) {
+		lastSep = bslash;
+	}
+
+	if ( dot && ( !lastSep || dot > lastSep ) ) {
+		int prefixLen = (int)( dot - name );
+		Com_sprintf( out, outSize, "%.*s_%s%s", prefixLen, name, fs_assetAuditSessionStamp, dot );
+	} else {
+		Com_sprintf( out, outSize, "%s_%s", name, fs_assetAuditSessionStamp );
+	}
+}
+
+/*
+================
+FS_AssetAudit_WriteSortedList
+================
+*/
+static void FS_AssetAudit_WriteSortedList( FILE *out, fsAssetAuditEntry_t **entries, int count ) {
+	int i;
+
+	for ( i = 0; i < count; i++ ) {
+		const fsAssetAuditEntry_t *entry = entries[i];
+		fprintf( out, "%s\n", entry->qpath );
+	}
+}
+
+/*
+================
+FS_AssetAudit_Dump
+================
+*/
+static qboolean FS_AssetAudit_Dump( qboolean verbose ) {
+	FILE *appendOut;
+	FILE *sessionOut;
+	char *appendPath;
+	char *sessionPath;
+	char sessionFileName[MAX_OSPATH];
+	fsAssetAuditEntry_t **entries;
+	int i;
+	int idx;
+
+	if ( !FS_AssetAudit_Enabled() ) {
+		if ( verbose ) {
+			Com_Printf( "asset audit is disabled (set fs_assetAudit 1)\n" );
+		}
+		return qfalse;
+	}
+
+	if ( !fs_assetAuditFile || !fs_assetAuditFile->string[0] ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit file name is empty\n" );
+		}
+		return qfalse;
+	}
+
+	appendPath = FS_BaseDir_BuildOSPath( fs_homedatapath->string, fs_assetAuditFile->string );
+	if ( FS_CreatePath( appendPath ) ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to create path for %s\n", appendPath );
+		}
+		return qfalse;
+	}
+
+	appendOut = Sys_FOpen( appendPath, "at" );
+	if ( !appendOut ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to open %s\n", appendPath );
+		}
+		return qfalse;
+	}
+
+	FS_AssetAudit_BuildSessionFileName( sessionFileName, sizeof( sessionFileName ) );
+	sessionPath = FS_BaseDir_BuildOSPath( fs_homedatapath->string, sessionFileName );
+	if ( FS_CreatePath( sessionPath ) ) {
+		fclose( appendOut );
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to create path for %s\n", sessionPath );
+		}
+		return qfalse;
+	}
+
+	sessionOut = Sys_FOpen( sessionPath, "wt" );
+	if ( !sessionOut ) {
+		fclose( appendOut );
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to open %s\n", sessionPath );
+		}
+		return qfalse;
+	}
+
+	entries = NULL;
+	if ( fs_assetAuditUniqueCount > 0 ) {
+		entries = (fsAssetAuditEntry_t**)Z_Malloc( sizeof( *entries ) * fs_assetAuditUniqueCount );
+		idx = 0;
+		for ( i = 0; i < FS_ASSET_AUDIT_HASH_SIZE; i++ ) {
+			fsAssetAuditEntry_t *entry = fs_assetAuditHash[i];
+			while ( entry ) {
+				entries[idx++] = entry;
+				entry = entry->next;
+			}
+		}
+
+		qsort( entries, idx, sizeof( *entries ), FS_AssetAudit_SortCmp );
+	}
+
+	FS_AssetAudit_WriteSortedList( appendOut, entries, fs_assetAuditUniqueCount );
+	FS_AssetAudit_WriteSortedList( sessionOut, entries, fs_assetAuditUniqueCount );
+
+	if ( entries ) {
+		Z_Free( entries );
+	}
+
+	fclose( appendOut );
+	fclose( sessionOut );
+
+	if ( verbose ) {
+		Com_Printf(
+			"asset audit dumped %d unique files to %s (append) and %s (session)\n",
+			fs_assetAuditUniqueCount,
+			appendPath,
+			sessionPath
+		);
+	}
+
+	return qtrue;
+}
+
+/*
+================
+FS_AssetAuditDump_f
+================
+*/
+static void FS_AssetAuditDump_f( void ) {
+	FS_AssetAudit_Dump( qtrue );
+}
+
+/*
+================
+FS_AssetAuditClear_f
+================
+*/
+static void FS_AssetAuditClear_f( void ) {
+	FS_AssetAudit_ClearInternal();
+	Com_Printf( "asset audit cleared\n" );
 }
 
 static fileHandle_t	FS_HandleForFile(void) {
@@ -1474,6 +1762,12 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 					Q_strncpyz(fsh[*file].name, filename, sizeof(fsh[*file].name));
 					fsh[*file].zipFile = qtrue;
+					Com_sprintf(
+						fsh[*file].auditSource,
+						sizeof( fsh[*file].auditSource ),
+						"pk3:%s",
+						pak->pakFilename
+					);
 
 					// set the file position in the zip file (also sets the current file info)
 					unzSetOffset(fsh[*file].handleFiles.file.z, pakFile->pos);
@@ -1491,6 +1785,8 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 						Com_Printf("FS_FOpenFileRead: %s (found in '%s')\n", 
 								filename, pak->pakFilename);
 					}
+
+					FS_AssetAudit_Record( fsh[*file].name, fsh[*file].auditSource, 1 );
 
 					return pakFile->len;
 				}
@@ -1541,6 +1837,14 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 		Q_strncpyz(fsh[*file].name, filename, sizeof(fsh[*file].name));
 		fsh[*file].zipFile = qfalse;
+		Com_sprintf(
+			fsh[*file].auditSource,
+			sizeof( fsh[*file].auditSource ),
+			"dir:%s%c%s",
+			dir->path,
+			PATH_SEP,
+			dir->gamedir
+		);
 
 		if(fs_debug->integer)
 		{
@@ -1549,6 +1853,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 		}
 
 		fsh[*file].handleFiles.file.o = filep;
+		FS_AssetAudit_Record( fsh[*file].name, fsh[*file].auditSource, 1 );
 		return FS_fplength(filep);
 	}
 
@@ -3498,6 +3803,11 @@ void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
 
+	if ( FS_AssetAudit_Enabled() ) {
+		FS_AssetAudit_Dump( qtrue );
+	}
+	FS_AssetAudit_ClearInternal();
+
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {
 			FS_FCloseFile(i);
@@ -3526,6 +3836,9 @@ void FS_Shutdown( qboolean closemfp ) {
 	Cmd_RemoveCommand( "dir" );
 	Cmd_RemoveCommand( "fdir" );
 	Cmd_RemoveCommand( "touchFile" );
+	Cmd_RemoveCommand( "which" );
+	Cmd_RemoveCommand( "assetAuditDump" );
+	Cmd_RemoveCommand( "assetAuditClear" );
 
 #ifdef FS_MISSING
 	if (closemfp) {
@@ -3655,9 +3968,14 @@ static void FS_Startup(const char* gameName)
 	fs_homestatepath = Cvar_Get ("fs_homestatepath", statePath, CVAR_INIT|CVAR_PROTECTED );
 	fs_gamedirvar = Cvar_Get ("fs_game", "", CVAR_INIT|CVAR_SYSTEMINFO );
 	fs_restrict = Cvar_Get( "fs_restrict", "", CVAR_INIT );
+	fs_assetAudit = Cvar_Get( "fs_assetAudit", "1", 0 );
+	fs_assetAuditFile = Cvar_Get( "fs_assetAuditFile", "asset_usage_keep_list.txt", 0 );
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_microsoftstorepath = Cvar_Get ("fs_microsoftstorepath", Sys_MicrosoftStorePath(), CVAR_INIT|CVAR_PROTECTED );
+
+	FS_AssetAudit_InitSessionStamp();
+	FS_AssetAudit_ClearInternal();
 
 #ifdef __APPLE__
 	fs_apppath = Cvar_Get ("fs_apppath", Sys_DefaultAppPath(), CVAR_INIT|CVAR_PROTECTED );
@@ -3720,6 +4038,8 @@ static void FS_Startup(const char* gameName)
 	Cmd_AddCommand ("fdir", FS_NewDir_f );
 	Cmd_AddCommand ("touchFile", FS_TouchFile_f );
 	Cmd_AddCommand ("which", FS_Which_f );
+	Cmd_AddCommand ("assetAuditDump", FS_AssetAuditDump_f );
+	Cmd_AddCommand ("assetAuditClear", FS_AssetAuditClear_f );
 
 	Sys_Mkdir(fs_homepath->string);
 

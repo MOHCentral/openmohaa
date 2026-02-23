@@ -1177,6 +1177,15 @@ void Com_Pause()
 		return;
 	}
 
+#ifdef GODOT_GDEXTENSION
+	/* In the Godot port the deathmatch cvar is not always explicitly set to 1
+	   by the launcher even when running a multiplayer game type.  MOHAA parity:
+	   never pause in any non-singleplayer game type (GT_SINGLE_PLAYER == 0). */
+	if( g_gametype && g_gametype->integer != 0 ) {
+		return;
+	}
+#endif
+
 	if( !com_sv_running->integer ) {
 		return;
 	}

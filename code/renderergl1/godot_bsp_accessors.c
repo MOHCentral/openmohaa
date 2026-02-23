@@ -274,14 +274,17 @@ int Godot_BSP_GetNumClusters(void)
 
 int Godot_BSP_InPVS(const float p1[3], const float p2[3])
 {
-    /* PVS culling via R_inPVS is disabled for now.
-     * RE_LoadWorldMap populates tr.world but R_PointInLeaf crashes
-     * during BSP node tree traversal (inlined DotProduct → segfault).
-     * Returning 1 (always visible) is correct — just disables PVS
-     * culling, which is a performance optimisation only.
-     * TODO: Investigate BSP node tree integrity after RE_LoadWorldMap. */
-    (void)p1; (void)p2;
-    return 1;
+    /* Use the same cluster-visibility lookup that already works for BSP surface
+     * culling.  Godot_BSP_PointCluster calls R_PointInLeaf which was previously
+     * believed to crash here, but it runs fine (it's called by
+     * Godot_BSP_PointCluster for BSP mesh PVS every frame without issue).
+     * Returning 1 (visible) for any error case is the safe conservative fallback. */
+    int c1, c2;
+    if (!tr.world || !tr.world->vis) return 1;
+    c1 = Godot_BSP_PointCluster(p1);
+    c2 = Godot_BSP_PointCluster(p2);
+    if (c1 < 0 || c2 < 0) return 1;   /* outside world bounds → assume visible */
+    return Godot_BSP_ClusterVisible(c1, c2);
 }
 
 /* ===================================================================

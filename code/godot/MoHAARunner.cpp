@@ -265,6 +265,10 @@ extern "C" {
                                      int *numVerts, int *numTriangles,
                                      char *surfName, int surfNameLen,
                                      char *shaderName, int shaderNameLen);
+    // Skin-aware shader name lookup: mirrors tr_model.cpp hShader[skinNum + (bsurf & 3)] selection.
+    int   Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfIndex,
+                                              int iShaderNum,
+                                              char *shaderName, int shaderNameLen);
     int   Godot_Skel_GetSurfaceVertices(void *tikiPtr, int meshIndex, int surfIndex,
                                          float *positions, float *normals, float *texcoords);
     int   Godot_Skel_GetSurfaceIndices(void *tikiPtr, int meshIndex, int surfIndex,
@@ -275,6 +279,12 @@ extern "C" {
 
     // Phase 268: Entity lighting origin — from godot_renderer.c
     void  Godot_Renderer_GetEntityLightingOrigin(int index, float *out);
+
+    // Per-surface state flags and skin slot — from godot_renderer.c
+    // Mirrors refEntity_t::surfaces[] / skinNum used in tr_model.cpp::R_AddSkelSurfaces.
+    void  Godot_Renderer_GetEntitySurfaces(int index,
+                                           unsigned char *out_surfaces,
+                                           int *out_skinNum);
 
     // Model/Shadow accessors
     float Godot_Renderer_GetEntityShadowPlane(int index);
@@ -958,6 +968,7 @@ void MoHAARunner::check_world_load() {
             GodotSkelModelCache::get().clear();  // Invalidate model cache
             skel_mesh_cache.clear();              // Phase 60: Clear skinned mesh cache
             tinted_mat_cache.clear();             // Phase 61: Clear tinted material cache
+            tiki_mat_cache.clear();               // Clear TIKI entity material cache
             shader_textures.clear();              // Shader handles are re-registered on next map
             s_shader_texture_loaded_names.clear();  // Clear name tracking alongside texture cache
             animmap_info.clear();
@@ -1018,6 +1029,7 @@ void MoHAARunner::check_world_load() {
     animmap_info.clear();
     animmap_frames.clear();
     tinted_mat_cache.clear();
+    tiki_mat_cache.clear();               // Clear TIKI entity material cache
     s_surf_anim_cache.clear();
     s_sprite_mat_cache.clear();
     s_beam_mat_cache.clear();
@@ -1255,10 +1267,6 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
 
     const GodotShaderProps *sp = Godot_ShaderProps_Find(shader_name);
     if (!sp) {
-        if (shader_name && strstr(shader_name, "bh_wood")) {
-            UtilityFunctions::print(String("[MoHAA][3D] ShaderProps NULL for ") + String(shader_name) + ", FORCING TRANSPARENCY_ALPHA!");
-            mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-        }
         return;
     }
 
@@ -1752,78 +1760,6 @@ void MoHAARunner::update_entities() {
 
     int ent_count = Godot_Renderer_GetEntityCount();
 
-    // Log entity breakdown once when first entities appear
-    static bool logged_entity_count = false;
-    if (!logged_entity_count && ent_count > 0) {
-        int n_brush = 0, n_tiki = 0, n_sprite = 0, n_beam = 0, n_other = 0;
-        for (int ei = 0; ei < ent_count; ei++) {
-            float eo[3], ea[9], es = 1.0f;
-            int eh = 0, en = 0, erf = 0;
-            unsigned char ec[4] = {255,255,255,255};
-            int et = Godot_Renderer_GetEntity(ei, eo, ea, &es, &eh, &en, ec, &erf);
-            if (et == RT_MODEL && eh > 0) {
-                int mt = Godot_Model_GetType(eh);
-                if (mt == 1) n_brush++;
-                else n_tiki++;
-            } else if (et == RT_SPRITE) n_sprite++;
-            else if (et == RT_BEAM) n_beam++;
-            else n_other++;
-        }
-        UtilityFunctions::print(String("[MoHAA] Entity breakdown: ") +
-            String::num_int64(ent_count) + " total = " +
-            String::num_int64(n_brush) + " brush + " +
-            String::num_int64(n_tiki) + " tiki + " +
-            String::num_int64(n_sprite) + " sprite + " +
-            String::num_int64(n_beam) + " beam + " +
-            String::num_int64(n_other) + " other");
-
-        // Log first 10 brush model entities with their positions and mesh info
-        if (n_brush > 0) {
-            int logged = 0;
-            for (int ei = 0; ei < ent_count && logged < 10; ei++) {
-                float eo[3], ea[9], es = 1.0f;
-                int eh = 0, en = 0, erf = 0;
-                unsigned char ec[4] = {255,255,255,255};
-                int et = Godot_Renderer_GetEntity(ei, eo, ea, &es, &eh, &en, ec, &erf);
-                if (et == RT_MODEL && eh > 0) {
-                    int mt = Godot_Model_GetType(eh);
-                    if (mt == 1) {
-                        const char *mn = Godot_Model_GetName(eh);
-                        int subIdx = 0;
-                        if (mn && mn[0] == '*') subIdx = atoi(mn + 1);
-                        Ref<ArrayMesh> bmesh = Godot_BSP_GetBrushModelMesh(subIdx);
-                        String mesh_info = "null";
-                        if (bmesh.is_valid()) {
-                            int sc = bmesh->get_surface_count();
-                            int total_verts = 0;
-                            for (int si = 0; si < sc; si++) {
-                                Array arr = bmesh->surface_get_arrays(si);
-                                if (arr.size() > 0) {
-                                    PackedVector3Array verts = arr[Mesh::ARRAY_VERTEX];
-                                    total_verts += verts.size();
-                                }
-                            }
-                            mesh_info = String::num_int64(sc) + " surfaces, " +
-                                        String::num_int64(total_verts) + " verts";
-                        }
-                        Vector3 gpos = id_to_godot_position(eo[0], eo[1], eo[2]);
-                        UtilityFunctions::print(String("[MoHAA]   Brush ent #") +
-                            String::num_int64(ei) + ": model=" + String(mn ? mn : "?") +
-                            " idPos=(" + String::num(eo[0], 1) + ", " +
-                            String::num(eo[1], 1) + ", " + String::num(eo[2], 1) + ")" +
-                            " godotPos=(" + String::num(gpos.x, 2) + ", " +
-                            String::num(gpos.y, 2) + ", " + String::num(gpos.z, 2) + ")" +
-                            " mesh=[" + mesh_info + "]" +
-                            " renderfx=0x" + String::num_int64(erf, 16) +
-                            " axis0=(" + String::num(ea[0], 2) + "," + String::num(ea[1], 2) + "," + String::num(ea[2], 2) + ")");
-                        logged++;
-                    }
-                }
-            }
-        }
-        logged_entity_count = true;
-    }
-
     // Create entity container node on first use
     if (!entity_root) {
         entity_root = memnew(Node3D);
@@ -1863,16 +1799,6 @@ void MoHAARunner::update_entities() {
 
         MeshInstance3D *mi = entity_meshes[i];
 
-        // Quick pre-check: is this a brush entity?
-        // Brush models (doors, movers) need special handling for frustum
-        // culling since their entity origin is a movement delta, not the
-        // mesh centre.
-        bool is_brush_entity = false;
-        if (reType == 0 /* RT_MODEL */ && hModel > 0) {
-            const char *mn = Godot_Model_GetName(hModel);
-            if (mn && mn[0] == '*') is_brush_entity = true;
-        }
-
         // Skip non-renderable entities (portals, etc.)
         // RT_SPRITE is handled by the VFX module (Godot_VFX_Update) when available
 #ifdef HAS_VFX_MODULE
@@ -1889,43 +1815,27 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // RF_THIRD_PERSON (1<<0 = 0x01): player body — not visible in first-person
-        // RF_FIRST_PERSON (1<<1 = 0x02): view weapon — only visible in first-person
-        // RF_DEPTHHACK     (1<<2 = 0x04): compress depth so weapon doesn't clip into walls
-        // RF_DONTDRAW      (1<<7 = 0x80): don't draw this entity
-        if (renderfx & 0x01) {  // RF_THIRD_PERSON — skip player body
-            mi->set_visible(false);
-            continue;
-        }
+        // RF_THIRD_PERSON (0x0002): local player body — not culled here (no mirrors in our renderer)
+        // RF_FIRST_PERSON (0x0004): view weapon — route to weapon SubViewport
+        // RF_DEPTHHACK    (0x0008): view weapon depth hack — route to weapon SubViewport
+        // RF_DONTDRAW     (0x0080): skip rendering entirely
 
-        // PVS culling: skip entities not visible from the camera's cluster.
-        // Skip first-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) — they
-        // are always visible as they're attached to the view weapon.
-        if (pvs_current_cluster >= 0 && !(renderfx & 0x06)) {
-            if (!Godot_BSP_InPVS(pvs_cam_origin, origin)) {
-                mi->set_visible(false);
-                continue;
-            }
-        }
+        // NOTE: Entity PVS culling is intentionally NOT performed here.
+        // The original MOHAA renderer (tr_main.c::R_AddRefEntityToScene) does
+        // NOT PVS-cull entities — PVS is applied only to BSP cluster meshes
+        // via update_pvs_visibility().  The server already PVS-culls snapshots
+        // before sending them, so double-culling on the client incorrectly hides
+        // entities in multiplayer (players at spawn points that are in different
+        // PVS leaves from the camera position).
 
-        // Phase 133: Frustum and draw distance culling — skip entities that
-        // are outside the camera frustum or beyond the far-plane cull distance.
-        // First-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) are always
-        // visible because they are the view weapon.
-#if defined(HAS_FRUSTUM_CULL_MODULE) || defined(HAS_DRAW_DISTANCE_MODULE)
-        if (!(renderfx & 0x06)) {
-            Vector3 ent_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
-#ifdef HAS_FRUSTUM_CULL_MODULE
-            // Brush models can be very large (doors, bridges, platforms) and
-            // their entity origin is the movement origin, not the mesh centre.
-            // Skip our manual frustum culling for brush entities — Godot's own
-            // per-AABB frustum culling in the renderer handles them correctly.
-            if (!is_brush_entity && !Godot_FrustumCull_TestSphere(ent_pos, 2.0f)) {
-                mi->set_visible(false);
-                continue;
-            }
-#endif
+        // Phase 133: Draw distance culling — skip entities beyond the far-plane cull distance.
+        // First-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) are always visible.
+        // NOTE: Entity frustum culling is handled automatically by Godot's scene tree AABB
+        // culling per MeshInstance3D — no manual sphere test is needed or correct here.
+        // The original MOHAA renderer (tr_main.c) does NOT manually frustum-cull entities.
 #ifdef HAS_DRAW_DISTANCE_MODULE
+        if (!(renderfx & 0x0C)) {  // Skip for RF_FIRST_PERSON(0x04)|RF_DEPTHHACK(0x08)
+            Vector3 ent_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
             float cull_dist = Godot_DrawDistance_GetCullDistance();
             if (cull_dist > 0.0f) {
                 Vector3 cam_pos = camera ? camera->get_global_position() : Vector3();
@@ -1934,7 +1844,6 @@ void MoHAARunner::update_entities() {
                     continue;
                 }
             }
-#endif
         }
 #endif
 
@@ -2053,40 +1962,27 @@ void MoHAARunner::update_entities() {
 
                             // If the shader was classified as OPAQUE (no blendFunc
                             // on first non-lightmap stage, or stage parse missed it),
-                            // sprites still need transparency. Infer from texture
-                            // alpha: no alpha → additive (fire/flash), has alpha →
-                            // standard alpha blend (smoke/blood).
+                            // sprites still need transparency.  tr_sprite.c always
+                            // uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA — standard
+                            // alpha blend — so we never use BLEND_MODE_ADD here.
                             if (sp->transparency == SHADER_OPAQUE) {
                                 Ref<ImageTexture> tex = get_shader_texture(spriteShader);
                                 if (tex.is_valid()) {
                                     smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                                }
-                                auto ha_it = shader_texture_has_alpha.find(spriteShader);
-                                bool tex_has_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
-                                if (!tex_has_alpha) {
-                                    smat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                                 }
                             }
                         }
                     }
                 }
 
-                // When no .shader definition is found, determine blend mode
-                // from the texture's alpha channel. In MOHAA, sprite effects
-                // without alpha (fire, flash, corona, sparks) use additive
-                // blending (blendFunc add) — black pixels add nothing,
-                // making quad edges invisible. Sprites WITH alpha (smoke,
-                // blood) use standard alpha blending.
+                // When no .shader definition is found, load the texture.
+                // tr_sprite.c always uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA
+                // for all sprites regardless of alpha channel content, so we
+                // always use standard alpha blend (BLEND_MODE_MIX).
                 if (!shader_props_found && spriteShader > 0) {
                     Ref<ImageTexture> tex = get_shader_texture(spriteShader);
                     if (tex.is_valid()) {
                         smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                    auto ha_it = shader_texture_has_alpha.find(spriteShader);
-                    bool tex_has_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
-                    if (!tex_has_alpha) {
-                        // No alpha channel → additive blend (fire/flash/corona)
-                        smat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                     }
                 }
                 
@@ -2310,8 +2206,8 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        bool is_first_person = (renderfx & 0x02) != 0;  // RF_FIRST_PERSON
-        bool is_depthhack    = (renderfx & 0x04) != 0;  // RF_DEPTHHACK
+        bool is_first_person = (renderfx & 0x04) != 0;  // RF_FIRST_PERSON
+        bool is_depthhack    = (renderfx & 0x08) != 0;  // RF_DEPTHHACK
 
         EntityCacheKey key { hModel, reType, 0, renderfx };
         bool same_key = (i < (int)entity_cache_keys.size() && entity_cache_keys[i] == key);
@@ -2342,39 +2238,6 @@ void MoHAARunner::update_entities() {
             Ref<ArrayMesh> bmesh = Godot_BSP_GetBrushModelMesh(subIdx);
             if (bmesh.is_valid() && mi->get_mesh() != bmesh) {
                 mi->set_mesh(bmesh);
-                // One-shot: log brush model mesh details on first assignment
-                static std::unordered_set<int> logged_brush_assign;
-                if (logged_brush_assign.find(subIdx) == logged_brush_assign.end()) {
-                    logged_brush_assign.insert(subIdx);
-                    int sc = bmesh->get_surface_count();
-                    int total_v = 0, total_i = 0;
-                    for (int si = 0; si < sc; si++) {
-                        Array arr = bmesh->surface_get_arrays(si);
-                        if (arr.size() > 0) {
-                            PackedVector3Array vv = arr[Mesh::ARRAY_VERTEX];
-                            PackedInt32Array ii = arr[Mesh::ARRAY_INDEX];
-                            total_v += vv.size();
-                            total_i += ii.size();
-                        }
-                        Ref<Material> mat = bmesh->surface_get_material(si);
-                        String mattype = mat.is_valid() ? mat->get_class() : "null";
-                        UtilityFunctions::print(String("[MoHAA-BRUSH] *") +
-                            String::num_int64(subIdx) + " surf" + String::num_int64(si) +
-                            " mat=" + mattype);
-                    }
-                    AABB aabb = bmesh->get_aabb();
-                    UtilityFunctions::print(String("[MoHAA-BRUSH] *") +
-                        String::num_int64(subIdx) + ": " +
-                        String::num_int64(sc) + " surfaces, " +
-                        String::num_int64(total_v) + " verts, " +
-                        String::num_int64(total_i) + " indices" +
-                        " AABB=(" + String::num(aabb.position.x, 2) + "," +
-                        String::num(aabb.position.y, 2) + "," +
-                        String::num(aabb.position.z, 2) + ")-(" +
-                        String::num(aabb.position.x + aabb.size.x, 2) + "," +
-                        String::num(aabb.position.y + aabb.size.y, 2) + "," +
-                        String::num(aabb.position.z + aabb.size.z, 2) + ")");
-                }
                 // Materials are already baked into the ArrayMesh surfaces
                 // by batches_to_array_mesh() — no override needed.
             } else if (!bmesh.is_valid()) {
@@ -2390,60 +2253,64 @@ void MoHAARunner::update_entities() {
             }
         } else {
             // ── Skeletal (TIKI) model ──
-            // Diagnostic: log model type for entities that reach TIKI path
-            {
-                static std::unordered_set<int> logged_tiki_path_models;
-                if (logged_tiki_path_models.find(hModel) == logged_tiki_path_models.end()) {
-                    logged_tiki_path_models.insert(hModel);
-                    const char *modName = Godot_Model_GetName(hModel);
-                    void *tikiCheck = Godot_Model_GetTikiPtr(hModel);
-                    UtilityFunctions::print(String("[MoHAA][TIKI-PATH] Entity reaching TIKI path: hModel=") +
-                        String::num_int64(hModel) + " modType=" + String::num_int64(modType) +
-                        " hasTiki=" + String(tikiCheck ? "YES" : "NO") +
-                        " name=" + String(modName ? modName : "(null)") +
-                        " rgba=(" + String::num_int64(rgba[0]) + "," + String::num_int64(rgba[1]) + "," +
-                        String::num_int64(rgba[2]) + "," + String::num_int64(rgba[3]) + ")");
-                }
-            }
             // Try to get the cached bind-pose model (may be null for
             // dynamically registered models like FPS weapon TIKIs).
             const GodotSkelModelCache::CachedModel *cached =
                 GodotSkelModelCache::get().get_model(hModel);
 
-            // ── Build / cache materials for this model (one-time) ──
-            // Materials are built from the cached model's surface shader
-            // names.  If the cache has no model, build materials from the
-            // TIKI data directly via the accessor layer.
-            static std::unordered_map<int, std::vector<Ref<StandardMaterial3D>>> mat_cache;
-            if (!same_key && mat_cache.find(hModel) == mat_cache.end()) {
-                auto &mats = mat_cache[hModel];
+            // ── Build / cache materials for this model (one-time per skinNum) ──
+            // Materials are built from the cached model's surface shader names.
+            // If the cache has no model, build materials from TIKI data directly.
+            // Cache key = hModel | (skinNum << 20) to match tr_model.cpp's
+            // hShader[skinNum + (bsurf & 3)] skin-variant selection logic.
+            unsigned char ent_surfaces[32] = {};
+            int ent_skinNum = 0;
+            Godot_Renderer_GetEntitySurfaces(i, ent_surfaces, &ent_skinNum);
+            int mat_key = hModel | (ent_skinNum << 20);
 
-                // Determine surface count and shader names from cache or TIKI
+            auto &mat_cache = tiki_mat_cache;
+            if (mat_cache.find(mat_key) == mat_cache.end()) {
+                auto &entry = mat_cache[mat_key];
+                auto &mats = entry.mats;
+                auto &flat_indices = entry.flat_surf_idx;
+
+                // Enumerate surfaces from TIKI with skinNum-aware shader selection.
+                // Mirrors tr_model.cpp::R_AddSkelSurfaces: shader slot = skinNum + (bsurf & 3).
+                // flat_indices tracks the raw TIKI surface index per godot surface so that
+                // per-entity surface hide flags (MDL_SURFACE_NODRAW bit 2) can be applied.
                 int surf_total = 0;
                 std::vector<String> surf_shader_names;
 
-                if (cached && cached->mesh.is_valid()) {
-                    surf_total = (int)cached->surfaces.size();
-                    for (int s = 0; s < surf_total; s++) {
-                        surf_shader_names.push_back(cached->surfaces[s].shader_name);
-                    }
-                } else {
-                    // No cached model — read surface info directly from TIKI
+                {
                     void *tiki_for_mats = Godot_Model_GetTikiPtr(hModel);
                     if (tiki_for_mats) {
                         int meshCount = Godot_Skel_GetMeshCount(tiki_for_mats);
+                        int flat_idx = 0;
                         for (int m = 0; m < meshCount; m++) {
                             int sc = Godot_Skel_GetSurfaceCount(tiki_for_mats, m);
-                            for (int s = 0; s < sc; s++) {
+                            for (int s = 0; s < sc; s++, flat_idx++) {
                                 int nv = 0, nt = 0;
-                                char sn[64] = {0}, sh[64] = {0};
+                                char sh[64] = {0};
                                 Godot_Skel_GetSurfaceInfo(tiki_for_mats, m, s,
-                                    &nv, &nt, sn, sizeof(sn), sh, sizeof(sh));
+                                    &nv, &nt, nullptr, 0, nullptr, 0);
                                 if (nv > 0 && nt > 0) {
+                                    // Resolve skin slot: skinNum + per-surface variant bits (0-3)
+                                    int bsurf_bits = (flat_idx < 32) ? (ent_surfaces[flat_idx] & 3) : 0;
+                                    int iShaderNum = ent_skinNum + bsurf_bits;
+                                    Godot_Skel_GetSurfaceShaderForSkin(tiki_for_mats, m, s,
+                                        iShaderNum, sh, sizeof(sh));
                                     surf_shader_names.push_back(String(sh));
+                                    flat_indices.push_back(flat_idx);
                                     surf_total++;
                                 }
                             }
+                        }
+                    } else if (cached && cached->mesh.is_valid()) {
+                        // Fallback: TIKI ptr unavailable — use cached shader names (skin 0 only)
+                        surf_total = (int)cached->surfaces.size();
+                        for (int s = 0; s < surf_total; s++) {
+                            surf_shader_names.push_back(cached->surfaces[s].shader_name);
+                            flat_indices.push_back(s);
                         }
                     }
                 }
@@ -2457,6 +2324,12 @@ void MoHAARunner::update_entities() {
                      * No dynamic Godot lights exist, so PER_PIXEL would be black. */
                     mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
 
+#ifdef GODOT_DEBUG_WHITE_ENTITIES
+                    // DEBUG: Force all TIKI entity surfaces to opaque white so models
+                    // are visible regardless of texture/shader pipeline issues.
+                    mat->set_albedo(Color(1, 1, 1, 1));
+                    (void)surf_shader_names[s]; // suppress unused warning
+#else
                     const String &shader_name = surf_shader_names[s];
                     bool found_tex = false;
 
@@ -2484,7 +2357,9 @@ void MoHAARunner::update_entities() {
                     if (!shader_name.is_empty()) {
                         CharString cs = shader_name.ascii();
                         apply_shader_props_to_material(mat, cs.get_data());
+                        mat->set_meta("shader_name", Variant(shader_name));
                     }
+#endif // GODOT_DEBUG_WHITE_ENTITIES
 
                     mats.push_back(mat);
                 }
@@ -2504,16 +2379,6 @@ void MoHAARunner::update_entities() {
                 &actionWeight, &entScale) != 0;
 
             Ref<ArrayMesh> skinned_mesh;
-
-            // One-time diagnostic: report first entity with anim data
-            static bool logged_anim_diag = false;
-            if (!logged_anim_diag && has_anim && tikiPtr) {
-                UtilityFunctions::print(
-                    String("[MoHAA] First entity with anim data: entNum=") +
-                    String::num_int64(entNum) +
-                    String(" hModel=") + String::num_int64(hModel));
-                logged_anim_diag = true;
-            }
 
             if (has_anim && tikiPtr) {
                 // Phase 60: Compute FNV-1a hash of animation state to
@@ -2673,18 +2538,109 @@ void MoHAARunner::update_entities() {
                 }
             } else {
                 // No mesh available — parity with OpenMOHAA: do not render
+                {
+                    static std::unordered_map<int, int> s_no_mesh_log;
+                    if (s_no_mesh_log[hModel] < 3) {
+                        s_no_mesh_log[hModel]++;
+                        const char *nm = Godot_Model_GetName(hModel);
+                        void *tp = Godot_Model_GetTikiPtr(hModel);
+                        UtilityFunctions::print(
+                            String("[MoHAA][NO-MESH] hModel=") + String::num_int64(hModel) +
+                            " name=" + String(nm ? nm : "?") +
+                            " hasAnim=" + String(has_anim ? "Y" : "N") +
+                            " tikiPtr=" + String(tp ? "Y" : "N") +
+                            " modType=" + String::num_int64(modType) +
+                            " entNum=" + String::num_int64(entityNumber));
+                    }
+                }
+#ifdef GODOT_DEBUG_WHITE_ENTITIES
+                // DEBUG: show a tiny orange box at NO-MESH entity positions
+                // so we can see the entity is present even with no TIKI mesh.
+                {
+                    Ref<ArrayMesh> dbg_box;
+                    dbg_box.instantiate();
+                    float hs = 0.15f;  // half-size in metres
+                    PackedVector3Array bv;
+                    bv.resize(8);
+                    bv.set(0, Vector3(-hs,-hs,-hs)); bv.set(1, Vector3( hs,-hs,-hs));
+                    bv.set(2, Vector3(-hs, hs,-hs)); bv.set(3, Vector3( hs, hs,-hs));
+                    bv.set(4, Vector3(-hs,-hs, hs)); bv.set(5, Vector3( hs,-hs, hs));
+                    bv.set(6, Vector3(-hs, hs, hs)); bv.set(7, Vector3( hs, hs, hs));
+                    PackedInt32Array bi;
+                    bi.resize(36);
+                    int faces[36] = {0,1,3,0,3,2, 4,6,7,4,7,5,
+                                     0,4,5,0,5,1, 2,3,7,2,7,6,
+                                     0,2,6,0,6,4, 1,5,7,1,7,3};
+                    for (int bi2=0;bi2<36;bi2++) bi.set(bi2, faces[bi2]);
+                    Array barr; barr.resize(Mesh::ARRAY_MAX);
+                    barr[Mesh::ARRAY_VERTEX] = bv;
+                    barr[Mesh::ARRAY_INDEX]  = bi;
+                    dbg_box->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, barr);
+                    Ref<StandardMaterial3D> bmat; bmat.instantiate();
+                    bmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                    bmat->set_albedo(Color(1.0f, 0.4f, 0.0f, 1.0f));  // orange
+                    bmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+                    dbg_box->surface_set_material(0, bmat);
+                    mi->set_mesh(dbg_box);
+                    // Don't continue — fall through to apply transform and set_visible(true)
+                    mesh_changed = true;
+                }
+#else
                 mi->set_visible(false);
                 continue; // Skip material application and drawing
+#endif
             }
 
-            // Apply cached materials (after set_mesh which clears overrides)
-            if (mesh_changed && mat_cache.find(hModel) != mat_cache.end()) {
-                auto &mats = mat_cache[hModel];
+            // Apply cached materials (after set_mesh which clears overrides).
+            // If customShader is set, it overrides all surface shaders
+            // (matches MOHAA renderer: refEntity_t.customShader in tr_local.h).
+            int entCustomShader = 0;
+            Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &entCustomShader);
+            if (entCustomShader > 0) {
+                auto cs_it = s_sprite_mat_cache.find(entCustomShader);
+                if (cs_it == s_sprite_mat_cache.end()) {
+                    Ref<StandardMaterial3D> csmat;
+                    csmat.instantiate();
+                    csmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                    csmat->set_cull_mode(BaseMaterial3D::CULL_BACK);
+                    Ref<ImageTexture> tex = get_shader_texture(entCustomShader);
+                    if (tex.is_valid()) {
+                        csmat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    }
+                    const char *csn = Godot_Renderer_GetShaderName(entCustomShader);
+                    if (csn && csn[0]) {
+                        apply_shader_props_to_material(csmat, csn);
+                        csmat->set_meta("shader_name", Variant(String(csn)));
+                    }
+                    s_sprite_mat_cache[entCustomShader] = csmat;
+                    cs_it = s_sprite_mat_cache.find(entCustomShader);
+                }
+                int sc = mi->get_mesh().is_valid() ? mi->get_mesh()->get_surface_count() : 0;
+                for (int s = 0; s < sc; s++) {
+                    mi->set_surface_override_material(s, cs_it->second);
+                }
+            } else if (mesh_changed && mat_cache.find(mat_key) != mat_cache.end()) {
+                auto &entry = mat_cache[mat_key];
                 int sc = mi->get_mesh().is_valid()
                        ? mi->get_mesh()->get_surface_count() : 0;
-
-                for (int s = 0; s < (int)mats.size() && s < sc; s++) {
-                    mi->set_surface_override_material(s, mats[s]);
+                for (int s = 0; s < (int)entry.mats.size() && s < sc; s++) {
+                    mi->set_surface_override_material(s, entry.mats[s]);
+                }
+                // Apply MDL_SURFACE_NODRAW (TIKI_SURF_NODRAW = bit 2) per-entity hide flag.
+                // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
+                static Ref<StandardMaterial3D> s_nodraw_mat;
+                if (!s_nodraw_mat.is_valid()) {
+                    s_nodraw_mat.instantiate();
+                    s_nodraw_mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    s_nodraw_mat->set_albedo(Color(0.0f, 0.0f, 0.0f, 0.0f));
+                    s_nodraw_mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                    s_nodraw_mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+                }
+                for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
+                    int fi = entry.flat_surf_idx[s];
+                    if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
+                        mi->set_surface_override_material(s, s_nodraw_mat);
+                    }
                 }
             }
         }  // end else (TIKI model)
@@ -2744,50 +2700,6 @@ void MoHAARunner::update_entities() {
                     weapon_root->add_child(mi);
                 }
             }
-            // Periodic weapon diagnostic (first 30 frames) — now with mesh AABB
-            static int fp_diag_count = 0;
-            if (fp_diag_count < 30) {
-                fp_diag_count++;
-                Ref<Mesh> dbg_mesh = mi->get_mesh();
-                int dbg_sc = dbg_mesh.is_valid() ? dbg_mesh->get_surface_count() : -1;
-                const char *dbg_mod_name = Godot_Model_GetName(hModel);
-                void *dbg_tiki = Godot_Model_GetTikiPtr(hModel);
-
-                String aabb_str = "no_mesh";
-                if (dbg_mesh.is_valid()) {
-                    AABB aabb = dbg_mesh->get_aabb();
-                    aabb_str = String("AABB=(") +
-                        String::num(aabb.position.x, 2) + "," +
-                        String::num(aabb.position.y, 2) + "," +
-                        String::num(aabb.position.z, 2) + ")+(" +
-                        String::num(aabb.size.x, 2) + "," +
-                        String::num(aabb.size.y, 2) + "," +
-                        String::num(aabb.size.z, 2) + ")";
-                }
-
-                Vector3 gpos = id_to_godot_position(origin[0], origin[1], origin[2]);
-                Transform3D gt = mi->get_global_transform();
-
-                UtilityFunctions::print(
-                    String("[WEAPON-DIAG] ent#") + String::num_int64(i) +
-                    String(" entNum=") + String::num_int64(entityNumber) +
-                    String(" hModel=") + String::num_int64(hModel) +
-                    String(" modType=") + String::num_int64(modType) +
-                    String(" rfx=0x") + String::num_int64(renderfx, 16) +
-                    String(" hasTiki=") + String::num_int64(dbg_tiki ? 1 : 0) +
-                    String(" surfaces=") + String::num_int64(dbg_sc) +
-                    String(" vis=") + String::num_int64(mi->is_visible() ? 1 : 0) +
-                    String(" id_pos=(") + String::num(origin[0], 1) + "," +
-                    String::num(origin[1], 1) + "," + String::num(origin[2], 1) + ")" +
-                    String(" godot_pos=(") + String::num(gpos.x, 2) + "," +
-                    String::num(gpos.y, 2) + "," + String::num(gpos.z, 2) + ")" +
-                    String(" gt_pos=(") + String::num(gt.origin.x, 2) + "," +
-                    String::num(gt.origin.y, 2) + "," + String::num(gt.origin.z, 2) + ")" +
-                    String(" ") + aabb_str +
-                    String(" skinned=") + (mi->get_mesh().is_valid() ? String("Y") : String("N")) +
-                    String(" scale=") + String::num(scale, 3) +
-                    String(" name=") + String(dbg_mod_name ? dbg_mod_name : "null"));
-            }
         } else {
             // Non-weapon entity — ensure it is parented under entity_root
             // (it may have been in weapon_root from a previous frame)
@@ -2808,8 +2720,8 @@ void MoHAARunner::update_entities() {
         {
             // Determine lighting sample position in id Tech 3 coordinates
             float light_pos[3] = { origin[0], origin[1], origin[2] };
-            // RF_LIGHTING_ORIGIN (0x0080): sample at lightingOrigin instead
-            if (renderfx & 0x0080) {
+            // RF_LIGHTING_ORIGIN (1<<19 = 0x80000, per q_shared.h): sample at lightingOrigin
+            if (renderfx & (1 << 19)) {
                 Godot_Renderer_GetEntityLightingOrigin(i, light_pos);
             }
             float lr, lg, lb;
@@ -3009,26 +2921,6 @@ void MoHAARunner::update_entities() {
 
         mi->set_visible(true);
 
-        // One-shot per-entity log: verify brush entities are visible
-        static std::unordered_set<int> logged_visible_ents;
-        if (modType == 1 && logged_visible_ents.find(i) == logged_visible_ents.end()) {
-            logged_visible_ents.insert(i);
-            Transform3D t = mi->get_global_transform();
-            bool in_tree = mi->is_inside_tree();
-            bool visible = mi->is_visible_in_tree();
-            Ref<Mesh> mref = mi->get_mesh();
-            int msc = mref.is_valid() ? mref->get_surface_count() : -1;
-            UtilityFunctions::print(String("[MoHAA-BRUSH-VIS] ent#") +
-                String::num_int64(i) + " pos=(" +
-                String::num(t.origin.x, 2) + "," +
-                String::num(t.origin.y, 2) + "," +
-                String::num(t.origin.z, 2) + ")" +
-                " inTree=" + (in_tree ? "Y" : "N") +
-                " visInTree=" + (visible ? "Y" : "N") +
-                " surfaces=" + String::num_int64(msc) +
-                " cullMargin=" + String::num(mi->get_extra_cull_margin(), 1));
-        }
-
         entity_cache_keys[i] = key;
     }
 
@@ -3113,17 +3005,6 @@ void MoHAARunner::update_polys() {
 
     int poly_count = Godot_Renderer_GetPolyCount();
 
-    // Debug logging for poly activity (once per session + count changes)
-    static int last_logged_count = -1;
-    if (poly_count != last_logged_count) {
-        if (poly_count > 0) {
-            UtilityFunctions::print(String("[MoHAA] Poly count changed: ") +
-                                    String::num_int64(poly_count) +
-                                    " (particles/beams/decals active)");
-        }
-        last_logged_count = poly_count;
-    }
-
     if (poly_count == 0 && active_poly_count == 0) return;
 
     // Create poly container on first use
@@ -3181,6 +3062,22 @@ void MoHAARunner::update_polys() {
                               colors[v*4+1] / 255.0f,
                               colors[v*4+2] / 255.0f,
                               colors[v*4+3] / 255.0f));
+        }
+
+        // Nudge mark/decal polys slightly outward along their face normal
+        // to prevent Z-fighting with the BSP surface they sit on.
+        // This replicates GL polygonOffset which the real renderer uses.
+        if (numVerts >= 3) {
+            Vector3 e1 = gPos[1] - gPos[0];
+            Vector3 e2 = gPos[2] - gPos[0];
+            Vector3 normal = e1.cross(e2);
+            if (normal.length_squared() > 1e-12f) {
+                normal = normal.normalized();
+                // 0.005 m ~ 0.2 id units — invisible but prevents Z-fight
+                for (int v = 0; v < numVerts; v++) {
+                    gPos.set(v, gPos[v] + normal * 0.005f);
+                }
+            }
         }
 
         // Triangle fan: 0‒1‒2, 0‒2‒3, ...
@@ -3248,7 +3145,7 @@ void MoHAARunner::update_polys() {
                 Ref<ShaderMaterial> smat;
                 smat.instantiate();
                 smat->set_shader(inv_mul_poly_shader);
-                smat->set_render_priority(-1);  // polygonOffset equivalent
+                smat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
 
                 // Load and set the albedo texture for this shader
                 if (hShader > 0) {
@@ -3321,6 +3218,7 @@ void MoHAARunner::update_polys() {
                 // Since the C engine ALREADY handled the billboarding math, we MUST force
                 // it disabled here.
                 mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_DISABLED);
+                mat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
 
                 s_poly_mat_cache[poly_mat_key] = mat;
             }
@@ -3551,6 +3449,19 @@ void MoHAARunner::update_terrain_marks() {
             gUV.set(v, Vector2(st[0], st[1]));
             gCol.set(v, Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
                               rgba[2] / 255.0f, rgba[3] / 255.0f));
+        }
+
+        // Nudge terrain mark polys outward to prevent Z-fighting
+        if (numVerts >= 3) {
+            Vector3 e1 = gPos[1] - gPos[0];
+            Vector3 e2 = gPos[2] - gPos[0];
+            Vector3 normal = e1.cross(e2);
+            if (normal.length_squared() > 1e-12f) {
+                normal = normal.normalized();
+                for (int v = 0; v < numVerts; v++) {
+                    gPos.set(v, gPos[v] + normal * 0.005f);
+                }
+            }
         }
 
         // Fan triangulation
@@ -4218,15 +4129,10 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             return it->second;  // Cache valid — same effective name
         }
         // Name changed (shader remap active or handle reused) — invalidate
-        UtilityFunctions::print(String("[MoHAA][2D] Invalidate shader tex #") + String::num_int64(shader_handle) + 
-            String(" (was ") + String(it_name != s_shader_texture_loaded_names.end() ? it_name->second.c_str() : "unknown") + String(", now ") + String(name) + String(")"));
         shader_textures.erase(it);
         shader_texture_has_alpha.erase(shader_handle);
         s_shader_texture_loaded_names.erase(shader_handle);
     }
-    
-    UtilityFunctions::print(String("[MoHAA][2D] Reloading shader tex #") + String::num_int64(shader_handle) + 
-        String(" for name ") + String(name) + String(" (raw: ") + String(raw_name) + String(")"));
 
     // ── Determine the actual texture image path(s) to try ──
     // Mirrors R_FindShader: first look up the shader definition in parsed
@@ -4992,23 +4898,6 @@ void MoHAARunner::update_2d_overlay() {
                 // to image bounds, so tiled draws need special handling.
                 bool needs_tiling = (src.position.x + src.size.x > tw + 0.5f) ||
                                     (src.position.y + src.size.y > th + 0.5f);
-
-                // Debug: log every 2D draw with UVs that suggest tiling
-                {
-                    static int tile_log_count = 0;
-                    if (tile_log_count < 50 && (s2 > 1.01f || t2 > 1.01f || s1 < -0.01f || t1 < -0.01f)) {
-                        tile_log_count++;
-                        UtilityFunctions::print(String("[MoHAA][TILE-DBG] shader=") + String(sname ? sname : "?") +
-                            String(" uv=") + String::num(s1,3) + String(",") + String::num(t1,3) +
-                            String("->") + String::num(s2,3) + String(",") + String::num(t2,3) +
-                            String(" texWH=") + String::num(tw,0) + String("x") + String::num(th,0) +
-                            String(" src=") + String::num(src.position.x,1) + String(",") + String::num(src.position.y,1) +
-                            String(" ") + String::num(src.size.x,1) + String("x") + String::num(src.size.y,1) +
-                            String(" draw=") + String::num(draw_rect.position.x,1) + String(",") + String::num(draw_rect.position.y,1) +
-                            String(" ") + String::num(draw_rect.size.x,1) + String("x") + String::num(draw_rect.size.y,1) +
-                            String(" needs_tiling=") + String(needs_tiling ? "YES" : "NO"));
-                    }
-                }
 
                 if (needs_tiling && tw > 0.0f && th > 0.0f &&
                     draw_rect.size.x > 0.0f && draw_rect.size.y > 0.0f) {

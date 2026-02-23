@@ -68,6 +68,11 @@ extern "C" {
     int  Godot_VFX_GetSpriteModelHandle(int idx);
     int  Godot_Model_GetRealHandle(int hModel);
     void Godot_VFX_GetSpriteAxis(int idx, float *out_axis);
+
+    /* Returns 1 once GR_BeginRegistration() has called R_Init() at least once.
+     * Before this point the shader text hash tables are unpopulated and
+     * R_FindShader cannot resolve any shader definitions from .pk3 files. */
+    int  GR_IsRealRendererInited(void);
 }
 
 /* ── Constants ── */
@@ -86,7 +91,6 @@ static Node3D                              *vfx_parent     = nullptr;
 static MeshInstance3D                      *vfx_pool[VFX_SPRITE_POOL_SIZE] = {};
 static bool                                 vfx_initialised = false;
 static std::unordered_map<int, Ref<ImageTexture>> vfx_tex_cache;
-static std::unordered_set<int> vfx_logged_shaders;
 
 /* Cached sprite size info: image pixel dimensions + shader spritescale */
 struct VfxSpriteSize {
@@ -377,11 +381,13 @@ void Godot_VFX_Update(float delta)
     (void)delta;
     if (!vfx_initialised) return;
 
-    /* One-shot: verify spriteScale for known shaders at first update.
-     * Runs before any sprites exist — tests the renderer data path. */
+    /* One-shot: verify spriteScale for known shaders once the renderer is ready.
+     * Deferred until GR_BeginRegistration() has called R_Init() so the shader
+     * text hash tables are populated — otherwise R_FindShader returns the
+     * default shader for every name and all entries show NOT FOUND spuriously. */
     {
         static bool verified = false;
-        if (!verified) {
+        if (!verified && GR_IsRealRendererInited()) {
             verified = true;
             static const char *test_names[] = {
                 "muzsprite", "thompsonsmg_spriteflash",
@@ -408,15 +414,6 @@ void Godot_VFX_Update(float delta)
     /* Scan entity buffer for sprites (rebuilds the cached index list) */
     int count = Godot_VFX_GetSpriteCount();
 
-    /* Diagnostic: log sprite count changes */
-    {
-        static int last_count = -1;
-        if (count != last_count && count > 0) {
-            UtilityFunctions::print(String("[VFX] Sprite count changed: ") + String::num_int64(count));
-            last_count = count;
-        }
-    }
-
     for (int i = 0; i < VFX_SPRITE_POOL_SIZE; i++) {
         MeshInstance3D *mi = vfx_pool[i];
         if (!mi) continue;
@@ -435,68 +432,6 @@ void Godot_VFX_Update(float delta)
 
         Godot_VFX_GetSprite(i, origin, &radius, &shaderHandle,
                             &rotation, rgba, &entityScale);
-
-        /* Diagnostic: log each new unique shader handle */
-        {
-            if (shaderHandle > 0 && vfx_logged_shaders.find(shaderHandle) == vfx_logged_shaders.end()) {
-                vfx_logged_shaders.insert(shaderHandle);
-                const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
-                const char *remap = Godot_Renderer_GetShaderRemap(sn);
-                const char *lookup = (remap && remap[0]) ? remap : sn;
-                Ref<ImageTexture> tex = vfx_load_texture(shaderHandle);
-                const GodotShaderProps *sp = (lookup && lookup[0]) ? Godot_ShaderProps_Find(lookup) : nullptr;
-                const char *transp_names[] = {"OPAQUE","ALPHA_TEST","ALPHA_BLEND","ADDITIVE","MULTIPLICATIVE","MULT_INV","ALPHA_INV"};
-                int tn = sp ? sp->transparency : -1;
-                UtilityFunctions::print(String("[VFX-DIAG] New sprite shader: handle=") +
-                    String::num_int64(shaderHandle) +
-                    " name='" + String(sn ? sn : "(null)") + "'" +
-                    " remap='" + String((remap && remap[0]) ? remap : "none") + "'" +
-                    " props=" + String(sp ? "YES" : "NO") +
-                    " shader_transp=" + String(tn >= 0 && tn < 7 ? transp_names[tn] : "?") +
-                    " tex=" + String(tex.is_valid() ? "LOADED" : "MISSING") +
-                    " rgba=(" + String::num_int64(rgba[0]) + "," + String::num_int64(rgba[1]) + "," +
-                    String::num_int64(rgba[2]) + "," + String::num_int64(rgba[3]) + ")" +
-                    " radius=" + String::num(radius, 1));
-
-                /* Log engine dimensions vs Godot dimensions for comparison */
-                VfxSpriteSize diag_sz = vfx_get_sprite_size(shaderHandle);
-                int godot_w = 0, godot_h = 0;
-                if (tex.is_valid()) {
-                    godot_w = tex->get_width();
-                    godot_h = tex->get_height();
-                }
-                int eng_w = 0, eng_h = 0;
-                float eng_spr_scale = 1.0f;
-                int eng_ok = 0;
-                if (lookup && lookup[0])
-                    eng_ok = Godot_Sprite_GetEngineSize(lookup, &eng_w, &eng_h, &eng_spr_scale);
-
-                UtilityFunctions::print(String("[VFX-DIAG]   engine_img=") +
-                    String::num_int64(eng_w) + "x" + String::num_int64(eng_h) +
-                    " godot_img=" + String::num_int64(godot_w) + "x" + String::num_int64(godot_h) +
-                    (eng_ok && (eng_w != godot_w || eng_h != godot_h) ? " ** MISMATCH **" : "") +
-                    " spritescale=" + String::num(diag_sz.sprite_scale, 3) +
-                    " eng_spritescale=" + String::num(eng_spr_scale, 3) +
-                    " entityScale=" + String::num(entityScale, 4));
-
-                /* At scale=1, compute what the sprite extent would be in metres */
-                float extent_m = (float)diag_sz.width * diag_sz.sprite_scale * MOHAA_UNIT_SCALE;
-                UtilityFunctions::print(String("[VFX-DIAG]   base_extent=") +
-                    String::num(extent_m, 3) + "m (at entityScale=1.0)" +
-                    " actual_extent=" + String::num(extent_m * entityScale, 3) + "m");
-
-                if (sp && sp->stage_count > 0) {
-                    for (int st = 0; st < sp->stage_count; st++) {
-                        if (sp->stages[st].map[0]) {
-                            UtilityFunctions::print(String("[VFX-DIAG]   stage[") + String::num_int64(st) +
-                                "] map='" + String(sp->stages[st].map) + "'" +
-                                " isLM=" + String(sp->stages[st].isLightmap ? "Y" : "N") +
-                                " tcGen=" + String::num_int64(sp->stages[st].tcGen));
-                        }
-                    }
-                }
-            }
-        }
 
         /* Sprite sizing: MOHAA's RB_DrawSprite computes half-extent as
          *   image_pixels × 0.5 × entity.scale × shader.spritescale
@@ -689,47 +624,8 @@ void Godot_VFX_Update(float delta)
         mi->set_visible(true);
     }
 
-    /* Per-frame diagnostics — log EVERY sprite's actual rendered size.
-     * Active for the first 10 frames that have sprites, then quiet.
-     * This tells us exactly what the user sees. */
-    {
-        static int diag_frame_count = 0;
-        if (count > 0 && diag_frame_count < 10) {
-            diag_frame_count++;
-            UtilityFunctions::print(String("[VFX-FRAME] ---- frame ") +
-                String::num_int64(diag_frame_count) + " sprites=" +
-                String::num_int64(count) + " ----");
-
-            for (int j = 0; j < count && j < VFX_SPRITE_POOL_SIZE; j++) {
-                float oj[3] = {0}, rj = 0, rotj = 0, sj = 1.0f;
-                int shj = 0;
-                unsigned char cj[4] = {255,255,255,255};
-                Godot_VFX_GetSprite(j, oj, &rj, &shj, &rotj, cj, &sj);
-                if (shj <= 0) continue;
-
-                const char *sname = Godot_Renderer_GetShaderName(shj);
-                VfxSpriteSize szj = vfx_get_sprite_size(shj);
-                float ext_w = (float)szj.width  * sj * szj.sprite_scale * MOHAA_UNIT_SCALE;
-                float ext_h = (float)szj.height * sj * szj.sprite_scale * MOHAA_UNIT_SCALE;
-
-                int hM = Godot_VFX_GetSpriteModelHandle(j);
-                int rH = (hM > 0) ? Godot_Model_GetRealHandle(hM) : 0;
-                const char *path = rH > 0 ? "ENGINE" : "FALLBACK";
-
-                UtilityFunctions::print(
-                    String("[VFX-FRAME]  [") + String::num_int64(j) +
-                    "] shader='" + String(sname ? sname : "?") + "'" +
-                    " img=" + String::num_int64(szj.width) + "x" + String::num_int64(szj.height) +
-                    " sprScale=" + String::num(szj.sprite_scale, 3) +
-                    " entScale=" + String::num(sj, 4) +
-                    " → " + String::num(ext_w, 3) + "x" + String::num(ext_h, 3) + "m" +
-                    " alpha=" + String::num_int64(cj[3]) +
-                    " path=" + String(path) +
-                    " realH=" + String::num_int64(rH));
-            }
-        }
-    }
 }
+
 
 void Godot_VFX_Shutdown(void)
 {
@@ -764,5 +660,4 @@ void Godot_VFX_Clear(void)
     vfx_tex_cache.clear();
     vfx_mat_cache.clear();
     vfx_size_cache.clear();
-    vfx_logged_shaders.clear();
 }

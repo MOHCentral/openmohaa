@@ -87,25 +87,41 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
     if ( strlen( name ) >= 64 ) return 0;
 
     /* ── Search existing models ── */
+    /* GR_MOD_BAD slots arise when CG_ExecuteNewServerCommands' first pass
+     * (modelOnly=qtrue) calls GR_UnregisterServerModel() on every CS_MODELS
+     * entry that was registered by CG_PrepRefresh().  The second pass then
+     * calls GR_RegisterServerModel() with the same name.  If we returned 0
+     * on a BAD hit, cgs.model_draw[] would stay 0 → model.tiki = NULL →
+     * entity invisible.  Re-using (re-loading) the bad slot fixes this. */
+    int bad_slot = 0;
     for ( i = 1; i < gr_numModels; i++ ) {
         if ( !Q_stricmp( gr_models[i].name, name ) ) {
-            if ( gr_models[i].type == GR_MOD_BAD ) return 0;
-            return i;
+            if ( gr_models[i].type == GR_MOD_BAD ) {
+                bad_slot = i;   /* Will re-initialise this slot below */
+                break;
+            }
+            return i;   /* Already loaded and valid */
         }
     }
 
-    /* ── Allocate new slot ── */
-    if ( gr_numModels >= GR_MAX_MODELS ) {
-        ri.Printf( PRINT_WARNING, "[GodotRenderer] Model table full, cannot register '%s'\n", name );
-        return 0;
+    /* ── Allocate new slot (or re-use a previously unregistered BAD slot) ── */
+    int new_slot;
+    if ( bad_slot > 0 ) {
+        new_slot = bad_slot;
+    } else {
+        if ( gr_numModels >= GR_MAX_MODELS ) {
+            ri.Printf( PRINT_WARNING, "[GodotRenderer] Model table full, cannot register '%s'\n", name );
+            return 0;
+        }
+        new_slot = gr_numModels;
+        gr_numModels++;
     }
 
-    mod = &gr_models[gr_numModels];
+    mod = &gr_models[new_slot];
     memset( mod, 0, sizeof( *mod ) );
     Q_strncpyz( mod->name, name, sizeof( mod->name ) );
-    mod->index = gr_numModels;
+    mod->index = new_slot;
     mod->serveronly = qtrue;
-    gr_numModels++;
 
     /* ── BSP inline models (*N) ── */
     if ( name[0] == '*' ) {
@@ -359,6 +375,12 @@ typedef struct {
     int         bone_tag[5];         /* controller bone indices */
     float       bone_quat[5][4];     /* controller bone quaternions */
     void       *tiki;                /* dtiki_t pointer */
+
+    /* Per-surface state flags (32 bytes, matches MAX_MODEL_SURFACES).
+     * Bit 2 (MDL_SURFACE_NODRAW = 4) = hidden surface.
+     * Bits 0-1 = per-surface skin variant offset (added to skinNum). */
+    byte        surfaces[32];
+    int         skinNum;             /* inline skin index for shader slot selection */
 } gr_entity_t;
 
 /* Dynamic light data */
@@ -552,6 +574,9 @@ static void GR_Shutdown( qboolean destroyWindow )
 extern void R_Init( void );
 
 static int gr_realRendererInited = 0;
+
+/* Accessor so Godot-side C++ code can tell whether R_Init() has been called yet */
+int GR_IsRealRendererInited( void ) { return gr_realRendererInited; }
 
 static void GR_BeginRegistration( glconfig_t *config )
 {
@@ -873,10 +898,26 @@ static void GR_AddRefEntityToScene( const refEntity_t *re, int parentEntityNumbe
     ge->shaderRGBA[2] = re->shaderRGBA[2];
     ge->shaderRGBA[3] = re->shaderRGBA[3];
 
+    /* Per-surface state flags and skin selector */
+    ge->skinNum = re->skinNum;
+    memcpy( ge->surfaces, re->surfaces, sizeof( ge->surfaces ) );
+
     /* Skeletal animation data (Phase 13) */
     memcpy( ge->frameInfo, re->frameInfo, sizeof(ge->frameInfo) );
     ge->actionWeight = re->actionWeight;
     ge->tiki         = (void *)re->tiki;
+
+    /* Always resolve ge->tiki to the real dtiki_t* from our model table.
+     * cgame stores a qhandle_t integer in re->tiki (e.g. cgs.model_draw[idx])
+     * which is a small integer like 3 cast to dtiki_t*.  That bogus pointer
+     * would crash Godot_RI_GetSkeletor / Godot_Skel_PrepareBones.
+     * The correct TIKI pointer is always in gr_models[hModel].tiki. */
+    if ( ge->hModel > 0 && ge->hModel < gr_numModels &&
+         gr_models[ge->hModel].type == GR_MOD_TIKI ) {
+        ge->tiki = (void *)gr_models[ge->hModel].tiki;
+    } else if ( !ge->tiki ) {
+        /* Non-TIKI model with no tiki set — leave as NULL (sprites, etc.) */
+    }
 
     if ( re->bone_tag && re->bone_quat ) {
         for ( int i = 0; i < 5; i++ ) {
@@ -891,45 +932,8 @@ static void GR_AddRefEntityToScene( const refEntity_t *re, int parentEntityNumbe
         memset( ge->bone_quat, 0, sizeof(ge->bone_quat) );
     }
 
-    /* Diagnostic: log child entities (those submitted with a parent) */
-    {
-        static int add_diag_count = 0;
-        if ( add_diag_count < 80 && parentEntityNumber != ENTITYNUM_NONE ) {
-            add_diag_count++;
-            ri.Printf( PRINT_ALL,
-                "[ADDENT-DIAG] entNum=%d parent=%d rfx=0x%x "
-                "origin=(%.1f, %.1f, %.1f) "
-                "axis[0]=(%.2f,%.2f,%.2f) "
-                "scale=%.3f tiki=%p hModel=%d reType=%d\n",
-                re->entityNumber, parentEntityNumber, re->renderfx,
-                re->origin[0], re->origin[1], re->origin[2],
-                re->axis[0][0], re->axis[0][1], re->axis[0][2],
-                re->scale, (void *)re->tiki, (int)re->hModel,
-                (int)re->reType );
-        }
-    }
-
-    /* Diagnostic: log RT_SPRITE entities to trace shader/texture assignment */
-    {
-        static int sprite_diag_count = 0;
-        if ( sprite_diag_count < 50 && (int)re->reType == 2 /* RT_SPRITE */ ) {
-            sprite_diag_count++;
-            ri.Printf( PRINT_ALL,
-                "[SPRITE-ADD] reType=%d hModel=%d customShader=%d "
-                "radius=%.2f rotation=%.2f "
-                "rgba=(%d,%d,%d,%d) "
-                "origin=(%.1f,%.1f,%.1f) "
-                "entNum=%d renderfx=0x%x skinNum=%d customSkin=%d\n",
-                (int)re->reType, (int)re->hModel, (int)re->customShader,
-                re->radius, re->rotation,
-                re->shaderRGBA[0], re->shaderRGBA[1],
-                re->shaderRGBA[2], re->shaderRGBA[3],
-                re->origin[0], re->origin[1], re->origin[2],
-                re->entityNumber, re->renderfx,
-                re->skinNum, (int)re->customSkin );
-        }
-    }
 }
+
 
 static qboolean GR_AddPolyToScene( qhandle_t hShader, int numVerts,
                                    const polyVert_t *verts, int renderfx )
@@ -1988,29 +1992,6 @@ static refEntity_t *GR_GetRenderEntity( int entityNumber )
             scratch_entity.bone_tag  = scratch_bone_tag;
             scratch_entity.bone_quat = (vec4_t *)scratch_bone_quat;
 
-            {
-                static int gre_diag_count = 0;
-                if ( gre_diag_count < 40 ) {
-                    gre_diag_count++;
-                    ri.Printf( PRINT_ALL,
-                        "[GETENT-DIAG] lookup entNum=%d found at idx=%d "
-                        "origin=(%.1f,%.1f,%.1f) "
-                        "axis[0]=(%.2f,%.2f,%.2f) "
-                        "scale=%.3f tiki=%p hModel=%d rfx=0x%x "
-                        "boneTag[0]=%d\n",
-                        entityNumber, i,
-                        scratch_entity.origin[0], scratch_entity.origin[1],
-                        scratch_entity.origin[2],
-                        scratch_entity.axis[0][0], scratch_entity.axis[0][1],
-                        scratch_entity.axis[0][2],
-                        scratch_entity.scale,
-                        (void *)scratch_entity.tiki,
-                        (int)scratch_entity.hModel,
-                        scratch_entity.renderfx,
-                        scratch_bone_tag[0] );
-                }
-            }
-
             break;
         }
     }
@@ -2373,8 +2354,6 @@ static void GR_ForceUpdatePose( refEntity_t *model )
     }
 }
 
-static int gr_orient_diag_count = 0;
-
 static orientation_t GR_TIKI_Orientation( refEntity_t *model, int tagNum )
 {
     orientation_t o;
@@ -2383,22 +2362,6 @@ static orientation_t GR_TIKI_Orientation( refEntity_t *model, int tagNum )
          * the skeleton is in the current pose before querying a bone tag. */
         GR_UpdatePoseInternal( model );
         o = ri.TIKI_OrientationInternal( model->tiki, model->entityNumber, tagNum, model->scale );
-
-        if ( gr_orient_diag_count < 60 ) {
-            gr_orient_diag_count++;
-            ri.Printf( PRINT_ALL,
-                "[ORIENT-DIAG] entNum=%d tagNum=%d scale=%.3f "
-                "or.origin=(%.1f, %.1f, %.1f) "
-                "model.origin=(%.1f, %.1f, %.1f) "
-                "model.axis[0]=(%.2f,%.2f,%.2f) "
-                "tiki=%p frameIdx=%d\n",
-                model->entityNumber, tagNum, model->scale,
-                o.origin[0], o.origin[1], o.origin[2],
-                model->origin[0], model->origin[1], model->origin[2],
-                model->axis[0][0], model->axis[0][1], model->axis[0][2],
-                (void *)model->tiki, gr_frame_skel_index );
-        }
-
         return o;
     }
     memset( &o, 0, sizeof( o ) );
@@ -2878,6 +2841,27 @@ void Godot_Renderer_GetEntityLightingOrigin( int index, float *out )
     out[0] = gr_entities[index].lightingOrigin[0];
     out[1] = gr_entities[index].lightingOrigin[1];
     out[2] = gr_entities[index].lightingOrigin[2];
+}
+
+/* Per-surface state flags and skin selector.
+ * out_surfaces must point to a 32-byte buffer (MAX_MODEL_SURFACES).
+ * Bit 2 (MDL_SURFACE_NODRAW=4) indicates the surface should not be drawn.
+ * Bits 0-1 give the per-surface skin variant offset (added to skinNum).
+ * Mirrors the surfaces[] / skinNum fields of refEntity_t used in
+ * tr_model.cpp::R_AddSkelSurfaces for correct surface rendering. */
+void Godot_Renderer_GetEntitySurfaces( int index,
+                                       unsigned char *out_surfaces,
+                                       int *out_skinNum )
+{
+    if ( index < 0 || index >= gr_numEntities ) {
+        if ( out_skinNum )   *out_skinNum = 0;
+        if ( out_surfaces )  memset( out_surfaces, 0, 32 );
+        return;
+    }
+    if ( out_surfaces )
+        memcpy( out_surfaces, gr_entities[index].surfaces, 32 );
+    if ( out_skinNum )
+        *out_skinNum = gr_entities[index].skinNum;
 }
 
 /* Shadow blob accessors: shadow plane height and model radius */

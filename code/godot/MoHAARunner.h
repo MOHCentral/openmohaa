@@ -306,6 +306,15 @@ private:
     // Key = (hModel << 20) | (surfIdx << 12) | quantised_rgba
     std::unordered_map<uint64_t, Ref<StandardMaterial3D>> tinted_mat_cache;
 
+    // TIKI entity material cache — keyed by (hModel | skinNum<<20); cleared on map change.
+    // Stores per-godot-surface materials alongside the flat TIKI surface index mapping,
+    // which is needed to apply MDL_SURFACE_NODRAW (per-entity per-surface visibility flags).
+    struct TikiMatSet {
+        std::vector<Ref<StandardMaterial3D>> mats;
+        std::vector<int> flat_surf_idx; // TIKI flat surface index per godot surface slot
+    };
+    std::unordered_map<int, TikiMatSet> tiki_mat_cache;
+
     // 2D HUD overlay (Phase 7h)
     CanvasLayer *hud_layer = nullptr;                     // Overlay layer for 2D elements
     Control *hud_control = nullptr;                       // Control node for custom draw
