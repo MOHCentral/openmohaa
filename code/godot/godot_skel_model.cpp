@@ -85,7 +85,16 @@ const GodotSkelModelCache::CachedModel *GodotSkelModelCache::get_model(int hMode
     /* Check cache first */
     auto it = cache_.find(hModel);
     if (it != cache_.end()) {
-        return &it->second;
+        /* Validate: if the TIKI pointer has changed, the model slot was
+         * recycled by GR_RegisterModelInternal() (BAD-slot reuse during
+         * CG_ExecuteNewServerCommands).  Evict the stale entry so the
+         * correct model is built for the new occupant of this slot. */
+        void *current_tiki = Godot_Model_GetTikiPtr(hModel);
+        if (current_tiki != it->second.tiki_ptr) {
+            cache_.erase(it);   /* stale — fall through to rebuild */
+        } else {
+            return &it->second;
+        }
     }
 
     /* Build and cache */
@@ -117,6 +126,7 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
 
     CachedModel &model = cache_[hModel];
     model.tiki_scale = tikiScale;
+    model.tiki_ptr   = tikiPtr;   /* record for stale-slot detection in get_model() */
 
     Ref<ArrayMesh> arrayMesh;
     arrayMesh.instantiate();

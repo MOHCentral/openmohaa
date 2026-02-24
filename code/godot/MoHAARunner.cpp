@@ -18,7 +18,6 @@
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/canvas_layer.hpp>
 #include <godot_cpp/classes/control.hpp>
-#include <godot_cpp/classes/font.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/texture_rect.hpp>
@@ -80,11 +79,6 @@ extern "C" {
     int  Godot_GetServerState(void);
     const char *Godot_GetMapName(void);
     int  Godot_GetPlayerCount(void);
-    int  Godot_GetMaxClients(void);
-    int  Godot_GetScoreboardPlayer(int i,
-                                   char *out_name, int out_name_len,
-                                   int *out_kills, int *out_deaths,
-                                   int *out_ping);
 
     // VFS accessors (Task 4.1) — from godot_vfs_accessors.c
     long Godot_VFS_ReadFile(const char *qpath, void **out_buffer);
@@ -147,9 +141,6 @@ extern "C" {
                                  float *x, float *y, float *w, float *h,
                                  float *s1, float *t1, float *s2, float *t2,
                                  float *color, int *shader);
-    int  Godot_Renderer_Get2DCmdTriVerts(int index,
-                                         float *verts,  /* [3][2] */
-                                         float *uvs);   /* [3][2] */
     const char *Godot_Renderer_GetShaderName(int handle);
     int  Godot_Renderer_GetShaderCount(void);
     int  Godot_Renderer_RegisterShader(const char *name);
@@ -223,7 +214,6 @@ extern "C" {
     int  Godot_Client_GetPaused(void);
     void Godot_Client_ForceUnpause(void);
     int  Godot_Client_IsAnyOverlayActive(void);
-    void Godot_Client_SyncGuiMouseToOverlayState(void);
     void Godot_Client_SetMousePos(int x, int y);
     int  Godot_Client_IsUIStarted(void);
     int  Godot_Client_IsMenuUp(void);
@@ -265,10 +255,6 @@ extern "C" {
                                      int *numVerts, int *numTriangles,
                                      char *surfName, int surfNameLen,
                                      char *shaderName, int shaderNameLen);
-    // Skin-aware shader name lookup: mirrors tr_model.cpp hShader[skinNum + (bsurf & 3)] selection.
-    int   Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfIndex,
-                                              int iShaderNum,
-                                              char *shaderName, int shaderNameLen);
     int   Godot_Skel_GetSurfaceVertices(void *tikiPtr, int meshIndex, int surfIndex,
                                          float *positions, float *normals, float *texcoords);
     int   Godot_Skel_GetSurfaceIndices(void *tikiPtr, int meshIndex, int surfIndex,
@@ -280,20 +266,10 @@ extern "C" {
     // Phase 268: Entity lighting origin — from godot_renderer.c
     void  Godot_Renderer_GetEntityLightingOrigin(int index, float *out);
 
-    // Per-surface state flags and skin slot — from godot_renderer.c
-    // Mirrors refEntity_t::surfaces[] / skinNum used in tr_model.cpp::R_AddSkelSurfaces.
-    void  Godot_Renderer_GetEntitySurfaces(int index,
-                                           unsigned char *out_surfaces,
-                                           int *out_skinNum);
-
-    // Model/Shadow accessors
+    // Shadow blob accessors — from godot_renderer.c
     float Godot_Renderer_GetEntityShadowPlane(int index);
     float Godot_Model_GetRadius(int hModel);
-    int   Godot_Model_GetSpriteShader(int hModel);
-    int   Godot_Model_GetSpriteDims(int hModel, float *outWidth,
-                                     float *outHeight, float *outSpriteScale);
 
-    // Render commands and polygons
     // Phase 148: HUD model render request accessors — from godot_renderer.c
     int   Godot_Renderer_GetHudModelCount(void);
     int   Godot_Renderer_GetHudModel(int index,
@@ -333,7 +309,6 @@ extern "C" {
     // Phase 33: Background image accessor — from godot_renderer.c
     int   Godot_Renderer_GetBackground(int *cols, int *rows, int *bgr,
                                        const unsigned char **data);
-    int   Godot_Renderer_GetBackgroundCmdIndex(void);
 
     // Phase 59: UI system — from godot_ui_system.cpp / godot_ui_input.cpp
     // Fallback declarations in case headers are absent:
@@ -359,22 +334,6 @@ extern "C" {
     // Cursor image accessor — from stubs.cpp
     int   Godot_GetPendingCursorImage(const unsigned char **out_pixels, int *out_w, int *out_h);
     void  Godot_ClearPendingCursorImage(void);
-
-    // Scoreboard capture buffer — from godot_scoreboard.c
-    int         Godot_SB_IsVisible(void);
-    int         Godot_SB_GetItemCount(void);
-    int         Godot_SB_GetColumnCount(void);
-    const char *Godot_SB_GetItemString(int item, int field);
-    void        Godot_SB_GetItemTextColor(int item, float *r, float *g, float *b, float *a);
-    void        Godot_SB_GetItemBackColor(int item, float *r, float *g, float *b, float *a);
-    int         Godot_SB_GetItemIsHeader(int item);
-    const char *Godot_SB_GetColumnName(int col);
-    int         Godot_SB_GetColumnWidth(int col);
-    void        Godot_SB_GetPosition(float *x, float *y, float *w, float *h);
-    void        Godot_SB_GetBGColor(float *r, float *g, float *b, float *a);
-    void        Godot_SB_GetFontColor(float *r, float *g, float *b, float *a);
-    int         Godot_SB_GetDrawHeader(void);
-    const char *Godot_SB_GetMenuName(void);
 }
 
 // ──────────────────────────────────────────────
@@ -388,44 +347,6 @@ static bool    godot_jmpbuf_valid = false;
 static bool    godot_has_fatal_error = false;
 static char    godot_error_message[1024] = {0};
 static bool    godot_quit_requested = false;
-
-// Tracks which effective shader name was used for each cached texture entry.
-// Keyed by shader handle.  Cleared alongside shader_textures on map/vid_restart.
-static std::unordered_map<int, std::string> s_shader_texture_loaded_names;
-
-// Per-surface animation cache for update_shader_animations: avoids per-frame
-// string conversion and hash lookups.  Cleared on map change.
-struct SurfAnimCache {
-    const GodotShaderProps *sp;
-    int shader_handle;
-    bool needs_animation;
-};
-static std::unordered_map<uint32_t, SurfAnimCache> s_surf_anim_cache;
-
-// Sprite/beam material caches: avoid per-frame material+texture creation.
-// Cleared on map change (shader handles are re-registered).
-static std::unordered_map<int, Ref<StandardMaterial3D>> s_sprite_mat_cache;
-static std::unordered_map<int, Ref<StandardMaterial3D>> s_beam_mat_cache;
-
-// Poly/terrain-mark material caches: keyed on (shader_handle << 2 | blend_type)
-// where blend_type: 0=alpha, 1=inv_mul (ShaderMaterial), 2=multiplicative.
-// Avoids per-frame material instantiation for effects that reuse the same shader.
-static std::unordered_map<int64_t, Ref<Material>> s_poly_mat_cache;
-static std::unordered_map<int64_t, Ref<Material>> s_terrain_mark_mat_cache;
-
-// Sprite/beam per-instance tint cache: keyed on (shader_handle << 16 | rgba_quantized).
-// Avoids duplicate() per sprite/beam per frame when tint is unchanged.
-static std::unordered_map<uint64_t, Ref<StandardMaterial3D>> s_sprite_tint_cache;
-static std::unordered_map<uint64_t, Ref<StandardMaterial3D>> s_beam_tint_cache;
-
-static MoHAARunner* s_mohaa_runner_instance = nullptr;
-
-godot::Ref<godot::ImageTexture> Godot_GetShaderTexture(int shader_handle) {
-    if (s_mohaa_runner_instance) {
-        return s_mohaa_runner_instance->get_shader_texture(shader_handle);
-    }
-    return godot::Ref<godot::ImageTexture>();
-}
 
 // Called from patched Sys_Error in sys_main.c
 extern "C" void Godot_SysError(const char *error) {
@@ -496,16 +417,6 @@ extern "C" void Godot_Clipboard_Set(const char *text) {
 //  MoHAARunner implementation
 // ──────────────────────────────────────────────
 
-MoHAARunner::MoHAARunner() {
-    initialized = false;
-    basepath = "";
-    game_flow_state = GameFlowState::BOOT;
-    mouse_captured = false;
-    hud_visible = true;
-
-    s_mohaa_runner_instance = this;
-}
-
 // ── Coordinate conversion helpers (Phase 7a) ──
 //
 // id Tech 3 (MOHAA): X = Forward, Y = Left, Z = Up  (right-handed, Z-up)
@@ -537,11 +448,10 @@ static inline float clamp01(float v) {
     return v;
 }
 
-MoHAARunner::~MoHAARunner() {
-    if (s_mohaa_runner_instance == this) {
-        s_mohaa_runner_instance = nullptr;
-    }
+MoHAARunner::MoHAARunner() {
+}
 
+MoHAARunner::~MoHAARunner() {
 #ifdef HAS_WEAPON_VIEWPORT_MODULE
     Godot_WeaponViewport::get().destroy();
 #endif
@@ -569,6 +479,9 @@ MoHAARunner::~MoHAARunner() {
     }
 
     // ── Module shutdown hooks (defensive) ──
+#ifdef HAS_SPEAKER_ENTITIES_MODULE
+    Godot_Speakers_Shutdown();
+#endif
 #ifdef HAS_UBERSOUND_MODULE
     Godot_Ubersound_Shutdown();
 #endif
@@ -582,16 +495,6 @@ MoHAARunner::~MoHAARunner() {
 #ifdef HAS_FRUSTUM_CULL_MODULE
     Godot_FrustumCull_Shutdown();
 #endif
-
-    /* Free scoreboard map preview child canvas item. */
-    if (sb_map_preview_ci.is_valid()) {
-        RenderingServer::get_singleton()->free_rid(sb_map_preview_ci);
-        sb_map_preview_ci = RID();
-    }
-
-    if (s_mohaa_runner_instance == this) {
-        s_mohaa_runner_instance = nullptr;
-    }
 
     g_godot_ready = false;
 }
@@ -614,7 +517,6 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("get_player_count"), &MoHAARunner::get_player_count);
     godot::ClassDB::bind_method(godot::D_METHOD("get_server_state"), &MoHAARunner::get_server_state);
     godot::ClassDB::bind_method(godot::D_METHOD("get_server_state_string"), &MoHAARunner::get_server_state_string);
-    godot::ClassDB::bind_method(godot::D_METHOD("get_cvar_string", "name"), &MoHAARunner::get_cvar_string);
 
     // VFS access (Task 4.1)
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_read_file", "qpath"), &MoHAARunner::vfs_read_file);
@@ -763,10 +665,14 @@ void MoHAARunner::setup_3d_scene() {
     camera->set_current(true);
     game_world->add_child(camera);
 
-    // We intentionally do NOT spawn a Godot DirectionalLight3D here.
-    // OpenMOHAA (id Tech 3) bakes all sunlight directly into the BSP lightmaps
-    // and the 3D Light Grid. A real-time Godot sun breaks mathematical parity
-    // by double-lighting the scene and overriding the baked shadows.
+    // Basic directional light so geometry is visible once we have meshes
+    sun_light = memnew(DirectionalLight3D);
+    sun_light->set_name("SunLight");
+    // Aim roughly downward at 45° — a temporary placeholder
+    sun_light->set_rotation(Vector3(Math::deg_to_rad(-45.0), Math::deg_to_rad(30.0), 0.0));
+    sun_light->set_shadow_mode(DirectionalLight3D::SHADOW_PARALLEL_4_SPLITS);
+    sun_light->set_param(Light3D::PARAM_ENERGY, 1.0);
+    game_world->add_child(sun_light);
 
     // WorldEnvironment with basic ambient light
     world_env = memnew(WorldEnvironment);
@@ -776,15 +682,12 @@ void MoHAARunner::setup_3d_scene() {
     env->set_background(Environment::BG_COLOR);
     env->set_bg_color(Color(0.4, 0.5, 0.6));   // light grey-blue sky
     env->set_ambient_source(Environment::AMBIENT_SOURCE_COLOR);
-    /* Ambient = 0.5 because the lightmap textures are intrinsically baked
-     * at 2.0x brightness (<< 1 in godot_bsp_mesh). If ambient is 1.0,
-     * the textures blow out to white. */
-    env->set_ambient_light_color(Color(1.0, 1.0, 1.0));
+    env->set_ambient_light_color(Color(0.3, 0.3, 0.3));
     env->set_ambient_light_energy(0.5);
 
     // Phase 81: Tonemap and exposure to match MOHAA's overbright/gamma
-    // Set to linear. The real overbright math is baked directly into the 
-    // lightmap build pipeline (godot_bsp_mesh load_lightmaps)
+    // MOHAA uses 2x overbright on lightmaps. Linear tonemap with 1.0
+    // exposure gives the closest match to GL1 overbright rendering.
     env->set_tonemapper(Environment::TONE_MAPPER_LINEAR);
     env->set_tonemap_exposure(1.0);
     env->set_tonemap_white(1.0);
@@ -794,50 +697,15 @@ void MoHAARunner::setup_3d_scene() {
     UtilityFunctions::print("[MoHAA] 3D scene created (Camera3D + light + environment).");
 
     // ── Weapon viewport (Phase 62) ──
-    // Render first-person weapon entities in a separate SubViewport with
-    // its own depth buffer, then composite on top of the main scene.
-    // This replicates id Tech 3's RF_DEPTHHACK (depth range 0–0.3).
-    bool overlay_active_now = false;
+#ifdef HAS_WEAPON_VIEWPORT_MODULE
     {
         Vector2i win_size = DisplayServer::get_singleton()->window_get_size();
         if (win_size.x < 1 || win_size.y < 1) {
             win_size = Vector2i(1280, 720);
         }
-
-        // SubViewport with transparent background + own World3D
-        weapon_viewport = memnew(SubViewport);
-        weapon_viewport->set_size(win_size);
-        weapon_viewport->set_transparent_background(true);
-        weapon_viewport->set_world_3d(Ref<World3D>(memnew(World3D)));
-        weapon_viewport->set_update_mode(SubViewport::UPDATE_ALWAYS);
-        // Disable own 3D rendering until we populate it — UPDATE_ALWAYS
-        // ensures the viewport runs each frame.
-        add_child(weapon_viewport);
-
-        // Camera inside weapon viewport — will mirror main camera each frame
-        weapon_camera = memnew(Camera3D);
-        weapon_camera->set_near(0.01);
-        weapon_camera->set_far(100.0);
-        weapon_viewport->add_child(weapon_camera);
-
-        // Root node for FPS entity meshes inside the weapon viewport
-        weapon_root = memnew(Node3D);
-        weapon_viewport->add_child(weapon_root);
-
-        // CanvasLayer to overlay weapon texture on top of main scene
-        weapon_canvas_layer = memnew(CanvasLayer);
-        weapon_canvas_layer->set_layer(10);  // above world, below HUD
-        add_child(weapon_canvas_layer);
-
-        weapon_overlay = memnew(TextureRect);
-        weapon_overlay->set_texture(weapon_viewport->get_texture());
-        weapon_overlay->set_anchors_preset(Control::PRESET_FULL_RECT);
-        weapon_overlay->set_stretch_mode(TextureRect::STRETCH_SCALE);
-        weapon_overlay->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
-        weapon_canvas_layer->add_child(weapon_overlay);
-
-        UtilityFunctions::print("[MoHAA] Weapon SubViewport created (", win_size.x, "x", win_size.y, ")");
+        Godot_WeaponViewport::get().create(this, camera, win_size.x, win_size.y);
     }
+#endif
 }
 
 // ──────────────────────────────────────────────
@@ -931,23 +799,6 @@ void MoHAARunner::update_camera() {
             env->set_fog_enabled(false);
         }
     }
-
-    // ── Weapon viewport camera sync ──
-    // Mirror the main camera's transform and FOV into the weapon
-    // SubViewport's camera so FPS entities render from the same viewpoint.
-    if (weapon_camera) {
-        weapon_camera->set_global_transform(camera->get_global_transform());
-        weapon_camera->set_fov(camera->get_fov());
-    }
-
-    // ── Weapon viewport resize ──
-    // Keep the weapon SubViewport size in sync with the window.
-    if (weapon_viewport) {
-        Vector2i win_size = DisplayServer::get_singleton()->window_get_size();
-        if (win_size.x > 0 && win_size.y > 0 && weapon_viewport->get_size() != win_size) {
-            weapon_viewport->set_size(win_size);
-        }
-    }
 }
 
 // ──────────────────────────────────────────────
@@ -968,18 +819,9 @@ void MoHAARunner::check_world_load() {
             GodotSkelModelCache::get().clear();  // Invalidate model cache
             skel_mesh_cache.clear();              // Phase 60: Clear skinned mesh cache
             tinted_mat_cache.clear();             // Phase 61: Clear tinted material cache
-            tiki_mat_cache.clear();               // Clear TIKI entity material cache
             shader_textures.clear();              // Shader handles are re-registered on next map
-            s_shader_texture_loaded_names.clear();  // Clear name tracking alongside texture cache
             animmap_info.clear();
             animmap_frames.clear();
-            s_surf_anim_cache.clear();
-            s_sprite_mat_cache.clear();
-            s_beam_mat_cache.clear();
-            s_poly_mat_cache.clear();
-            s_terrain_mark_mat_cache.clear();
-            s_sprite_tint_cache.clear();
-            s_beam_tint_cache.clear();
 #ifdef HAS_MESH_CACHE_MODULE
             Godot_MeshCache::get().clear();
             Godot_MaterialCache::get().clear();
@@ -987,16 +829,15 @@ void MoHAARunner::check_world_load() {
 #ifdef HAS_SHADER_MATERIAL_MODULE
             Godot_Shader_ClearCache();
 #endif
+#ifdef HAS_SPEAKER_ENTITIES_MODULE
+            Godot_Speakers_Shutdown();
+#endif
 #ifdef HAS_WEATHER_MODULE
             Godot_Weather_Shutdown();
-#endif
-#ifdef HAS_PBR_MODULE
-            Godot_PBR_Shutdown();
 #endif
             Godot_SoundOcclusion_SetEnabled(0);   // Disable occlusion when BSP unloaded
             pvs_current_cluster = -1;             // Reset PVS state
             pvs_log_count = 0;
-            Godot_VFX_Clear();  // Flush VFX caches — shader handles are invalidated by BeginRegistration
             UtilityFunctions::print("[MoHAA] BSP world unloaded.");
         }
         return;
@@ -1025,29 +866,9 @@ void MoHAARunner::check_world_load() {
     // handles in godot_renderer.c, so stale entries from menu/previous map
     // at the same handle numbers would return wrong textures.
     shader_textures.clear();
-    s_shader_texture_loaded_names.clear();
     animmap_info.clear();
     animmap_frames.clear();
     tinted_mat_cache.clear();
-    tiki_mat_cache.clear();               // Clear TIKI entity material cache
-    s_surf_anim_cache.clear();
-    s_sprite_mat_cache.clear();
-    s_beam_mat_cache.clear();
-    s_poly_mat_cache.clear();
-    s_terrain_mark_mat_cache.clear();
-    s_sprite_tint_cache.clear();
-    s_beam_tint_cache.clear();
-
-#ifdef HAS_PBR_MODULE
-    // Initialise PBR texture discovery BEFORE BSP loading so that
-    // surface materials can apply PBR textures during mesh creation.
-    Godot_PBR_Init();
-    if (Godot_PBR_IsEnabled()) {
-        UtilityFunctions::print(String("[PBR] PBR rendering enabled with ") +
-                                String::num_int64(Godot_PBR_GetCount()) +
-                                String(" texture sets."));
-    }
-#endif
 
     Node3D *map_node = Godot_BSP_LoadWorld(map_path);
     if (map_node) {
@@ -1074,101 +895,6 @@ void MoHAARunner::check_world_load() {
         Godot_SoundOcclusion_SetEnabled(1);
         UtilityFunctions::print("[MoHAA] Sound occlusion enabled.");
 
-#ifdef HAS_PBR_MODULE
-        // ── Next-gen rendering pipeline (requires PBR) ──
-        if (Godot_PBR_IsEnabled()) {
-            if (world_env && world_env->get_environment().is_valid()) {
-                Ref<Environment> env = world_env->get_environment();
-
-                // ── Tonemapping ──
-                // ACES filmic with neutral exposure — the baked lightmaps
-                // already contain correct lighting levels so we don't boost.
-                env->set_tonemapper(Environment::TONE_MAPPER_ACES);
-                env->set_tonemap_exposure(1.0);
-                env->set_tonemap_white(4.0);
-
-                // ── Ambient light ── (lightmap pass-through, set in setup)
-                // Keep ambient at 1.0 white — the lightmap detail-MUL texture
-                // IS the lighting.  Don't override to a lower value here.
-
-                // ── SSAO (Screen-Space Ambient Occlusion) ──
-                env->set_ssao_enabled(true);
-                env->set_ssao_radius(1.5);
-                env->set_ssao_intensity(2.0);
-
-                // ── SSR (Screen-Space Reflections) ──
-                // Adds real-time reflections on wet/polished surfaces
-                env->set_ssr_enabled(true);
-                env->set_ssr_max_steps(64);
-                env->set_ssr_fade_in(0.15);
-                env->set_ssr_fade_out(2.0);
-                env->set_ssr_depth_tolerance(0.2);
-
-                // ── Bloom / Glow ──
-                // Cinematic glow on bright lights, explosions, fire
-                env->set_glow_enabled(true);
-                env->set_glow_intensity(0.8);
-                env->set_glow_strength(1.2);
-                env->set_glow_bloom(0.1);
-                env->set_glow_blend_mode(Environment::GLOW_BLEND_MODE_SOFTLIGHT);
-                env->set_glow_hdr_bleed_threshold(1.0);
-                env->set_glow_hdr_bleed_scale(2.0);
-                env->set_glow_hdr_luminance_cap(12.0);
-                // Multi-level glow pyramid for natural falloff
-                env->set_glow_level(0, 0.0);  // skip finest level
-                env->set_glow_level(1, 0.4);
-                env->set_glow_level(2, 0.7);
-                env->set_glow_level(3, 1.0);
-                env->set_glow_level(4, 0.6);
-                env->set_glow_level(5, 0.3);
-                env->set_glow_level(6, 0.1);
-
-                // ── Volumetric Fog ──
-                // Atmospheric depth, god rays from windows and lights
-                env->set_volumetric_fog_enabled(true);
-                env->set_volumetric_fog_density(0.01);
-                env->set_volumetric_fog_albedo(Color(0.9, 0.9, 0.95));
-                env->set_volumetric_fog_emission(Color(0.0, 0.0, 0.0));
-                env->set_volumetric_fog_emission_energy(0.0);
-                env->set_volumetric_fog_anisotropy(0.6);
-                env->set_volumetric_fog_length(100.0);
-                env->set_volumetric_fog_detail_spread(2.0);
-                env->set_volumetric_fog_gi_inject(1.0);
-                env->set_volumetric_fog_ambient_inject(0.0);
-                env->set_volumetric_fog_sky_affect(0.5);
-                env->set_volumetric_fog_temporal_reprojection_enabled(true);
-                env->set_volumetric_fog_temporal_reprojection_amount(0.9);
-
-                // ── Depth fog (exponential distance fog fallback) ──
-                env->set_fog_enabled(true);
-                env->set_fog_light_color(Color(0.7, 0.75, 0.85));
-                env->set_fog_light_energy(0.5);
-                env->set_fog_sun_scatter(0.3);
-                env->set_fog_density(0.001);
-                env->set_fog_aerial_perspective(0.5);
-                env->set_fog_sky_affect(0.3);
-
-                // ── Colour grading ──
-                // Subtle: contrast for depth, slight desaturation for WW2 feel
-                env->set_adjustment_enabled(true);
-                env->set_adjustment_brightness(1.0);
-                env->set_adjustment_contrast(1.05);
-                env->set_adjustment_saturation(0.9);
-
-                UtilityFunctions::print("[PBR] Next-gen environment: ACES, SSR, bloom, volumetric fog, SSAO, colour grading.");
-            }
-
-            // Sun / directional light removed — OpenMOHAA uses baked lighting only.
-
-            // ── Anti-aliasing ── MSAA 4x for geometry edges
-            Viewport *vp = get_viewport();
-            if (vp) {
-                vp->set_msaa_3d(Viewport::MSAA_4X);
-                vp->set_screen_space_aa(Viewport::SCREEN_SPACE_AA_FXAA);
-            }
-        }
-#endif
-
     } else {
         UtilityFunctions::printerr("[MoHAA] Failed to load BSP world.");
     }
@@ -1182,6 +908,11 @@ void MoHAARunner::update_pvs_visibility() {
     int num_clusters = Godot_BSP_GetPVSNumClusters();
     if (num_clusters <= 0) return;
 
+    // [PVS-DIAG] Temporarily disable PVS culling to test if black areas are caused by
+    // clusters being wrongly hidden.  All clusters stay visible.
+    // TODO: Remove this after confirming PVS is the issue.
+    return;
+
     // Get camera position in id Tech 3 coordinates (already read by update_camera)
     float origin[3];
     Godot_Renderer_GetViewOrigin(origin);
@@ -1192,15 +923,6 @@ void MoHAARunner::update_pvs_visibility() {
     if (new_cluster == pvs_current_cluster) return;
     pvs_current_cluster = new_cluster;
 
-    // Camera position in Godot coordinates for distance checks
-    Vector3 cam_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
-
-    // Distance threshold: always show clusters within this radius of the camera
-    // regardless of PVS, to compensate for incomplete BSP vis data and cluster
-    // boundary edge cases.  1024 id units ~ 26 metres ~ a couple of rooms.
-    static constexpr float PVS_FORCE_VISIBLE_DISTANCE = 1024.0f * MOHAA_UNIT_SCALE;
-    static constexpr float PVS_FORCE_VISIBLE_DIST_SQ = PVS_FORCE_VISIBLE_DISTANCE * PVS_FORCE_VISIBLE_DISTANCE;
-
     // If camera is outside the world (cluster -1), show everything
     if (new_cluster < 0) {
         for (int c = 0; c < num_clusters; c++) {
@@ -1210,32 +932,14 @@ void MoHAARunner::update_pvs_visibility() {
         return;
     }
 
-    // Toggle per-cluster visibility based on PVS + distance override
+    // Toggle per-cluster visibility based on PVS
     int visible_count = 0;
     int hidden_count = 0;
-    int forced_count = 0;
     for (int c = 0; c < num_clusters; c++) {
         MeshInstance3D *mi = Godot_BSP_GetClusterMesh(c);
         if (!mi) continue;
 
         bool vis = (Godot_BSP_ClusterVisible(new_cluster, c) != 0);
-
-        // Distance override: force-show clusters whose AABB is near the camera.
-        // This prevents blue gaps from incomplete PVS data at cluster boundaries.
-        if (!vis) {
-            AABB aabb = mi->get_global_transform().xform(mi->get_aabb());
-            // Closest point on AABB to camera
-            Vector3 closest;
-            closest.x = CLAMP(cam_pos.x, aabb.position.x, aabb.position.x + aabb.size.x);
-            closest.y = CLAMP(cam_pos.y, aabb.position.y, aabb.position.y + aabb.size.y);
-            closest.z = CLAMP(cam_pos.z, aabb.position.z, aabb.position.z + aabb.size.z);
-            float dist_sq = (cam_pos - closest).length_squared();
-            if (dist_sq < PVS_FORCE_VISIBLE_DIST_SQ) {
-                vis = true;
-                forced_count++;
-            }
-        }
-
         mi->set_visible(vis);
         if (vis) visible_count++;
         else     hidden_count++;
@@ -1245,8 +949,7 @@ void MoHAARunner::update_pvs_visibility() {
         UtilityFunctions::print(String("[PVS] Cluster ") +
                                 String::num_int64(new_cluster) +
                                 ": " + String::num_int64(visible_count) +
-                                " visible (" + String::num_int64(forced_count) +
-                                " forced), " + String::num_int64(hidden_count) +
+                                " visible, " + String::num_int64(hidden_count) +
                                 " hidden of " + String::num_int64(num_clusters) +
                                 " total.");
         pvs_log_count++;
@@ -1266,9 +969,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
     if (!shader_name || !shader_name[0]) return;
 
     const GodotShaderProps *sp = Godot_ShaderProps_Find(shader_name);
-    if (!sp) {
-        return;
-    }
+    if (!sp) return;
 
     switch (sp->transparency) {
         case SHADER_ALPHA_TEST:
@@ -1283,14 +984,6 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
             mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
             break;
         case SHADER_MULTIPLICATIVE:
-            mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-            mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
-            break;
-        case SHADER_MULTIPLICATIVE_INV:
-            // dst*(1-src) can't be expressed exactly in StandardMaterial3D.
-            // BLEND_MODE_MUL (dst*src) is the closest approximation — at least
-            // darkens instead of rendering a solid grey quad.  Callers that need
-            // exact inv-mul (polys, terrain marks) use a custom ShaderMaterial.
             mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
             mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
             break;
@@ -1376,15 +1069,6 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
             break;  // only check the first non-lightmap stage
         }
     }
-
-#ifdef HAS_PBR_MODULE
-    // PBR texture enhancement: if HD PBR textures exist for this shader,
-    // apply normal map, roughness map, and switch to lit rendering.
-    // This is the core of the modern graphics upgrade path.
-    if (Godot_PBR_IsEnabled() && shader_name) {
-        Godot_PBR_ApplyToMaterial(mat, shader_name);
-    }
-#endif
 }
 
 /// id Tech 3 AngleVectorsLeft — computes forward/left/up vectors from
@@ -1483,7 +1167,6 @@ void MoHAARunner::load_static_models() {
         MeshInstance3D *mi = memnew(MeshInstance3D);
         mi->set_name(String("SM_") + String::num_int64(i));
         mi->set_mesh(cached->mesh);
-        mi->set_extra_cull_margin(4.0f);
 
         // Apply shader textures to each surface.
         // Mirrors R_InitStaticModels: register each surface shader via
@@ -1497,13 +1180,10 @@ void MoHAARunner::load_static_models() {
             // only if the shader says "cull none".
             mat->set_cull_mode(BaseMaterial3D::CULL_BACK);
 
-            /* Static models: PER_PIXEL so they cast and receive dynamic
-             * shadows from the directional light.  The sun's low energy
-             * prevents double-lighting while ambient=1.0 preserves the
-             * original brightness. */
+            /* Static models use lightgrid (CGEN_LIGHTING_GRID) in the
+             * real renderer, not dynamic lights.  Set UNSHADED to prevent
+             * Godot's sun + ambient from double-lighting them. */
             mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-            mat->set_specular(0.2f);
-            mat->set_roughness(0.9f);
 
             const String &shader_name = cached->surfaces[s].shader_name;
             bool found_tex = false;
@@ -1749,16 +1429,64 @@ static float eval_wave(MohaaWaveFunc func, float base, float amp,
 //  Entity rendering (Phase 7e)
 // ──────────────────────────────────────────────
 
-// Entity type constants matching refEntityType_t (tr_types.h)
-// RT_MODEL=0, RT_POLY=1, RT_SPRITE=2, RT_BEAM=3
+// Entity type constants matching refEntityType_t
 static constexpr int RT_MODEL   = 0;
-static constexpr int RT_SPRITE  = 2;
-static constexpr int RT_BEAM    = 3;
+static constexpr int RT_SPRITE  = 3;
+static constexpr int RT_BEAM    = 4;
 
 void MoHAARunner::update_entities() {
     if (!game_world) return;
 
     int ent_count = Godot_Renderer_GetEntityCount();
+
+    // Log entity breakdown once when first entities appear
+    static bool logged_entity_count = false;
+    if (!logged_entity_count && ent_count > 0) {
+        int n_brush = 0, n_tiki = 0, n_sprite = 0, n_beam = 0, n_other = 0;
+        for (int ei = 0; ei < ent_count; ei++) {
+            float eo[3], ea[9], es = 1.0f;
+            int eh = 0, en = 0, erf = 0;
+            unsigned char ec[4] = {255,255,255,255};
+            int et = Godot_Renderer_GetEntity(ei, eo, ea, &es, &eh, &en, ec, &erf);
+            if (et == RT_MODEL && eh > 0) {
+                int mt = Godot_Model_GetType(eh);
+                if (mt == 1) n_brush++;
+                else n_tiki++;
+            } else if (et == RT_SPRITE) n_sprite++;
+            else if (et == RT_BEAM) n_beam++;
+            else n_other++;
+        }
+        UtilityFunctions::print(String("[MoHAA] Entity breakdown: ") +
+            String::num_int64(ent_count) + " total = " +
+            String::num_int64(n_brush) + " brush + " +
+            String::num_int64(n_tiki) + " tiki + " +
+            String::num_int64(n_sprite) + " sprite + " +
+            String::num_int64(n_beam) + " beam + " +
+            String::num_int64(n_other) + " other");
+
+        // Log first 10 brush model entities with their positions
+        if (n_brush > 0) {
+            int logged = 0;
+            for (int ei = 0; ei < ent_count && logged < 10; ei++) {
+                float eo[3], ea[9], es = 1.0f;
+                int eh = 0, en = 0, erf = 0;
+                unsigned char ec[4] = {255,255,255,255};
+                int et = Godot_Renderer_GetEntity(ei, eo, ea, &es, &eh, &en, ec, &erf);
+                if (et == RT_MODEL && eh > 0) {
+                    int mt = Godot_Model_GetType(eh);
+                    if (mt == 1) {
+                        const char *mn = Godot_Model_GetName(eh);
+                        UtilityFunctions::print(String("[MoHAA]   Brush ent #") +
+                            String::num_int64(ei) + ": model=" + String(mn ? mn : "?") +
+                            " pos=(" + String::num(eo[0], 1) + ", " +
+                            String::num(eo[1], 1) + ", " + String::num(eo[2], 1) + ")");
+                        logged++;
+                    }
+                }
+            }
+        }
+        logged_entity_count = true;
+    }
 
     // Create entity container node on first use
     if (!entity_root) {
@@ -1772,7 +1500,6 @@ void MoHAARunner::update_entities() {
         MeshInstance3D *mi = memnew(MeshInstance3D);
         mi->set_name(String("Entity_") + String::num_int64((int64_t)entity_meshes.size()));
         mi->set_visible(false);
-        mi->set_extra_cull_margin(4.0f);
         entity_root->add_child(mi);
         entity_meshes.push_back(mi);
     }
@@ -1800,12 +1527,7 @@ void MoHAARunner::update_entities() {
         MeshInstance3D *mi = entity_meshes[i];
 
         // Skip non-renderable entities (portals, etc.)
-        // RT_SPRITE is handled by the VFX module (Godot_VFX_Update) when available
-#ifdef HAS_VFX_MODULE
-        if (reType != RT_MODEL && reType != RT_BEAM) {
-#else
         if (reType != RT_MODEL && reType != RT_SPRITE && reType != RT_BEAM) {
-#endif
             mi->set_visible(false);
             continue;
         }
@@ -1815,30 +1537,41 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // RF_THIRD_PERSON    (0x0002): local player body — not culled here (no mirrors in our renderer)
-        // RF_FIRST_PERSON   (0x0004): view weapon — route to weapon SubViewport
-        // RF_DEPTHHACK      (0x0008): view weapon depth hack — route to weapon SubViewport
-        // RF_LIGHTING_ORIGIN (0x0080): use refEntity->lightingOrigin for light sampling (tr_types.h)
-        //   NOTE: RF_DONTDRAW (q_shared.h, (1<<7)=0x80) lives in entityState_t.renderfx, NOT
-        //   refEntity_t.renderfx.  The cgame filters RF_DONTDRAW entities before calling
-        //   R_AddRefEntityToScene, so they never reach this buffer.  Do NOT hide on bit 0x80.
+        // RF_THIRD_PERSON (1<<0 = 0x01): player body — not visible in first-person
+        // RF_FIRST_PERSON (1<<1 = 0x02): view weapon — only visible in first-person
+        // RF_DEPTHHACK     (1<<2 = 0x04): compress depth so weapon doesn't clip into walls
+        // RF_DONTDRAW      (1<<7 = 0x80): don't draw this entity
+        if (renderfx & 0x01) {  // RF_THIRD_PERSON — skip player body
+            mi->set_visible(false);
+            continue;
+        }
 
-        // NOTE: Entity PVS culling is intentionally NOT performed here.
-        // The original MOHAA renderer (tr_main.c::R_AddRefEntityToScene) does
-        // NOT PVS-cull entities — PVS is applied only to BSP cluster meshes
-        // via update_pvs_visibility().  The server already PVS-culls snapshots
-        // before sending them, so double-culling on the client incorrectly hides
-        // entities in multiplayer (players at spawn points that are in different
-        // PVS leaves from the camera position).
+        // PVS culling: skip entities not visible from the camera's cluster.
+        // Skip first-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) — they
+        // are always visible as they're attached to the view weapon.
+        if (pvs_current_cluster >= 0 && !(renderfx & 0x06)) {
+            if (!Godot_BSP_InPVS(pvs_cam_origin, origin)) {
+                mi->set_visible(false);
+                continue;
+            }
+        }
 
-        // Phase 133: Draw distance culling — skip entities beyond the far-plane cull distance.
-        // First-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) are always visible.
-        // NOTE: Entity frustum culling is handled automatically by Godot's scene tree AABB
-        // culling per MeshInstance3D — no manual sphere test is needed or correct here.
-        // The original MOHAA renderer (tr_main.c) does NOT manually frustum-cull entities.
-#ifdef HAS_DRAW_DISTANCE_MODULE
-        if (!(renderfx & 0x0C)) {  // Skip for RF_FIRST_PERSON(0x04)|RF_DEPTHHACK(0x08)
+        // Phase 133: Frustum and draw distance culling — skip entities that
+        // are outside the camera frustum or beyond the far-plane cull distance.
+        // First-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) are always
+        // visible because they are the view weapon.
+#if defined(HAS_FRUSTUM_CULL_MODULE) || defined(HAS_DRAW_DISTANCE_MODULE)
+        if (!(renderfx & 0x06)) {
             Vector3 ent_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
+#ifdef HAS_FRUSTUM_CULL_MODULE
+            // Conservative bounding sphere (2 m radius ≈ 78 inches,
+            // covers most player-sized entities and props).
+            if (!Godot_FrustumCull_TestSphere(ent_pos, 2.0f)) {
+                mi->set_visible(false);
+                continue;
+            }
+#endif
+#ifdef HAS_DRAW_DISTANCE_MODULE
             float cull_dist = Godot_DrawDistance_GetCullDistance();
             if (cull_dist > 0.0f) {
                 Vector3 cam_pos = camera ? camera->get_global_position() : Vector3();
@@ -1847,73 +1580,42 @@ void MoHAARunner::update_entities() {
                     continue;
                 }
             }
+#endif
         }
 #endif
 
         // RT_SPRITE: billboard quad at entity origin (Phase 16)
-        // MOHAA .spr sprites are sized by image dimensions × scale, NOT by
-        // refEntity_t.radius (which is only used for frustum culling).
-        // See RB_DrawSprite in tr_sprite.c for the original sizing logic.
         if (reType == RT_SPRITE) {
             float radius = 0.0f, rotation = 0.0f;
             int customShader = 0;
             Godot_Renderer_GetEntitySprite(i, &radius, &rotation, &customShader);
 
-            // Use customShader if set, else extract the registered shader from the sprite model handle
-            int spriteShader = (customShader > 0) ? customShader : Godot_Model_GetSpriteShader(hModel);
-
-            // Compute sprite quad half-extents using the MOHAA sizing model:
-            //   halfW = (image_width  * 0.5) × entity.scale × shader.spritescale
-            //   halfH = (image_height * 0.5) × entity.scale × shader.spritescale
-            // All in engine inches, then converted to Godot metres.
-            float halfW = 0.0f, halfH = 0.0f;
-            float spriteW = 0.0f, spriteH = 0.0f, spriteScale = 1.0f;
-
-            if (hModel > 0 && Godot_Model_GetSpriteDims(hModel, &spriteW, &spriteH, &spriteScale)) {
-                // MOHAA .spr model: size from image dimensions
-                float combinedScale = (scale > 0.001f ? scale : 1.0f) * spriteScale;
-                halfW = (spriteW * 0.5f) * combinedScale * MOHAA_UNIT_SCALE;
-                halfH = (spriteH * 0.5f) * combinedScale * MOHAA_UNIT_SCALE;
-            } else if (radius > 0.001f) {
-                // Q3-style RT_SPRITE fallback: radius IS the half-extent
-                halfW = halfH = radius * MOHAA_UNIT_SCALE;
-            } else {
-                // No model, no radius — skip
+            if (radius < 0.001f) {
                 mi->set_visible(false);
                 continue;
             }
 
-            if (halfW < 0.001f || halfH < 0.001f) {
-                mi->set_visible(false);
-                continue;
-            }
+            // Use customShader if set, else hModel as shader handle
+            int spriteShader = (customShader > 0) ? customShader : hModel;
+
+            float half = radius * MOHAA_UNIT_SCALE;
 
             // Build a simple quad (2 triangles) — billboard handled by material
             PackedVector3Array gPos;
             PackedVector2Array gUV;
-            PackedColorArray   gCol;
             PackedInt32Array   gIdx;
             gPos.resize(4);
             gUV.resize(4);
-            gCol.resize(4);
             gIdx.resize(6);
 
-            gPos.set(0, Vector3(-halfW, -halfH, 0.0f));
-            gPos.set(1, Vector3( halfW, -halfH, 0.0f));
-            gPos.set(2, Vector3( halfW,  halfH, 0.0f));
-            gPos.set(3, Vector3(-halfW,  halfH, 0.0f));
+            gPos.set(0, Vector3(-half, -half, 0.0f));
+            gPos.set(1, Vector3( half, -half, 0.0f));
+            gPos.set(2, Vector3( half,  half, 0.0f));
+            gPos.set(3, Vector3(-half,  half, 0.0f));
             gUV.set(0, Vector2(0, 1));
             gUV.set(1, Vector2(1, 1));
             gUV.set(2, Vector2(1, 0));
             gUV.set(3, Vector2(0, 0));
-
-            Color entCol(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                         rgba[2] / 255.0f, rgba[3] / 255.0f);
-            gCol.set(0, entCol);
-            gCol.set(1, entCol);
-            gCol.set(2, entCol);
-            gCol.set(3, entCol);
-
             gIdx.set(0, 0); gIdx.set(1, 1); gIdx.set(2, 2);
             gIdx.set(3, 0); gIdx.set(4, 2); gIdx.set(5, 3);
 
@@ -1921,7 +1623,6 @@ void MoHAARunner::update_entities() {
             arrays.resize(Mesh::ARRAY_MAX);
             arrays[Mesh::ARRAY_VERTEX] = gPos;
             arrays[Mesh::ARRAY_TEX_UV] = gUV;
-            arrays[Mesh::ARRAY_COLOR]  = gCol;
             arrays[Mesh::ARRAY_INDEX]  = gIdx;
 
             Ref<ArrayMesh> smesh;
@@ -1929,132 +1630,30 @@ void MoHAARunner::update_entities() {
             smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
             mi->set_mesh(smesh);
 
-            // Cached billboard material per shader handle — avoids creating
-            // a new StandardMaterial3D + shader props lookup every frame.
-            auto sp_it = s_sprite_mat_cache.find(spriteShader);
-            if (sp_it == s_sprite_mat_cache.end()) {
-                Ref<StandardMaterial3D> smat;
-                smat.instantiate();
-                smat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
-                smat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                smat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                smat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-                smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+            // Billboard material: faces camera, alpha-blended, unshaded
+            Ref<StandardMaterial3D> smat;
+            smat.instantiate();
+            smat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+            smat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+            smat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+            smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+            smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+            smat->set_albedo(Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
+                                   rgba[2] / 255.0f, rgba[3] / 255.0f));
 
-                bool shader_props_found = false;
-                if (spriteShader > 0) {
-                    const char *sn = Godot_Renderer_GetShaderName(spriteShader);
-                    if (sn && sn[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sn);
-                        if (sp) {
-                            shader_props_found = true;
-                            apply_shader_props_to_material(smat, sn);
-
-                            // Re-enforce sprite-specific settings that
-                            // apply_shader_props_to_material may override:
-                            // - cull: shader default SHADER_CULL_BACK → CULL_BACK,
-                            //   but billboard sprites must show both sides.
-                            // - billboard: must stay BILLBOARD_ENABLED.
-                            // - depth: sprites should not write depth.
-                            // - shading: sprites are fullbright/unshaded.
-                            smat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
-                            smat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                            smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                            smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
-
-                            // If the shader was classified as OPAQUE (no blendFunc
-                            // on first non-lightmap stage, or stage parse missed it),
-                            // sprites still need transparency.  tr_sprite.c always
-                            // uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA — standard
-                            // alpha blend — so we never use BLEND_MODE_ADD here.
-                            if (sp->transparency == SHADER_OPAQUE) {
-                                Ref<ImageTexture> tex = get_shader_texture(spriteShader);
-                                if (tex.is_valid()) {
-                                    smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // When no .shader definition is found, load the texture.
-                // tr_sprite.c always uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA
-                // for all sprites regardless of alpha channel content, so we
-                // always use standard alpha blend (BLEND_MODE_MIX).
-                if (!shader_props_found && spriteShader > 0) {
-                    Ref<ImageTexture> tex = get_shader_texture(spriteShader);
-                    if (tex.is_valid()) {
-                        smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                }
-                
-                static std::unordered_set<int> logged_active_sprites;
-                if (logged_active_sprites.find(spriteShader) == logged_active_sprites.end()) {
-                    const char *sn = (spriteShader > 0) ? Godot_Renderer_GetShaderName(spriteShader) : "(none)";
-                    const GodotShaderProps *sp_diag = (sn && sn[0]) ? Godot_ShaderProps_Find(sn) : nullptr;
-                    auto ha_it = shader_texture_has_alpha.find(spriteShader);
-                    bool tex_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
-                    const char *transp_names[] = {"OPAQUE","ALPHA_TEST","ALPHA_BLEND","ADDITIVE","MULTIPLICATIVE","MULT_INV","ALPHA_INV"};
-                    const char *blend_names[] = {"MIX","ADD","SUB","MUL"};
-                    int tn = sp_diag ? sp_diag->transparency : -1;
-                    int bn = (int)smat->get_blend_mode();
-                    UtilityFunctions::print(String("[MoHAA][SPRITE-MAT] shader=#") + String::num_int64(spriteShader) +
-                        String(" name='") + String(sn ? sn : "(null)") + String("'") +
-                        String(" props=") + String(sp_diag ? "YES" : "NO") +
-                        String(" shader_transp=") + String(tn >= 0 && tn < 7 ? transp_names[tn] : "?") +
-                        String(" godot_blend=") + String(bn >= 0 && bn < 4 ? blend_names[bn] : "?") +
-                        String(" tex_alpha=") + String(tex_alpha ? "yes" : "no"));
-                    logged_active_sprites.insert(spriteShader);
-                }
-                
-                s_sprite_mat_cache[spriteShader] = smat;
-                sp_it = s_sprite_mat_cache.find(spriteShader);
-            }
-
-            // Apply texture per-frame to support RemapShader and animMap
             if (spriteShader > 0) {
                 Ref<ImageTexture> tex = get_shader_texture(spriteShader);
                 if (tex.is_valid()) {
-                    sp_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                } else {
-                    static std::unordered_set<int> logged_missing_sprites;
-                    if (logged_missing_sprites.find(spriteShader) == logged_missing_sprites.end()) {
-                        const char *sn = Godot_Renderer_GetShaderName(spriteShader);
-                        UtilityFunctions::print(String("[MoHAA][SPRITE-TEX-MISS] Sprite shader missing texture! Name: ") + String(sn ? sn : ""));
-                        logged_missing_sprites.insert(spriteShader);
-                    }
+                    smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                }
+                // Apply shader properties (additive blending for muzzle flash, etc.)
+                const char *sn = Godot_Renderer_GetShaderName(spriteShader);
+                if (sn && sn[0]) {
+                    apply_shader_props_to_material(smat, sn);
                 }
             }
 
-            // Use tint cache to avoid duplicate() per sprite per frame.
-            // If RGBA is white (255,255,255,255), reuse the template directly.
-            if (rgba[0] == 255 && rgba[1] == 255 && rgba[2] == 255 && rgba[3] == 255) {
-                mi->set_surface_override_material(0, sp_it->second);
-            } else {
-                // Quantise RGBA to 4-bit per channel for cache key
-                uint16_t rq = (uint16_t)(rgba[0] >> 4);
-                uint16_t gq = (uint16_t)(rgba[1] >> 4);
-                uint16_t bq = (uint16_t)(rgba[2] >> 4);
-                uint16_t aq = (uint16_t)(rgba[3] >> 4);
-                uint64_t tint_key = ((uint64_t)spriteShader << 16) |
-                    ((uint64_t)rq << 12) | ((uint64_t)gq << 8) |
-                    ((uint64_t)bq << 4) | (uint64_t)aq;
-                auto stc_it = s_sprite_tint_cache.find(tint_key);
-                if (stc_it != s_sprite_tint_cache.end()) {
-                    if (spriteShader > 0) {
-                        Ref<ImageTexture> tex = get_shader_texture(spriteShader);
-                        if (tex.is_valid()) stc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                    mi->set_surface_override_material(0, stc_it->second);
-                } else {
-                    Ref<StandardMaterial3D> inst_mat = sp_it->second->duplicate();
-                    inst_mat->set_albedo(Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                                               rgba[2] / 255.0f, rgba[3] / 255.0f));
-                    s_sprite_tint_cache[tint_key] = inst_mat;
-                    mi->set_surface_override_material(0, inst_mat);
-                }
-            }
+            mi->set_surface_override_material(0, smat);
 
             // Position sprite at entity origin
             Vector3 pos = id_to_godot_position(origin[0], origin[1], origin[2]);
@@ -2119,106 +1718,49 @@ void MoHAARunner::update_entities() {
             bmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
             mi->set_mesh(bmesh);
 
-            // Cached beam material per shader handle — avoids creating
-            // a new StandardMaterial3D + texture load + shader props lookup every frame.
+            // Beam material: alpha-blended, unshaded, double-sided
+            Ref<StandardMaterial3D> bmat;
+            bmat.instantiate();
+            bmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+            bmat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+            bmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+            bmat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+            bmat->set_albedo(Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
+                                   rgba[2] / 255.0f, rgba[3] / 255.0f));
+
+            // Try to apply beam shader texture and properties
             int customShader = 0;
             Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &customShader);
             int beamShader = (customShader > 0) ? customShader : hModel;
-
-            auto bm_it = s_beam_mat_cache.find(beamShader);
-            if (bm_it == s_beam_mat_cache.end()) {
-                Ref<StandardMaterial3D> bmat;
-                bmat.instantiate();
-                bmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                bmat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                bmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                bmat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
-
-                bool beam_props_found = false;
-                if (beamShader > 0) {
-                    const char *sn = Godot_Renderer_GetShaderName(beamShader);
-                    if (sn && sn[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sn);
-                        if (sp) {
-                            beam_props_found = true;
-                        }
-                        apply_shader_props_to_material(bmat, sn);
-                    }
-                }
-
-                // Beams without shader definitions: check texture alpha
-                // for additive blend fallback (same logic as sprites).
-                if (!beam_props_found && beamShader > 0) {
-                    Ref<ImageTexture> tex = get_shader_texture(beamShader);
-                    if (tex.is_valid()) {
-                        bmat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                    auto ha_it = shader_texture_has_alpha.find(beamShader);
-                    bool tex_has_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
-                    if (!tex_has_alpha) {
-                        bmat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                    }
-                }
-                s_beam_mat_cache[beamShader] = bmat;
-                bm_it = s_beam_mat_cache.find(beamShader);
-            }
-
-            // Apply texture per-frame to support RemapShader and animMap
             if (beamShader > 0) {
                 Ref<ImageTexture> tex = get_shader_texture(beamShader);
                 if (tex.is_valid()) {
-                    bm_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    bmat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                }
+                const char *sn = Godot_Renderer_GetShaderName(beamShader);
+                if (sn && sn[0]) {
+                    apply_shader_props_to_material(bmat, sn);
                 }
             }
 
-            // Use tint cache to avoid duplicate() per beam per frame.
-            if (rgba[0] == 255 && rgba[1] == 255 && rgba[2] == 255 && rgba[3] == 255) {
-                mi->set_surface_override_material(0, bm_it->second);
-            } else {
-                uint16_t rq = (uint16_t)(rgba[0] >> 4);
-                uint16_t gq = (uint16_t)(rgba[1] >> 4);
-                uint16_t bq = (uint16_t)(rgba[2] >> 4);
-                uint16_t aq = (uint16_t)(rgba[3] >> 4);
-                uint64_t tint_key = ((uint64_t)beamShader << 16) |
-                    ((uint64_t)rq << 12) | ((uint64_t)gq << 8) |
-                    ((uint64_t)bq << 4) | (uint64_t)aq;
-                auto btc_it = s_beam_tint_cache.find(tint_key);
-                if (btc_it != s_beam_tint_cache.end()) {
-                    if (beamShader > 0) {
-                        Ref<ImageTexture> tex = get_shader_texture(beamShader);
-                        if (tex.is_valid()) btc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                    mi->set_surface_override_material(0, btc_it->second);
-                } else {
-                    Ref<StandardMaterial3D> inst_bmat = bm_it->second->duplicate();
-                    inst_bmat->set_albedo(Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                                                rgba[2] / 255.0f, rgba[3] / 255.0f));
-                    s_beam_tint_cache[tint_key] = inst_bmat;
-                    mi->set_surface_override_material(0, inst_bmat);
-                }
-            }
+            mi->set_surface_override_material(0, bmat);
             // Beam vertices are already in world space — use identity transform
             mi->set_global_transform(Transform3D());
             mi->set_visible(true);
             continue;
         }
 
-        bool is_first_person = (renderfx & 0x04) != 0;  // RF_FIRST_PERSON
-        bool is_depthhack    = (renderfx & 0x08) != 0;  // RF_DEPTHHACK
+        // 
+        if (renderfx & 0x80) {  // RF_DONTDRAW
+            mi->set_visible(false);
+            continue;
+        }
+
+        bool is_first_person = (renderfx & 0x02) != 0;  // RF_FIRST_PERSON
+        bool is_depthhack    = (renderfx & 0x04) != 0;  // RF_DEPTHHACK
 
         EntityCacheKey key { hModel, reType, 0, renderfx };
         bool same_key = (i < (int)entity_cache_keys.size() && entity_cache_keys[i] == key);
-
-        // When this entity slot changes model/type, clear stale surface
-        // override materials.  Otherwise a TIKI model's overrides persist
-        // when the slot is reused for a brush entity (or vice versa),
-        // causing wrong textures / flickering.
-        if (!same_key && mi->get_mesh().is_valid()) {
-            int prev_sc = mi->get_mesh()->get_surface_count();
-            for (int s = 0; s < prev_sc; s++) {
-                mi->set_surface_override_material(s, Ref<Material>());
-            }
-        }
 
         // Try to get the actual skeletal model mesh from cache
         int modType = Godot_Model_GetType(hModel);
@@ -2255,59 +1797,40 @@ void MoHAARunner::update_entities() {
             const GodotSkelModelCache::CachedModel *cached =
                 GodotSkelModelCache::get().get_model(hModel);
 
-            // ── Build / cache materials for this model (one-time per skinNum) ──
-            // Materials are built from the cached model's surface shader names.
-            // If the cache has no model, build materials from TIKI data directly.
-            // Cache key = hModel | (skinNum << 20) to match tr_model.cpp's
-            // hShader[skinNum + (bsurf & 3)] skin-variant selection logic.
-            unsigned char ent_surfaces[32] = {};
-            int ent_skinNum = 0;
-            Godot_Renderer_GetEntitySurfaces(i, ent_surfaces, &ent_skinNum);
-            int mat_key = hModel | (ent_skinNum << 20);
+            // ── Build / cache materials for this model (one-time) ──
+            // Materials are built from the cached model's surface shader
+            // names.  If the cache has no model, build materials from the
+            // TIKI data directly via the accessor layer.
+            static std::unordered_map<int, std::vector<Ref<StandardMaterial3D>>> mat_cache;
+            if (!same_key && mat_cache.find(hModel) == mat_cache.end()) {
+                auto &mats = mat_cache[hModel];
 
-            auto &mat_cache = tiki_mat_cache;
-            if (mat_cache.find(mat_key) == mat_cache.end()) {
-                auto &entry = mat_cache[mat_key];
-                auto &mats = entry.mats;
-                auto &flat_indices = entry.flat_surf_idx;
-
-                // Enumerate surfaces from TIKI with skinNum-aware shader selection.
-                // Mirrors tr_model.cpp::R_AddSkelSurfaces: shader slot = skinNum + (bsurf & 3).
-                // flat_indices tracks the raw TIKI surface index per godot surface so that
-                // per-entity surface hide flags (MDL_SURFACE_NODRAW bit 2) can be applied.
+                // Determine surface count and shader names from cache or TIKI
                 int surf_total = 0;
                 std::vector<String> surf_shader_names;
 
-                {
+                if (cached && cached->mesh.is_valid()) {
+                    surf_total = (int)cached->surfaces.size();
+                    for (int s = 0; s < surf_total; s++) {
+                        surf_shader_names.push_back(cached->surfaces[s].shader_name);
+                    }
+                } else {
+                    // No cached model — read surface info directly from TIKI
                     void *tiki_for_mats = Godot_Model_GetTikiPtr(hModel);
                     if (tiki_for_mats) {
                         int meshCount = Godot_Skel_GetMeshCount(tiki_for_mats);
-                        int flat_idx = 0;
                         for (int m = 0; m < meshCount; m++) {
                             int sc = Godot_Skel_GetSurfaceCount(tiki_for_mats, m);
-                            for (int s = 0; s < sc; s++, flat_idx++) {
+                            for (int s = 0; s < sc; s++) {
                                 int nv = 0, nt = 0;
-                                char sh[64] = {0};
+                                char sn[64] = {0}, sh[64] = {0};
                                 Godot_Skel_GetSurfaceInfo(tiki_for_mats, m, s,
-                                    &nv, &nt, nullptr, 0, nullptr, 0);
+                                    &nv, &nt, sn, sizeof(sn), sh, sizeof(sh));
                                 if (nv > 0 && nt > 0) {
-                                    // Resolve skin slot: skinNum + per-surface variant bits (0-3)
-                                    int bsurf_bits = (flat_idx < 32) ? (ent_surfaces[flat_idx] & 3) : 0;
-                                    int iShaderNum = ent_skinNum + bsurf_bits;
-                                    Godot_Skel_GetSurfaceShaderForSkin(tiki_for_mats, m, s,
-                                        iShaderNum, sh, sizeof(sh));
                                     surf_shader_names.push_back(String(sh));
-                                    flat_indices.push_back(flat_idx);
                                     surf_total++;
                                 }
                             }
-                        }
-                    } else if (cached && cached->mesh.is_valid()) {
-                        // Fallback: TIKI ptr unavailable — use cached shader names (skin 0 only)
-                        surf_total = (int)cached->surfaces.size();
-                        for (int s = 0; s < surf_total; s++) {
-                            surf_shader_names.push_back(cached->surfaces[s].shader_name);
-                            flat_indices.push_back(s);
                         }
                     }
                 }
@@ -2316,17 +1839,8 @@ void MoHAARunner::update_entities() {
                     Ref<StandardMaterial3D> mat;
                     mat.instantiate();
                     mat->set_cull_mode(BaseMaterial3D::CULL_BACK);
-                    /* UNSHADED: OpenMOHAA lights entities via the baked Light Grid,
-                     * which is applied as an albedo color multiplier below.
-                     * No dynamic Godot lights exist, so PER_PIXEL would be black. */
                     mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
 
-#ifdef GODOT_DEBUG_WHITE_ENTITIES
-                    // DEBUG: Force all TIKI entity surfaces to opaque white so models
-                    // are visible regardless of texture/shader pipeline issues.
-                    mat->set_albedo(Color(1, 1, 1, 1));
-                    (void)surf_shader_names[s]; // suppress unused warning
-#else
                     const String &shader_name = surf_shader_names[s];
                     bool found_tex = false;
 
@@ -2344,19 +1858,12 @@ void MoHAARunner::update_entities() {
 
                     if (!found_tex) {
                         mat->set_albedo(Color(0.6, 0.6, 0.6, 1.0));
-                        static std::unordered_set<std::string> logged_missing_tiki_tex;
-                        if (!shader_name.is_empty() && logged_missing_tiki_tex.find(shader_name.ascii().get_data()) == logged_missing_tiki_tex.end()) {
-                            UtilityFunctions::print(String("[MoHAA][TIKI-TEX-MISS] TIKI surface missing texture! Shader: ") + shader_name);
-                            logged_missing_tiki_tex.insert(shader_name.ascii().get_data());
-                        }
                     }
 
                     if (!shader_name.is_empty()) {
                         CharString cs = shader_name.ascii();
                         apply_shader_props_to_material(mat, cs.get_data());
-                        mat->set_meta("shader_name", Variant(shader_name));
                     }
-#endif // GODOT_DEBUG_WHITE_ENTITIES
 
                     mats.push_back(mat);
                 }
@@ -2376,6 +1883,16 @@ void MoHAARunner::update_entities() {
                 &actionWeight, &entScale) != 0;
 
             Ref<ArrayMesh> skinned_mesh;
+
+            // One-time diagnostic: report first entity with anim data
+            static bool logged_anim_diag = false;
+            if (!logged_anim_diag && has_anim && tikiPtr) {
+                UtilityFunctions::print(
+                    String("[MoHAA] First entity with anim data: entNum=") +
+                    String::num_int64(entNum) +
+                    String(" hModel=") + String::num_int64(hModel));
+                logged_anim_diag = true;
+            }
 
             if (has_anim && tikiPtr) {
                 // Phase 60: Compute FNV-1a hash of animation state to
@@ -2477,11 +1994,11 @@ void MoHAARunner::update_entities() {
                                         texcoords[v*2+1]));
                                 }
 
-                                // Indices as-is — det(id_to_godot_point) = +1, winding preserved
+                                // Reverse winding (id CW → Godot CCW)
                                 for (int t = 0; t < numTris; t++) {
                                     gIdx.set(t*3+0, indices[t*3+0]);
-                                    gIdx.set(t*3+1, indices[t*3+1]);
-                                    gIdx.set(t*3+2, indices[t*3+2]);
+                                    gIdx.set(t*3+1, indices[t*3+2]);
+                                    gIdx.set(t*3+2, indices[t*3+1]);
                                 }
 
                                 Array arrays;
@@ -2513,7 +2030,7 @@ void MoHAARunner::update_entities() {
                 }  // end else (cache miss)
             }
 
-            // Use skinned mesh if available, else cached bind pose, else hide
+            // Use skinned mesh if available, else cached bind pose, else debug box
             bool mesh_changed = false;
             if (skinned_mesh.is_valid() &&
                 skinned_mesh->get_surface_count() > 0) {
@@ -2534,110 +2051,29 @@ void MoHAARunner::update_entities() {
                     mesh_changed = true;
                 }
             } else {
-                // No mesh available — parity with OpenMOHAA: do not render
-                {
-                    static std::unordered_map<int, int> s_no_mesh_log;
-                    if (s_no_mesh_log[hModel] < 3) {
-                        s_no_mesh_log[hModel]++;
-                        const char *nm = Godot_Model_GetName(hModel);
-                        void *tp = Godot_Model_GetTikiPtr(hModel);
-                        UtilityFunctions::print(
-                            String("[MoHAA][NO-MESH] hModel=") + String::num_int64(hModel) +
-                            " name=" + String(nm ? nm : "?") +
-                            " hasAnim=" + String(has_anim ? "Y" : "N") +
-                            " tikiPtr=" + String(tp ? "Y" : "N") +
-                            " modType=" + String::num_int64(modType) +
-                            " entNum=" + String::num_int64(entityNumber));
-                    }
-                }
-#ifdef GODOT_DEBUG_WHITE_ENTITIES
-                // DEBUG: show a tiny orange box at NO-MESH entity positions
-                // so we can see the entity is present even with no TIKI mesh.
-                {
-                    Ref<ArrayMesh> dbg_box;
-                    dbg_box.instantiate();
-                    float hs = 0.15f;  // half-size in metres
-                    PackedVector3Array bv;
-                    bv.resize(8);
-                    bv.set(0, Vector3(-hs,-hs,-hs)); bv.set(1, Vector3( hs,-hs,-hs));
-                    bv.set(2, Vector3(-hs, hs,-hs)); bv.set(3, Vector3( hs, hs,-hs));
-                    bv.set(4, Vector3(-hs,-hs, hs)); bv.set(5, Vector3( hs,-hs, hs));
-                    bv.set(6, Vector3(-hs, hs, hs)); bv.set(7, Vector3( hs, hs, hs));
-                    PackedInt32Array bi;
-                    bi.resize(36);
-                    int faces[36] = {0,1,3,0,3,2, 4,6,7,4,7,5,
-                                     0,4,5,0,5,1, 2,3,7,2,7,6,
-                                     0,2,6,0,6,4, 1,5,7,1,7,3};
-                    for (int bi2=0;bi2<36;bi2++) bi.set(bi2, faces[bi2]);
-                    Array barr; barr.resize(Mesh::ARRAY_MAX);
-                    barr[Mesh::ARRAY_VERTEX] = bv;
-                    barr[Mesh::ARRAY_INDEX]  = bi;
-                    dbg_box->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, barr);
-                    Ref<StandardMaterial3D> bmat; bmat.instantiate();
-                    bmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                    bmat->set_albedo(Color(1.0f, 0.4f, 0.0f, 1.0f));  // orange
-                    bmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                    dbg_box->surface_set_material(0, bmat);
-                    mi->set_mesh(dbg_box);
-                    // Don't continue — fall through to apply transform and set_visible(true)
+                // No mesh available — small debug placeholder
+                if (!mi->get_mesh().is_valid() || mi->get_mesh()->get_class() != "BoxMesh") {
+                    Ref<BoxMesh> box;
+                    box.instantiate();
+                    box->set_size(Vector3(0.3, 0.3, 0.3));
+                    mi->set_mesh(box);
+
+                    Ref<StandardMaterial3D> mat;
+                    mat.instantiate();
+                    mat->set_albedo(Color(1.0, 0.3, 0.1, 0.7));
+                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    mi->set_surface_override_material(0, mat);
                     mesh_changed = true;
                 }
-#else
-                mi->set_visible(false);
-                continue; // Skip material application and drawing
-#endif
             }
 
-            // Apply cached materials (after set_mesh which clears overrides).
-            // If customShader is set, it overrides all surface shaders
-            // (matches MOHAA renderer: refEntity_t.customShader in tr_local.h).
-            int entCustomShader = 0;
-            Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &entCustomShader);
-            if (entCustomShader > 0) {
-                auto cs_it = s_sprite_mat_cache.find(entCustomShader);
-                if (cs_it == s_sprite_mat_cache.end()) {
-                    Ref<StandardMaterial3D> csmat;
-                    csmat.instantiate();
-                    csmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                    csmat->set_cull_mode(BaseMaterial3D::CULL_BACK);
-                    Ref<ImageTexture> tex = get_shader_texture(entCustomShader);
-                    if (tex.is_valid()) {
-                        csmat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                    }
-                    const char *csn = Godot_Renderer_GetShaderName(entCustomShader);
-                    if (csn && csn[0]) {
-                        apply_shader_props_to_material(csmat, csn);
-                        csmat->set_meta("shader_name", Variant(String(csn)));
-                    }
-                    s_sprite_mat_cache[entCustomShader] = csmat;
-                    cs_it = s_sprite_mat_cache.find(entCustomShader);
-                }
-                int sc = mi->get_mesh().is_valid() ? mi->get_mesh()->get_surface_count() : 0;
-                for (int s = 0; s < sc; s++) {
-                    mi->set_surface_override_material(s, cs_it->second);
-                }
-            } else if (mesh_changed && mat_cache.find(mat_key) != mat_cache.end()) {
-                auto &entry = mat_cache[mat_key];
+            // Apply cached materials (after set_mesh which clears overrides)
+            if (mesh_changed && mat_cache.find(hModel) != mat_cache.end()) {
+                auto &mats = mat_cache[hModel];
                 int sc = mi->get_mesh().is_valid()
                        ? mi->get_mesh()->get_surface_count() : 0;
-                for (int s = 0; s < (int)entry.mats.size() && s < sc; s++) {
-                    mi->set_surface_override_material(s, entry.mats[s]);
-                }
-                // Apply MDL_SURFACE_NODRAW (TIKI_SURF_NODRAW = bit 2) per-entity hide flag.
-                // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
-                static Ref<StandardMaterial3D> s_nodraw_mat;
-                if (!s_nodraw_mat.is_valid()) {
-                    s_nodraw_mat.instantiate();
-                    s_nodraw_mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                    s_nodraw_mat->set_albedo(Color(0.0f, 0.0f, 0.0f, 0.0f));
-                    s_nodraw_mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                    s_nodraw_mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                }
-                for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
-                    int fi = entry.flat_surf_idx[s];
-                    if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
-                        mi->set_surface_override_material(s, s_nodraw_mat);
-                    }
+                for (int s = 0; s < (int)mats.size() && s < sc; s++) {
+                    mi->set_surface_override_material(s, mats[s]);
                 }
             }
         }  // end else (TIKI model)
@@ -2688,25 +2124,52 @@ void MoHAARunner::update_entities() {
         // weapon SubViewport so they render in a separate pass and
         // composite on top of the main scene (correct self-occlusion).
         if (is_first_person || is_depthhack) {
-            // Reparent FPS entities into the weapon SubViewport so they
-            // render with a separate depth buffer and composite on top.
-            if (weapon_root) {
-                Node *cur_parent = mi->get_parent();
-                if (cur_parent && cur_parent != weapon_root) {
-                    cur_parent->remove_child(mi);
-                    weapon_root->add_child(mi);
+#ifdef HAS_WEAPON_VIEWPORT_MODULE
+            Node3D *wp_root = Godot_WeaponViewport::get().get_weapon_root();
+            Node *cur_parent = mi->get_parent();
+            if (wp_root && cur_parent && cur_parent != wp_root) {
+                cur_parent->remove_child(mi);
+                wp_root->add_child(mi);
+            }
+#else
+            // Fallback when weapon viewport is unavailable: disable depth
+            // test so weapons render on top of world geometry.
+            Ref<Mesh> mesh = mi->get_mesh();
+            if (mesh.is_valid()) {
+                int sc = mesh->get_surface_count();
+                for (int s = 0; s < sc; s++) {
+                    Ref<Material> base_mat = mi->get_surface_override_material(s);
+                    if (base_mat.is_null())
+                        base_mat = mesh->surface_get_material(s);
+
+                    Ref<StandardMaterial3D> smat = base_mat;
+                    if (smat.is_valid()) {
+                        Ref<StandardMaterial3D> dup = smat->duplicate();
+                        dup->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, true);
+                        dup->set_render_priority(127);
+                        mi->set_surface_override_material(s, dup);
+                    }
                 }
+            }
+#endif
+            // One-time diagnostic
+            static bool logged_fp = false;
+            if (!logged_fp) {
+                UtilityFunctions::print(
+                    String("[MoHAA] First-person entity rendered: hModel=") +
+                    String::num_int64(hModel) +
+                    String(" renderfx=0x") + String::num_int64(renderfx, 16));
+                logged_fp = true;
             }
         } else {
+#ifdef HAS_WEAPON_VIEWPORT_MODULE
             // Non-weapon entity — ensure it is parented under entity_root
-            // (it may have been in weapon_root from a previous frame)
-            if (weapon_root) {
-                Node *cur_parent = mi->get_parent();
-                if (cur_parent && cur_parent != entity_root) {
-                    cur_parent->remove_child(mi);
-                    entity_root->add_child(mi);
-                }
+            Node *cur_parent = mi->get_parent();
+            if (cur_parent && cur_parent != entity_root) {
+                cur_parent->remove_child(mi);
+                entity_root->add_child(mi);
             }
+#endif
         }
 
         // ── Phase 21+22+268: Entity colour tinting + alpha + entity lighting ──
@@ -2717,18 +2180,12 @@ void MoHAARunner::update_entities() {
         {
             // Determine lighting sample position in id Tech 3 coordinates
             float light_pos[3] = { origin[0], origin[1], origin[2] };
-            // RF_LIGHTING_ORIGIN (0x0080 per tr_types.h): sample at lightingOrigin
+            // RF_LIGHTING_ORIGIN (0x0080): sample at lightingOrigin instead
             if (renderfx & 0x0080) {
                 Godot_Renderer_GetEntityLightingOrigin(i, light_pos);
             }
             float lr, lg, lb;
             Godot_EntityLight_Combined(light_pos, 4, &lr, &lg, &lb);
-            // Apply overbrightMult (1 << overbrightShift) = 2.0 on modern systems
-            // See RB_GetEntityGridLighting in tr_light.c
-            lr = lr * 2.0f; lg = lg * 2.0f; lb = lb * 2.0f;
-            // Hue-preserving clamp to 1.0 (mirrors identityLightByte clamp)
-            float maxc = lr; if (lg > maxc) maxc = lg; if (lb > maxc) maxc = lb;
-            if (maxc > 1.0f) { lr /= maxc; lg /= maxc; lb /= maxc; }
             light_mul = Color(lr, lg, lb, 1.0f);
         }
 #else
@@ -2739,17 +2196,10 @@ void MoHAARunner::update_entities() {
             float point[3] = { origin[0], origin[1], origin[2] };
             int lit = Godot_BSP_LightForPoint(point, ambient, directed, ldir);
             if (lit) {
-                // Combine ambient + directed (same as R_GetLightingGridValue)
-                float lr = clamp01(ambient[0] + directed[0] * 0.5f);
-                float lg = clamp01(ambient[1] + directed[1] * 0.5f);
-                float lb = clamp01(ambient[2] + directed[2] * 0.5f);
-                // Apply overbrightMult = 2.0 (overbrightShift=1 on modern systems)
-                // See RB_GetEntityGridLighting in tr_light.c
-                lr *= 2.0f; lg *= 2.0f; lb *= 2.0f;
-                // Hue-preserving clamp to 1.0
-                float maxc = lr; if (lg > maxc) maxc = lg; if (lb > maxc) maxc = lb;
-                if (maxc > 1.0f) { lr /= maxc; lg /= maxc; lb /= maxc; }
-                light_mul = Color(lr, lg, lb, 1.0f);
+                light_mul = Color(clamp01(ambient[0] + directed[0] * 0.5f),
+                                  clamp01(ambient[1] + directed[1] * 0.5f),
+                                  clamp01(ambient[2] + directed[2] * 0.5f),
+                                  1.0f);
             }
         }
 #endif
@@ -2917,7 +2367,6 @@ void MoHAARunner::update_entities() {
         }
 
         mi->set_visible(true);
-
         entity_cache_keys[i] = key;
     }
 
@@ -2930,16 +2379,42 @@ void MoHAARunner::update_entities() {
 
     active_entity_count = ent_count;
 
-    // ── Phase 35: Entity parenting — DISABLED ──
-    // CG_AttachEntity (in cgame) already computes world-space positions
-    // for child entities before submitting them via R_AddRefEntityToScene.
-    // The parentEntity field is metadata for lighting origin inheritance,
-    // NOT a rendering hierarchy directive.  Applying the parent transform
-    // here would double-offset child entities (weapons, attachments),
-    // causing them to appear at wildly wrong positions.
-    // See: cg_modelanim.c CG_AttachEntity → VectorMA for origin,
-    //      then cgi.R_AddRefEntityToScene(&model, parent) submits
-    //      the entity at its final world position.
+    // ── Phase 35: Entity parenting — apply parent transforms ──
+    // After all entities are positioned, composite children's transforms
+    // with their parent entity's world transform.
+    for (int i = 0; i < ent_count; i++) {
+        int parentIdx = Godot_Renderer_GetEntityParent(i);
+        if (parentIdx < 0 || parentIdx >= ent_count) continue;
+        // parentIdx is by entity number — find the matching entity in the list
+        // by searching for the entity whose entityNumber matches parentIdx
+        MeshInstance3D *child = entity_meshes[i];
+        if (!child->is_visible()) continue;
+
+        // The parentIdx from the renderer is the entity number, not the
+        // array index. Search for matching entity in the scene list.
+        MeshInstance3D *parent = nullptr;
+        for (int j = 0; j < ent_count; j++) {
+            if (j == i) continue;
+            float pOrig[3], pAxis[9], pScale;
+            int pModel, pEntNum, pRfx;
+            unsigned char pRgba[4];
+            Godot_Renderer_GetEntity(j, pOrig, pAxis, &pScale,
+                                     &pModel, &pEntNum, pRgba, &pRfx);
+            if (pEntNum == parentIdx) {
+                parent = entity_meshes[j];
+                break;
+            }
+        }
+
+        if (parent && parent->is_visible()) {
+            // Apply parent's world transform to child
+            Transform3D parent_xform = parent->get_global_transform();
+            Transform3D child_xform  = child->get_global_transform();
+            // Child's position is already in world space — make it relative
+            // to parent by compositing the transforms
+            child->set_global_transform(parent_xform * child_xform);
+        }
+    }
 }
 
 void MoHAARunner::update_dlights() {
@@ -3002,6 +2477,17 @@ void MoHAARunner::update_polys() {
 
     int poly_count = Godot_Renderer_GetPolyCount();
 
+    // Debug logging for poly activity (once per session + count changes)
+    static int last_logged_count = -1;
+    if (poly_count != last_logged_count) {
+        if (poly_count > 0) {
+            UtilityFunctions::print(String("[MoHAA] Poly count changed: ") +
+                                    String::num_int64(poly_count) +
+                                    " (particles/beams/decals active)");
+        }
+        last_logged_count = poly_count;
+    }
+
     if (poly_count == 0 && active_poly_count == 0) return;
 
     // Create poly container on first use
@@ -3022,15 +2508,13 @@ void MoHAARunner::update_polys() {
 
     for (int i = 0; i < poly_count; i++) {
         int hShader = 0;
-        // Mark fragments from BSP clipping can produce up to 8 verts
-        // (MAX_VERTS_ON_POLY in cg_local.h)
-        float positions[8 * 3];
-        float texcoords[8 * 2];
-        unsigned char colors[8 * 4];
+        float positions[4 * 3];    // max 4 verts (quads)
+        float texcoords[4 * 2];
+        unsigned char colors[4 * 4];
 
         int numVerts = Godot_Renderer_GetPoly(i, &hShader,
                                                positions, texcoords,
-                                               colors, 8);
+                                               colors, 4);
 
         MeshInstance3D *mi = poly_meshes[i];
 
@@ -3039,7 +2523,8 @@ void MoHAARunner::update_polys() {
             continue;
         }
 
-        if (numVerts > 8) numVerts = 8;
+        // Clamp to 4 max (quads is the common case)
+        if (numVerts > 4) numVerts = 4;
 
         // Build an ArrayMesh triangle fan from the poly vertices
         PackedVector3Array gPos;
@@ -3059,22 +2544,6 @@ void MoHAARunner::update_polys() {
                               colors[v*4+1] / 255.0f,
                               colors[v*4+2] / 255.0f,
                               colors[v*4+3] / 255.0f));
-        }
-
-        // Nudge mark/decal polys slightly outward along their face normal
-        // to prevent Z-fighting with the BSP surface they sit on.
-        // This replicates GL polygonOffset which the real renderer uses.
-        if (numVerts >= 3) {
-            Vector3 e1 = gPos[1] - gPos[0];
-            Vector3 e2 = gPos[2] - gPos[0];
-            Vector3 normal = e1.cross(e2);
-            if (normal.length_squared() > 1e-12f) {
-                normal = normal.normalized();
-                // 0.005 m ~ 0.2 id units — invisible but prevents Z-fight
-                for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] + normal * 0.005f);
-                }
-            }
         }
 
         // Triangle fan: 0‒1‒2, 0‒2‒3, ...
@@ -3102,169 +2571,73 @@ void MoHAARunner::update_polys() {
         }
         mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
 
-        // Material: cached per (shader_handle, blend_type) — avoids per-frame
-        // instantiation, property resets, and shader/texture lookups.
-        // blend_type: 0=alpha (default), 1=inv_mul, 2=multiplicative
-        int blend_type = 0;
-        if (hShader > 0) {
-            const char *sn = Godot_Renderer_GetShaderName(hShader);
-            const GodotShaderProps *poly_sp = (sn && sn[0]) ? Godot_ShaderProps_Find(sn) : nullptr;
-            if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE_INV) blend_type = 1;
-            else if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE) blend_type = 2;
+        // Material: textured + vertex colour + alpha blend, double-sided
+        Ref<StandardMaterial3D> mat = mi->get_surface_override_material(0);
+        if (mat.is_null()) {
+            mat.instantiate();
+            mi->set_surface_override_material(0, mat);
         }
 
-        int64_t poly_mat_key = ((int64_t)hShader << 2) | blend_type;
-        auto pm_it = s_poly_mat_cache.find(poly_mat_key);
-        if (pm_it == s_poly_mat_cache.end()) {
-            const char *sn = Godot_Renderer_GetShaderName(hShader);
-            UtilityFunctions::print(String("[MoHAA][Poly] Caching new poly material: shader='") + String(sn ? sn : "none") + 
-                                    String("', blend_type=") + String::num_int64(blend_type));
-            
-            // First time seeing this (shader, blend) combo — create and cache
-            if (blend_type == 1) {
-                // Inverse-multiplicative: result = dst * (1 - src*vertex_color)
-                static Ref<Shader> inv_mul_poly_shader;
-                if (inv_mul_poly_shader.is_null()) {
-                    inv_mul_poly_shader.instantiate();
-                    inv_mul_poly_shader->set_code(
-                        "shader_type spatial;\n"
-                        "render_mode blend_mul, unshaded, cull_disabled, "
-                        "depth_draw_opaque;\n"
-                        "uniform sampler2D albedo_texture : hint_default_black, "
-                        "filter_linear;\n"
-                        "void fragment() {\n"
-                        "    vec4 tex = texture(albedo_texture, UV);\n"
-                        "    ALBEDO = vec3(1.0) - tex.rgb * COLOR.rgb;\n"
-                        "    ALPHA = 1.0;\n"
-                        "}\n"
-                    );
-                }
-                Ref<ShaderMaterial> smat;
-                smat.instantiate();
-                smat->set_shader(inv_mul_poly_shader);
-                smat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
+        // Reset material state (reusing existing material)
+        mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+        mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+        mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+        mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+        mat->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, false);
+        mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
 
-                // Load and set the albedo texture for this shader
-                if (hShader > 0) {
-                    Ref<ImageTexture> tex = get_shader_texture(hShader);
-                    if (tex.is_valid()) {
-                        smat->set_shader_parameter("albedo_texture", tex);
-                    }
-                }
+        // Reset properties that might be dirty from reuse
+        mat->set_albedo(Color(1, 1, 1, 1));
+        mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MIX);
+        mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, Ref<Texture2D>());
+        mat->set_uv1_scale(Vector3(1, 1, 1));
+        mat->set_uv1_offset(Vector3(0, 0, 0));
+        mat->set_alpha_scissor_threshold(0.5);
 
-                s_poly_mat_cache[poly_mat_key] = smat;
-            } else {
-                // Standard or multiplicative — StandardMaterial3D
-                Ref<StandardMaterial3D> mat;
-                mat.instantiate();
-                mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-                mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                mat->set_flag(BaseMaterial3D::FLAG_DISABLE_DEPTH_TEST, false);
-                mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
-                mat->set_albedo(Color(1, 1, 1, 1));
-                mat->set_uv1_scale(Vector3(1, 1, 1));
-                mat->set_uv1_offset(Vector3(0, 0, 0));
-
-                if (blend_type == 2) {
-                    mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
-                }
-
-                bool poly_shader_props_found = false;
-                if (hShader > 0) {
-                    Ref<ImageTexture> tex = get_shader_texture(hShader);
-                    if (!tex.is_valid()) {
-                        const char *sn = Godot_Renderer_GetShaderName(hShader);
-                        static std::unordered_set<std::string> logged_missing_tex;
-                        if (sn && logged_missing_tex.find(sn) == logged_missing_tex.end()) {
-                            UtilityFunctions::print(String("[MoHAA][CAUTION] Poly shader missing texture! Name: ") + String(sn) + " blend: " + String::num_int64(blend_type));
-                            logged_missing_tex.insert(sn);
-                        }
-                    }
-
-                    if (blend_type == 0) {
-                        const char *sn = Godot_Renderer_GetShaderName(hShader);
-                        if (sn && sn[0]) {
-                            const GodotShaderProps *sp_poly = Godot_ShaderProps_Find(sn);
-                            if (sp_poly) {
-                                poly_shader_props_found = true;
-                            }
-                            apply_shader_props_to_material(mat, sn);
-                        }
-                    }
-                }
-
-                // When no .shader definition is found for a poly, check
-                // texture alpha to determine blend mode. Polys without
-                // alpha (fire, flash, sparks) should use additive
-                // blending so black areas are invisible.
-                if (!poly_shader_props_found && blend_type == 0 && hShader > 0) {
-                    auto ha_it = shader_texture_has_alpha.find(hShader);
-                    bool tex_has_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
-                    if (!tex_has_alpha) {
-                        mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                    }
-                }
-                
-                // CRITICAL: Polys are generated by the C engine with absolute world-space
-                // coordinates and added to a Node3D at origin(0,0,0). If the shader definition
-                // specified an autosprite deform, apply_shader_props_to_material will
-                // enable Godot's BILLBOARD_ENABLED. This causes Godot to rotate the far-away
-                // vertices around (0,0,0), creating giant, screen-spanning distorted geometry.
-                // Since the C engine ALREADY handled the billboarding math, we MUST force
-                // it disabled here.
-                mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_DISABLED);
-                mat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
-
-                s_poly_mat_cache[poly_mat_key] = mat;
-            }
-            pm_it = s_poly_mat_cache.find(poly_mat_key);
-        }
-
-        // Apply texture per-frame to support RemapShader and animMap
+        // Try to apply the poly's shader texture and shader properties
         if (hShader > 0) {
+            const char *sn = Godot_Renderer_GetShaderName(hShader);
             Ref<ImageTexture> tex = get_shader_texture(hShader);
+            
+            // Particle effect fallback: if shader name suggests particle/tracer/beam
+            // but texture load failed, use white albedo + additive blending
+            bool is_particle_effect = false;
+            if (sn && sn[0]) {
+                // Check for common particle shader names
+                const char* particle_keywords[] = {
+                    "tracer", "beam", "flare", "glow", "particle",
+                    "flash", "spark", "trail", nullptr
+                };
+                for (int kw = 0; particle_keywords[kw]; kw++) {
+                    if (strstr(sn, particle_keywords[kw])) {
+                        is_particle_effect = true;
+                        break;
+                    }
+                }
+            }
+            
             if (tex.is_valid()) {
-                if (blend_type == 1) {
-                    Ref<ShaderMaterial> smat = pm_it->second;
-                    smat->set_shader_parameter("albedo_texture", tex);
-                } else {
-                    Ref<StandardMaterial3D> std_mat = pm_it->second;
-                    std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+            } else if (is_particle_effect) {
+                // Fallback for particle effects: use vertex colour only, additive blend
+                mat->set_albedo(Color(1.0f, 1.0f, 1.0f, 1.0f));
+                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                // Log fallback once per shader
+                static std::unordered_set<std::string> logged_fallbacks;
+                if (sn && logged_fallbacks.find(sn) == logged_fallbacks.end()) {
+                    UtilityFunctions::print(String("[MoHAA] Particle shader fallback (no texture): ") + String(sn));
+                    logged_fallbacks.insert(sn);
                 }
-            } else {
-                // Diagnostic: log once per shader handle that has no texture
-                static std::unordered_set<int> logged_missing_poly_tex;
-                if (logged_missing_poly_tex.find(hShader) == logged_missing_poly_tex.end()) {
-                    const char *sn = Godot_Renderer_GetShaderName(hShader);
-                    UtilityFunctions::print(
-                        String("[MoHAA][POLY-TEX-MISS] Poly shader has NO texture! handle=")
-                        + String::num_int64(hShader)
-                        + String(" name='") + String(sn ? sn : "(null)") + String("'")
-                        + String(" blend=") + String::num_int64(blend_type));
-                    logged_missing_poly_tex.insert(hShader);
-                }
+            }
+            
+            // Apply shader properties (additive blending, alpha, etc.)
+            if (sn && sn[0]) {
+                apply_shader_props_to_material(mat, sn);
             }
         }
 
-        mi->set_surface_override_material(0, pm_it->second);
+        mi->set_surface_override_material(0, mat);
         mi->set_visible(true);
-
-        static std::unordered_set<int> logged_active_poly_shaders;
-        if (hShader > 0) {
-            if (logged_active_poly_shaders.find(hShader) == logged_active_poly_shaders.end()) {
-                const char *sn = Godot_Renderer_GetShaderName(hShader);
-                UtilityFunctions::print(String("[MoHAA][POLY-ACTIVE] Poly rendering with shader handle: ") + String::num_int64(hShader) + " name: '" + String(sn ? sn : "(null)") + "'");
-                logged_active_poly_shaders.insert(hShader);
-            }
-        } else {
-            static bool logged_zero_shader = false;
-            if (!logged_zero_shader) {
-                UtilityFunctions::print(String("[MoHAA][POLY-ZERO] Poly rendering with hShader == ") + String::num_int64(hShader));
-                logged_zero_shader = true;
-            }
-        }
     }
 
     // Hide excess polys from previous frame
@@ -3448,19 +2821,6 @@ void MoHAARunner::update_terrain_marks() {
                               rgba[2] / 255.0f, rgba[3] / 255.0f));
         }
 
-        // Nudge terrain mark polys outward to prevent Z-fighting
-        if (numVerts >= 3) {
-            Vector3 e1 = gPos[1] - gPos[0];
-            Vector3 e2 = gPos[2] - gPos[0];
-            Vector3 normal = e1.cross(e2);
-            if (normal.length_squared() > 1e-12f) {
-                normal = normal.normalized();
-                for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] + normal * 0.005f);
-                }
-            }
-        }
-
         // Fan triangulation
         for (int v = 1; v < numVerts - 1; v++) {
             gIdx.push_back(0);
@@ -3480,90 +2840,20 @@ void MoHAARunner::update_terrain_marks() {
         tmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
         mi->set_mesh(tmesh);
 
-        // Material: cached per (shader_handle, blend_type) — avoids per-frame
-        // instantiation and shader/texture lookups for terrain marks.
-        int mark_blend_type = 0;
-        if (hShader > 0) {
-            const char *mark_shader_name = Godot_Renderer_GetShaderName(hShader);
-            const GodotShaderProps *mark_sp = (mark_shader_name && mark_shader_name[0])
-                ? Godot_ShaderProps_Find(mark_shader_name) : nullptr;
-            if (mark_sp && mark_sp->transparency == SHADER_MULTIPLICATIVE_INV) mark_blend_type = 1;
-            else if (mark_sp && mark_sp->transparency == SHADER_MULTIPLICATIVE) mark_blend_type = 2;
-        }
-
-        int64_t tm_mat_key = ((int64_t)hShader << 2) | mark_blend_type;
-        auto tm_it = s_terrain_mark_mat_cache.find(tm_mat_key);
-        if (tm_it == s_terrain_mark_mat_cache.end()) {
-            if (mark_blend_type == 1) {
-                // Inverse-multiplicative blend: result = dst * (1 - texture*vertex_color)
-                static Ref<Shader> inv_mul_3d_shader;
-                if (inv_mul_3d_shader.is_null()) {
-                    inv_mul_3d_shader.instantiate();
-                    inv_mul_3d_shader->set_code(
-                        "shader_type spatial;\n"
-                        "render_mode blend_mul, unshaded, cull_disabled, "
-                        "depth_draw_never, depth_test_disabled;\n"
-                        "uniform sampler2D albedo_texture : source_color, "
-                        "filter_linear;\n"
-                        "void fragment() {\n"
-                        "    vec4 tex = texture(albedo_texture, UV);\n"
-                        "    ALBEDO = vec3(1.0) - tex.rgb * COLOR.rgb;\n"
-                        "    ALPHA = 1.0;\n"
-                        "}\n"
-                    );
-                }
-                Ref<ShaderMaterial> smat;
-                smat.instantiate();
-                smat->set_shader(inv_mul_3d_shader);
-                if (hShader > 0) {
-                    Ref<ImageTexture> tex = get_shader_texture(hShader);
-                    if (tex.is_valid()) {
-                        smat->set_shader_parameter("albedo_texture", tex);
-                    }
-                }
-                s_terrain_mark_mat_cache[tm_mat_key] = smat;
-            } else if (mark_blend_type == 2) {
-                Ref<StandardMaterial3D> mat;
-                mat.instantiate();
-                mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
-                mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-                s_terrain_mark_mat_cache[tm_mat_key] = mat;
-            } else {
-                Ref<StandardMaterial3D> mat;
-                mat.instantiate();
-                mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-                if (hShader > 0) {
-                    const char *mark_shader_name = Godot_Renderer_GetShaderName(hShader);
-                    if (mark_shader_name && mark_shader_name[0]) {
-                        apply_shader_props_to_material(mat, mark_shader_name);
-                    }
-                }
-                s_terrain_mark_mat_cache[tm_mat_key] = mat;
-            }
-            tm_it = s_terrain_mark_mat_cache.find(tm_mat_key);
-        }
-
-        // Apply texture per-frame to support RemapShader and animMap
+        // Material
+        Ref<StandardMaterial3D> mat;
+        mat.instantiate();
+        mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+        mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+        mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+        mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
         if (hShader > 0) {
             Ref<ImageTexture> tex = get_shader_texture(hShader);
             if (tex.is_valid()) {
-                if (mark_blend_type == 1) {
-                    Ref<ShaderMaterial> smat = tm_it->second;
-                    smat->set_shader_parameter("albedo_texture", tex);
-                } else {
-                    Ref<StandardMaterial3D> std_mat = tm_it->second;
-                    std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                }
+                mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
             }
         }
-
-        mi->set_surface_override_material(0, tm_it->second);
+        mi->set_surface_override_material(0, mat);
         mi->set_global_transform(Transform3D());
         mi->set_visible(true);
     }
@@ -3616,10 +2906,8 @@ void MoHAARunner::update_shadow_blobs() {
         shadow_blob_material.instantiate();
         shadow_blob_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
         shadow_blob_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-        shadow_blob_material->set_blend_mode(BaseMaterial3D::BLEND_MODE_MIX);
         shadow_blob_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
         shadow_blob_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-        shadow_blob_material->set_albedo(Color(1.0f, 1.0f, 1.0f, 1.0f));
         // Render above ground to avoid z-fighting
         shadow_blob_material->set_render_priority(1);
     }
@@ -3774,11 +3062,6 @@ void MoHAARunner::update_shader_animations(double delta) {
     // Iterate over BSP world mesh surfaces and apply tcMod scroll offset
     if (!bsp_map_node) return;
 
-    // Per-surface cache: avoids per-frame string→C-string conversion,
-    // GodotShaderProps hash lookup, and O(N) linear shader scan.
-    // Built on first access; cleared on map change alongside animmap caches.
-    // Key = (child_index << 16) | surface_index — unique per BSP surface.
-
     // Walk MeshInstance3D children of bsp_map_node
     for (int c = 0; c < bsp_map_node->get_child_count(); c++) {
         MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(bsp_map_node->get_child(c));
@@ -3788,46 +3071,19 @@ void MoHAARunner::update_shader_animations(double delta) {
         if (!mesh.is_valid()) continue;
 
         for (int s = 0; s < mesh->get_surface_count(); s++) {
-            // Look up or populate per-surface cache
-            uint32_t cache_key = ((uint32_t)c << 16) | (uint32_t)s;
-            auto cache_it = s_surf_anim_cache.find(cache_key);
-            if (cache_it == s_surf_anim_cache.end()) {
-                SurfAnimCache entry;
-                entry.sp = nullptr;
-                entry.shader_handle = -1;
-                entry.needs_animation = false;
-
-                Ref<Material> base = mi->get_surface_override_material(s);
-                if (base.is_null()) base = mesh->surface_get_material(s);
-                Ref<StandardMaterial3D> smat_init = base;
-                if (smat_init.is_valid()) {
-                    String shader_name = smat_init->get_meta("shader_name", "");
-                    if (!shader_name.is_empty()) {
-                        CharString cs = shader_name.ascii();
-                        entry.sp = Godot_ShaderProps_Find(cs.get_data());
-                        if (entry.sp) {
-                            // Register shader handle via O(1) hash insert (not linear scan)
-                            entry.shader_handle = Godot_Renderer_RegisterShader(cs.get_data());
-                            entry.needs_animation = entry.sp->has_tcmod
-                                || (entry.sp->has_animmap && entry.sp->animmap_num_frames > 0 && entry.sp->animmap_freq > 0.0f)
-                                || entry.sp->rgbgen_type == 2
-                                || entry.sp->alphagen_type == 2;
-                        }
-                    }
-                }
-                s_surf_anim_cache[cache_key] = entry;
-                cache_it = s_surf_anim_cache.find(cache_key);
-            }
-
-            const SurfAnimCache &sc = cache_it->second;
-            if (!sc.needs_animation) continue;  // Early exit: skip static surfaces
-
-            const GodotShaderProps *sp = sc.sp;
-
             Ref<Material> base = mi->get_surface_override_material(s);
             if (base.is_null()) base = mesh->surface_get_material(s);
+
             Ref<StandardMaterial3D> smat = base;
             if (!smat.is_valid()) continue;
+
+            // Check resource metadata for shader name (stored during BSP build)
+            String shader_name = smat->get_meta("shader_name", "");
+            if (shader_name.is_empty()) continue;
+
+            CharString cs = shader_name.ascii();
+            const GodotShaderProps *sp = Godot_ShaderProps_Find(cs.get_data());
+            if (!sp) continue;
 
             // Apply UV tcMod animation: scroll + turb
             if (sp->has_tcmod) {
@@ -3852,9 +3108,17 @@ void MoHAARunner::update_shader_animations(double delta) {
                 }
             }
 
-            // Phase 55: animMap frame swap — uses cached shader_handle (O(1))
+            // Phase 55: animMap frame swap
             if (sp->has_animmap && sp->animmap_num_frames > 0 && sp->animmap_freq > 0.0f) {
-                int shader_handle = sc.shader_handle;
+                int shader_handle = -1;
+                int shader_count = Godot_Renderer_GetShaderCount();
+                for (int sh = 1; sh < shader_count; sh++) {
+                    const char *sn = Godot_Renderer_GetShaderName(sh);
+                    if (sn && shader_name == String(sn)) {
+                        shader_handle = sh;
+                        break;
+                    }
+                }
 
                 if (shader_handle > 0) {
                     auto it_info = animmap_info.find(shader_handle);
@@ -3867,12 +3131,16 @@ void MoHAARunner::update_shader_animations(double delta) {
                         std::vector<Ref<ImageTexture>> frames;
                         for (int fi = 0; fi < sp->animmap_num_frames; fi++) {
                             Ref<ImageTexture> frame_tex;
-                            // Use RegisterShader for O(1) lookup instead of linear scan
-                            if (sp->animmap_frames[fi][0]) {
-                                int frame_handle = Godot_Renderer_RegisterShader(sp->animmap_frames[fi]);
-                                if (frame_handle > 0) {
-                                    frame_tex = get_shader_texture(frame_handle);
+                            int frame_handle = -1;
+                            for (int sh = 1; sh < shader_count; sh++) {
+                                const char *sn = Godot_Renderer_GetShaderName(sh);
+                                if (sn && String(sn) == String(sp->animmap_frames[fi])) {
+                                    frame_handle = sh;
+                                    break;
                                 }
+                            }
+                            if (frame_handle > 0) {
+                                frame_tex = get_shader_texture(frame_handle);
                             }
                             frames.push_back(frame_tex);
                         }
@@ -3963,11 +3231,10 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
         }
     }
 
-    auto load_texture_from_qpath = [&](const char *qpath, bool *out_has_alpha) -> Ref<ImageTexture> {
+    auto load_texture_from_qpath = [&](const char *qpath) -> Ref<ImageTexture> {
         if (!qpath || !qpath[0]) {
             return Ref<ImageTexture>();
         }
-        if (out_has_alpha) *out_has_alpha = false;
 
         const char *extensions[] = { "", ".tga", ".jpg", ".png", NULL };
         for (int ext_i = 0; extensions[ext_i]; ext_i++) {
@@ -4007,40 +3274,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             }
 
             if (err == OK && !img->is_empty()) {
-                // Fix dead alpha: 32-bit TGA files sometimes have an unused
-                // alpha channel filled with zeros.  The real renderer
-                // ignores texture alpha for opaque shaders (GL_BLEND is
-                // disabled via GLS_DEFAULT stateBits), but our Godot canvas
-                // always blends.  Convert all-zero-alpha RGBA8 to RGB8 so
-                // the texture renders fully opaque.
-                if (img->get_format() == Image::FORMAT_RGBA8) {
-                    PackedByteArray imgdata = img->get_data();
-                    int pixel_count = img->get_width() * img->get_height();
-                    const uint8_t *pix = imgdata.ptr();
-                    bool all_zero_alpha = true;
-                    for (int p = 0; p < pixel_count && all_zero_alpha; p++) {
-                        if (pix[p * 4 + 3] > 0) {
-                            all_zero_alpha = false;
-                        }
-                    }
-                    if (all_zero_alpha) {
-                        img->convert(Image::FORMAT_RGB8);
-                    }
-                }
-                if (out_has_alpha) {
-                    *out_has_alpha = (img->detect_alpha() != Image::ALPHA_NONE);
-                }
-                // Diagnostic: log texture format/alpha for levelshot shaders
-                if (name && (strstr(name, "mohdm") || strstr(name, "levelshot"))) {
-                    UtilityFunctions::print(
-                        String("[MoHAA][TEX-DIAG] shader='") + String(name) +
-                        String("' path='") + String(path) +
-                        String("' format=") + String::num_int64(img->get_format()) +
-                        String(" size=") + String::num_int64(img->get_width()) +
-                        String("x") + String::num_int64(img->get_height()) +
-                        String(" detect_alpha=") + String::num_int64(img->detect_alpha()) +
-                        String(" has_alpha=") + String(*out_has_alpha ? "true" : "false"));
-                }
                 img->generate_mipmaps();
                 Ref<ImageTexture> tex = ImageTexture::create_from_image(img);
                 if (is_serverback && logged_serverback_ok.find(shader_handle) == logged_serverback_ok.end()) {
@@ -4056,14 +3289,10 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                 return tex;
             }
 
-            // Always log decode errors globally, unconditionally!
-            static std::unordered_set<std::string> logged_errors;
-            if (logged_errors.find(path) == logged_errors.end()) {
-                UtilityFunctions::print(String("[MoHAA][TEX-ERR] Decode failed for shader='") +
+            if (is_serverback) {
+                UtilityFunctions::print(String("[MoHAA][2D] serverback decode failed shader='") +
                                         String(name) + String("' path='") + String(path) +
-                                        String("' error_code=") + String::num_int64(err) +
-                                        String(" size=") + String::num_int64(len) + String(" bytes."));
-                logged_errors.insert(path);
+                                        String("' err=") + String::num_int64(err));
             }
         }
 
@@ -4074,7 +3303,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
     // frozen cached texture for these (e.g. fan_anim1 in the main menu).
     if (sp && sp->has_animmap && sp->animmap_num_frames > 0 && sp->animmap_freq > 0.0f) {
         shader_textures.erase(shader_handle);
-        shader_texture_has_alpha.erase(shader_handle);
 
         auto it_anim = animmap_info.find(shader_handle);
         auto it_frames = animmap_frames.find(shader_handle);
@@ -4095,7 +3323,7 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                 if (!sp->animmap_frames[fi][0]) {
                     continue;
                 }
-                frames[fi] = load_texture_from_qpath(sp->animmap_frames[fi], nullptr);
+                frames[fi] = load_texture_from_qpath(sp->animmap_frames[fi]);
             }
             animmap_frames[shader_handle] = frames;
 
@@ -4117,18 +3345,9 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
     }
 
     // Non-animated shaders use static texture caching.
-    // Track which effective name was used to load each cached texture so that
-    // shader remapping (RemapShader) correctly invalidates stale entries.
     auto it = shader_textures.find(shader_handle);
     if (it != shader_textures.end()) {
-        auto it_name = s_shader_texture_loaded_names.find(shader_handle);
-        if (it_name != s_shader_texture_loaded_names.end() && it_name->second == name) {
-            return it->second;  // Cache valid — same effective name
-        }
-        // Name changed (shader remap active or handle reused) — invalidate
-        shader_textures.erase(it);
-        shader_texture_has_alpha.erase(shader_handle);
-        s_shader_texture_loaded_names.erase(shader_handle);
+        return it->second;
     }
 
     // ── Determine the actual texture image path(s) to try ──
@@ -4137,7 +3356,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
     // stage's "map" directive gives the real texture path.  If no definition
     // is found, try using the shader name itself as a texture file path
     // (the fallback R_FindShader uses for implicit shaders).
-
     const char *texture_paths[4] = { NULL, NULL, NULL, NULL };
     int num_texture_paths = 0;
 
@@ -4165,10 +3383,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             if (!stage_map) continue;
             if (strcmp(stage_map, "$lightmap") == 0) continue;
             if (strcmp(stage_map, "$whiteimage") == 0) continue;
-            // Internal image names from the shader accessor start with '*'
-            // (e.g. *white = tr.whiteImage, *lightmap, *default). These are
-            // never real file paths — skip them to reach the actual texture stage.
-            if (stage_map[0] == '*') continue;
             if (!fallback) fallback = stage_map;
             if (sp->stages[st].tcGen == STAGE_TCGEN_ENVIRONMENT) continue;
             texture_paths[num_texture_paths++] = stage_map;
@@ -4199,19 +3413,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
         }
     }
 
-    // Hardcoded aliases for implicit shaders in scripts/common.shader that lack 'textures/' prefixes
-    if (!sp && num_texture_paths <= 1) {
-        if (strcmp(lookup_name, "markShadow") == 0) {
-            texture_paths[num_texture_paths++] = "textures/common/shadow";
-        } else if (strcasecmp(lookup_name, "footShadow") == 0 || strcasecmp(lookup_name, "footshadow") == 0) {
-            texture_paths[num_texture_paths++] = "textures/decals/footshadow";
-        } else if (strcmp(lookup_name, "projectionShadow") == 0) {
-            texture_paths[num_texture_paths++] = "*white";
-        } else if (strcmp(lookup_name, "flare") == 0 || strcmp(lookup_name, "flareshader") == 0) {
-            texture_paths[num_texture_paths++] = "textures/sprites/flare";
-        }
-    }
-
     // ── Handle $whiteimage shaders (e.g. menu_button_trans) ──
     // If the shader definition exists but uses only $whiteimage stages
     // (no real texture paths), create a 1x1 white texture.
@@ -4220,7 +3421,7 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
         for (int st = 0; st < sp->stage_count; st++) {
             if (sp->stages[st].isLightmap) continue;
             const char *sm = sp->stages[st].map;
-            if (sm[0] && strcmp(sm, "$whiteimage") != 0 && strcmp(sm, "$lightmap") != 0 && sm[0] != '*') {
+            if (sm[0] && strcmp(sm, "$whiteimage") != 0 && strcmp(sm, "$lightmap") != 0) {
                 all_white = false;
                 break;
             }
@@ -4241,54 +3442,14 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                 *white_tex = ImageTexture::create_from_image(wimg);
             }
             shader_textures[shader_handle] = *white_tex;
-            shader_texture_has_alpha[shader_handle] = false; // $whiteimage is fully opaque
-            s_shader_texture_loaded_names[shader_handle] = name ? name : "";
             return *white_tex;
         }
     }
 
     // ── Try loading each candidate path via VFS ──
     Ref<ImageTexture> tex;
-    bool loaded_has_alpha = false;
     for (int tp = 0; tp < num_texture_paths && tex.is_null(); tp++) {
-        bool tex_alpha = false;
-        tex = load_texture_from_qpath(texture_paths[tp], &tex_alpha);
-        if (!tex.is_null()) {
-            loaded_has_alpha = tex_alpha;
-        }
-    }
-
-    // ── Fallback: engine-internal white texture ──
-    // The shader "white" references textures/sprites/white.tga which may
-    // not exist in the pk3s.  In the real renderer, R_FindShader("white")
-    // falls back to tr.whiteImage (a programmatic 8x8 white texture).
-    // Replicate that behaviour: if the texture file can't be found and
-    // the shader name is "white" or any candidate path references the
-    // sprites/white texture, return a 1x1 white pixel.
-    if (tex.is_null() && name) {
-        bool is_white_shader = (strcmp(name, "white") == 0 ||
-                                strcmp(name, "*white") == 0 ||
-                                strcmp(name, "$whiteimage") == 0);
-        if (!is_white_shader) {
-            for (int i = 0; i < num_texture_paths && !is_white_shader; i++) {
-                if (!texture_paths[i]) continue;
-                if (strstr(texture_paths[i], "sprites/white") ||
-                    strcmp(texture_paths[i], "*white") == 0)
-                    is_white_shader = true;
-            }
-        }
-        if (is_white_shader) {
-            static Ref<ImageTexture> *white_fallback = new Ref<ImageTexture>();
-            if (white_fallback->is_null()) {
-                PackedByteArray wdata;
-                wdata.resize(4);
-                wdata.ptrw()[0] = 255; wdata.ptrw()[1] = 255;
-                wdata.ptrw()[2] = 255; wdata.ptrw()[3] = 255;
-                Ref<Image> wimg = Image::create_from_data(1, 1, false, Image::FORMAT_RGBA8, wdata);
-                *white_fallback = ImageTexture::create_from_image(wimg);
-            }
-            tex = *white_fallback;
-        }
+        tex = load_texture_from_qpath(texture_paths[tp]);
     }
 
     if (tex.is_null()) {
@@ -4296,7 +3457,7 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             logged_missing[shader_handle] = true;
             String dbg = String("[MoHAA][2D] Missing texture for shader #") +
                          String::num_int64(shader_handle) + String(" name='") +
-                         String(name ? name : "NULL") + String("' candidates=");
+                         String(name) + String("' candidates=");
             for (int i = 0; i < num_texture_paths; i++) {
                 if (!texture_paths[i] || !texture_paths[i][0]) continue;
                 if (i > 0) dbg += String(",");
@@ -4304,19 +3465,10 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             }
             UtilityFunctions::print(dbg);
         }
-        // Return null — callers already guard with .is_valid(), so missing
-        // textures are silently skipped rather than rendering a white box.
-        // Do NOT cache the failure: allows the next frame to retry the VFS
-        // lookup, so a texture that was unavailable on first access (e.g.
-        // due to shader registration ordering) succeeds once the renderer
-        // is fully initialised.
-        return Ref<ImageTexture>();
     }
 
     if (!tex.is_null()) {
         shader_textures[shader_handle] = tex;
-        shader_texture_has_alpha[shader_handle] = loaded_has_alpha;
-        s_shader_texture_loaded_names[shader_handle] = name ? name : "";
     }
     return tex;
 }
@@ -4401,136 +3553,56 @@ void MoHAARunner::update_2d_overlay() {
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->canvas_item_clear(ci);
 
-    /* ── Blend-mode segment pool ──
-     * The engine's 2D command stream interleaves normal (mix), multiplicative
-     * (filter/dst*src), and inverse-multiplicative (dst*(1-src)) blend modes.
-     * In OpenGL these happen sequentially on a single framebuffer.  In Godot,
-     * each blend mode needs a separate canvas item with the right material.
-     * We create child canvas items in command-stream order — each "segment"
-     * covers a contiguous run of commands with the same blend mode.  This
-     * preserves the correct z-ordering across blend mode switches.
-     *
-     * Segments are pooled: we reuse RIDs across frames to avoid alloc churn. */
+    /* Create/clear a child canvas item with multiplicative blend for
+     * shaders like "shadow" that use blendFunc filter (GL_DST_COLOR GL_ZERO).
+     * Must be a child of ci so it shares the same canvas layer. */
+    if (!mul_canvas_item.is_valid()) {
+        mul_canvas_item = rs->canvas_item_create();
+        rs->canvas_item_set_parent(mul_canvas_item, ci);
 
-    // Lazily create shared materials (once)
-    if (mul_canvas_material.is_null()) {
         mul_canvas_material.instantiate();
         mul_canvas_material->set_blend_mode(CanvasItemMaterial::BLEND_MODE_MUL);
+        rs->canvas_item_set_material(mul_canvas_item, mul_canvas_material->get_rid());
     }
-    if (mul_inv_material.is_null()) {
+    rs->canvas_item_clear(mul_canvas_item);
+
+    /* Create/clear a child canvas item with INVERSE multiplicative blend for
+     * shaders like "pmshadow" that use blendFunc GL_ZERO GL_ONE_MINUS_SRC_COLOR.
+     * Equation: result = dst * (1 - src).  We use blend_mul (dst * output) and
+     * output (1 - src) from a custom fragment shader. */
+    if (!mul_inv_canvas_item.is_valid()) {
+        mul_inv_canvas_item = rs->canvas_item_create();
+        rs->canvas_item_set_parent(mul_inv_canvas_item, ci);
+
         mul_inv_shader.instantiate();
         mul_inv_shader->set_code(
             "shader_type canvas_item;\n"
             "render_mode blend_mul;\n"
             "void fragment() {\n"
             "    vec4 tex = texture(TEXTURE, UV);\n"
+            "    // The real renderer scales SetColor by identityLight\n"
+            "    // (0.5 with default r_overBrightBits=1) before rgbGen global\n"
+            "    // modulation.  Our stub passes raw values, so apply the\n"
+            "    // factor here to match shadow intensity.\n"
             "    float id_light = 0.5;\n"
             "    COLOR = vec4(vec3(1.0) - tex.rgb * COLOR.rgb * id_light, tex.a * COLOR.a);\n"
             "}\n"
         );
+
         mul_inv_material.instantiate();
         mul_inv_material->set_shader(mul_inv_shader);
+        rs->canvas_item_set_material(mul_inv_canvas_item, mul_inv_material->get_rid());
     }
-    if (opaque_mix_material.is_null()) {
-        opaque_mix_shader.instantiate();
-        opaque_mix_shader->set_code(
-            "shader_type canvas_item;\n"
-            "void fragment() {\n"
-            "    vec4 tex = texture(TEXTURE, UV);\n"
-            "    // Ignore texture alpha (replicates GL_BLEND disabled for\n"
-            "    // GLS_DEFAULT/SHADER_OPAQUE), but preserve COLOR.a from\n"
-            "    // SetColor so hover/UI highlights with alpha < 1 still\n"
-            "    // composite correctly on the canvas.\n"
-            "    COLOR = vec4(tex.rgb * COLOR.rgb, COLOR.a);\n"
-            "}\n"
-        );
-        opaque_mix_material.instantiate();
-        opaque_mix_material->set_shader(opaque_mix_shader);
-    }
-    if (add_canvas_material.is_null()) {
-        add_canvas_material.instantiate();
-        add_canvas_material->set_blend_mode(CanvasItemMaterial::BLEND_MODE_ADD);
-    }
-    if (alpha_inv_material.is_null()) {
-        alpha_inv_shader.instantiate();
-        alpha_inv_shader->set_code(
-            "shader_type canvas_item;\n"
-            "void fragment() {\n"
-            "    vec4 tex = texture(TEXTURE, UV);\n"
-            "    // Pre-composite two-stage GL pipeline:\n"
-            "    // Stage 0: $whiteimage (opaque white fill)\n"
-            "    // Stage 1: texture with GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA\n"
-            "    // result = tex.rgb * (1.0 - tex.a) + white * tex.a\n"
-            "    vec3 composited = tex.rgb * (1.0 - tex.a) + vec3(1.0) * tex.a;\n"
-            "    COLOR = vec4(composited * COLOR.rgb, COLOR.a);\n"
-            "}\n"
-        );
-        alpha_inv_material.instantiate();
-        alpha_inv_material->set_shader(alpha_inv_shader);
-    }
+    rs->canvas_item_clear(mul_inv_canvas_item);
 
-    // Clear all existing segments
-    for (int si = 0; si < (int)overlay_segments.size(); si++) {
-        rs->canvas_item_clear(overlay_segments[si].item);
-        // Hide unused segments from previous frame
-        rs->canvas_item_set_visible(overlay_segments[si].item, false);
-    }
-    overlay_segment_count = 0;
-    overlay_current_blend = -1;
-
-    // Helper lambda: get or create the current segment canvas item for a blend mode
-    auto get_segment_ci = [&](int blend) -> RID {
-        if (overlay_segment_count > 0 && overlay_current_blend == blend) {
-            return overlay_segments[overlay_segment_count - 1].item;
-        }
-        // Need a new segment
-        if (overlay_segment_count >= (int)overlay_segments.size()) {
-            CanvasSegment seg;
-            seg.item = rs->canvas_item_create();
-            rs->canvas_item_set_parent(seg.item, ci);
-            seg.blend_mode = -1;
-            overlay_segments.push_back(seg);
-        }
-        auto &seg = overlay_segments[overlay_segment_count];
-        rs->canvas_item_set_visible(seg.item, true);
-
-        // Set material for this segment's blend mode
-        if (seg.blend_mode != blend) {
-            if (blend == BLEND_MIX) {
-                rs->canvas_item_set_material(seg.item, RID());
-            } else if (blend == BLEND_MUL) {
-                rs->canvas_item_set_material(seg.item, mul_canvas_material->get_rid());
-            } else if (blend == BLEND_MUL_INV) {
-                rs->canvas_item_set_material(seg.item, mul_inv_material->get_rid());
-            } else if (blend == BLEND_OPAQUE) {
-                rs->canvas_item_set_material(seg.item, opaque_mix_material->get_rid());
-            } else if (blend == BLEND_ADD) {
-                rs->canvas_item_set_material(seg.item, add_canvas_material->get_rid());
-            } else if (blend == BLEND_ALPHA_INV) {
-                rs->canvas_item_set_material(seg.item, alpha_inv_material->get_rid());
-            }
-            seg.blend_mode = blend;
-        }
-
-        overlay_segment_count++;
-        overlay_current_blend = blend;
-        return seg.item;
-    };
-
-    // Phase 58: Prepare loading background image (map preview from
-    // RE_DrawStretchRaw).  We build a texture here but DON'T draw it yet.
-    // It will be drawn inside the 2D command loop at the correct Z-position
-    // (bg_cmd_index) so that widget backgrounds render UNDER the preview
-    // and the photo frame / text / loading bar render ON TOP.
-    static Ref<ImageTexture> loading_bg_tex;
-    static Ref<Image> loading_bg_img;
-    bool has_loading_bg = false;
-    int  bg_cmd_index   = 0;
+    // Phase 58: Draw captured background image during loading/screens
     {
         int cols = 0, rows = 0, bgr = 0;
         const unsigned char *bg_data = nullptr;
         if (Godot_Renderer_GetBackground(&cols, &rows, &bgr, &bg_data) &&
             cols > 0 && rows > 0 && bg_data && !Godot_Renderer_IsWorldMapLoaded()) {
+            static Ref<ImageTexture> *bg_tex = new Ref<ImageTexture>();
+            static Ref<Image> *bg_img = new Ref<Image>();
 
             PackedByteArray pixels;
             pixels.resize(cols * rows * 4);
@@ -4551,18 +3623,24 @@ void MoHAARunner::update_2d_overlay() {
                 }
             }
 
-            loading_bg_img = Image::create_from_data(cols, rows, false, Image::FORMAT_RGBA8, pixels);
-            if (loading_bg_img.is_valid()) {
-                if (loading_bg_tex.is_null()) {
-                    loading_bg_tex = ImageTexture::create_from_image(loading_bg_img);
+            *bg_img = Image::create_from_data(cols, rows, false, Image::FORMAT_RGBA8, pixels);
+            if (bg_img->is_valid()) {
+                if (bg_tex->is_null()) {
+                    *bg_tex = ImageTexture::create_from_image(*bg_img);
                 } else {
-                    loading_bg_tex->update(loading_bg_img);
+                    (*bg_tex)->update(*bg_img);
                 }
             }
 
-            if (loading_bg_tex.is_valid()) {
-                has_loading_bg = true;
-                bg_cmd_index = Godot_Renderer_GetBackgroundCmdIndex();
+            if (bg_tex->is_valid()) {
+                // Use actual viewport size for fullscreen background
+                Vector2 vp = hud_control->get_size();
+                if (vp.x < 1.0f || vp.y < 1.0f) {
+                    Rect2 visible_rect = get_viewport()->get_visible_rect();
+                    vp = visible_rect.size;
+                }
+                Rect2 full(0.0f, 0.0f, vp.x, vp.y);
+                rs->canvas_item_add_texture_rect(ci, full, (*bg_tex)->get_rid());
             }
         }
     }
@@ -4586,39 +3664,7 @@ void MoHAARunner::update_2d_overlay() {
     bool scissor_enabled = false;
     bool saw_textured_draw = false;
     static bool logged_late_clear_skip = false;
-
     Rect2 scissor_rect;
-
-    // ── Temporary diagnostic: dump all 2D commands when scoreboard first appears ──
-    {
-        static bool sb_dump_done = false;
-        bool sb_vis = (Godot_SB_IsVisible() != 0);
-        if (sb_vis && !sb_dump_done) {
-            sb_dump_done = true;
-            UtilityFunctions::print(String("[SB-DIAG] Scoreboard visible, dumping ") +
-                                    String::num(cmd_count) + String(" 2D commands:"));
-            UtilityFunctions::print(String("[SB-DIAG] overlay_on=") + String::num((int)overlay_on) +
-                                    String(" allow_fills=") + String::num((int)allow_fullscreen_fills) +
-                                    String(" vid_area=") + String::num(vid_area));
-            for (int di = 0; di < cmd_count && di < 200; di++) {
-                int dtype, dshader;
-                float dx, dy, dw, dh, ds1, dt1, ds2, dt2, dcol[4];
-                if (!Godot_Renderer_Get2DCmd(di, &dtype, &dx, &dy, &dw, &dh,
-                                              &ds1, &dt1, &ds2, &dt2, dcol, &dshader)) continue;
-                const char *tname = (dtype == 0 && dshader > 0) ? Godot_Renderer_GetShaderName(dshader) : "";
-                if (!tname) tname = "";
-                UtilityFunctions::print(String("[SB-DIAG] cmd[") + String::num(di) + String("] type=") +
-                                        String::num(dtype) + String(" pos=(") +
-                                        String::num(dx, 1) + String(",") + String::num(dy, 1) +
-                                        String(") size=(") + String::num(dw, 1) + String(",") +
-                                        String::num(dh, 1) + String(") col=(") +
-                                        String::num(dcol[0], 3) + String(",") + String::num(dcol[1], 3) +
-                                        String(",") + String::num(dcol[2], 3) + String(",") +
-                                        String::num(dcol[3], 3) + String(") shader=") +
-                                        String::num(dshader) + String(" '") + String(tname) + String("'"));
-            }
-        }
-    }
 
     /* Gather HUD model draw orders so we can inject viewport textures
      * at the correct position in the 2D command stream. */
@@ -4649,8 +3695,7 @@ void MoHAARunner::update_2d_overlay() {
                         ui_offset_y + rect[1] * ui_scale_y,
                         rect[2] * ui_scale_x,
                         rect[3] * ui_scale_y);
-                    RID hm_ci = get_segment_ci(BLEND_MIX);
-                    rs->canvas_item_add_texture_rect(hm_ci, screen_rect, vp_tex->get_rid());
+                    rs->canvas_item_add_texture_rect(ci, screen_rect, vp_tex->get_rid());
                 }
             }
             next_hud_model++;
@@ -4684,8 +3729,6 @@ void MoHAARunner::update_2d_overlay() {
             continue;
         }
 
-        // no-op: loading bg fill suppression removed — bg now drawn at correct Z position
-
         // Scale from engine coords to actual viewport (with aspect correction)
         Rect2 rect(ui_offset_x + x * ui_scale_x, ui_offset_y + y * ui_scale_y,
                    w * ui_scale_x, h * ui_scale_y);
@@ -4713,9 +3756,8 @@ void MoHAARunner::update_2d_overlay() {
         }
 
         if (type == 1) {
-            // GR_2D_BOX — solid colour rectangle (always mix blend)
-            RID box_ci = get_segment_ci(BLEND_MIX);
-            rs->canvas_item_add_rect(box_ci, draw_rect, col);
+            // GR_2D_BOX — solid colour rectangle
+            rs->canvas_item_add_rect(ci, draw_rect, col);
         } else if (type == 0 && shader > 0) {
             // GR_2D_STRETCHPIC — textured quad
             Ref<ImageTexture> tex = get_shader_texture(shader);
@@ -4841,53 +3883,23 @@ void MoHAARunner::update_2d_overlay() {
                 // Skip fully transparent draws (alphaConst=0 → invisible)
                 if (draw_col.a < 0.001f) continue;
 
-                /* Choose blend mode based on shader transparency.
-                 * - SHADER_MULTIPLICATIVE: blendFunc filter (dst*src)
-                 * - SHADER_MULTIPLICATIVE_INV: dst*(1-src)
-                 * - SHADER_ADDITIVE: blendFunc add (src+dst)
-                 * - SHADER_OPAQUE: the real renderer disables GL_BLEND
-                 *   (GLS_DEFAULT stateBits), making texture alpha
-                 *   irrelevant.  BLEND_OPAQUE ignores texture alpha
-                 *   but preserves SetColor alpha (COLOR.a).
-                 * - SHADER_ALPHA_BLEND: standard alpha blending. */
-                int draw_blend = BLEND_MIX;
+                /* Use the multiplicative child canvas item for shaders with
+                 * blendFunc filter (e.g. "shadow") so the texture darkens the
+                 * underlying surface rather than drawing opaquely.
+                 * Use the inverse-mul item for GL_ZERO GL_ONE_MINUS_SRC_COLOR
+                 * (e.g. "pmshadow") which needs dst*(1-src). */
+                bool is_mul = false;
+                bool is_mul_inv = false;
                 if (sname && sname[0]) {
                     const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
-                    if (sp2) {
-                        if (sp2->transparency == SHADER_MULTIPLICATIVE) {
-                            draw_blend = BLEND_MUL;
-                        } else if (sp2->transparency == SHADER_MULTIPLICATIVE_INV) {
-                            draw_blend = BLEND_MUL_INV;
-                        } else if (sp2->transparency == SHADER_ADDITIVE) {
-                            draw_blend = BLEND_ADD;
-                        } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
-                            draw_blend = BLEND_ALPHA_INV;
-                        } else if (sp2->transparency == SHADER_OPAQUE) {
-                            /* In Godot, UI textures often contain soft alpha halos (e.g. hover states).
-                             * Forcing BLEND_OPAQUE causes these halos to render as solid black boxes.
-                             * We unconditionally use BLEND_MIX here so texture transparency resolves correctly. */
-                            draw_blend = BLEND_MIX;
-                            /* Multi-stage shader: check the actual texture stage
-                             * for a custom blendFunc that overrides the opaque
-                             * default (e.g. GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA). */
-                            if (sp2->stage_count > 1) {
-                                for (int st = 0; st < sp2->stage_count; st++) {
-                                    if (sp2->stages[st].isLightmap) continue;
-                                    const char *sm = sp2->stages[st].map;
-                                    if (!sm[0]) continue;
-                                    if (strcmp(sm, "$lightmap") == 0) continue;
-                                    if (strcmp(sm, "$whiteimage") == 0) continue;
-                                    if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
-                                        sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
-                                        draw_blend = BLEND_ALPHA_INV;
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                    if (sp2 && sp2->transparency == SHADER_MULTIPLICATIVE) {
+                        is_mul = true;
+                    } else if (sp2 && sp2->transparency == SHADER_MULTIPLICATIVE_INV) {
+                        is_mul_inv = true;
                     }
                 }
-                RID target_ci = get_segment_ci(draw_blend);
+
+                RID target_ci = is_mul ? mul_canvas_item : (is_mul_inv ? mul_inv_canvas_item : ci);
 
                 // Detect tiling: if the source rect extends beyond the
                 // texture dimensions, the engine expects GL_REPEAT wrapping
@@ -4896,6 +3908,23 @@ void MoHAARunner::update_2d_overlay() {
                 // to image bounds, so tiled draws need special handling.
                 bool needs_tiling = (src.position.x + src.size.x > tw + 0.5f) ||
                                     (src.position.y + src.size.y > th + 0.5f);
+
+                // Debug: log every 2D draw with UVs that suggest tiling
+                {
+                    static int tile_log_count = 0;
+                    if (tile_log_count < 50 && (s2 > 1.01f || t2 > 1.01f || s1 < -0.01f || t1 < -0.01f)) {
+                        tile_log_count++;
+                        UtilityFunctions::print(String("[MoHAA][TILE-DBG] shader=") + String(sname ? sname : "?") +
+                            String(" uv=") + String::num(s1,3) + String(",") + String::num(t1,3) +
+                            String("->") + String::num(s2,3) + String(",") + String::num(t2,3) +
+                            String(" texWH=") + String::num(tw,0) + String("x") + String::num(th,0) +
+                            String(" src=") + String::num(src.position.x,1) + String(",") + String::num(src.position.y,1) +
+                            String(" ") + String::num(src.size.x,1) + String("x") + String::num(src.size.y,1) +
+                            String(" draw=") + String::num(draw_rect.position.x,1) + String(",") + String::num(draw_rect.position.y,1) +
+                            String(" ") + String::num(draw_rect.size.x,1) + String("x") + String::num(draw_rect.size.y,1) +
+                            String(" needs_tiling=") + String(needs_tiling ? "YES" : "NO"));
+                    }
+                }
 
                 if (needs_tiling && tw > 0.0f && th > 0.0f &&
                     draw_rect.size.x > 0.0f && draw_rect.size.y > 0.0f) {
@@ -4965,79 +3994,7 @@ void MoHAARunner::update_2d_overlay() {
                         out_y += row_h;
                     }
                 } else {
-                    // Targeted diagnostic for map preview shader
-                    if (sname && strstr(sname, "mohdm")) {
-                        static int mohdm_log_count = 0;
-                        if (mohdm_log_count < 5) {
-                            mohdm_log_count++;
-                            UtilityFunctions::print(String("[MAP-PREVIEW] shader='") + String(sname) +
-                                String("' raw=(") + String::num(x,1) + String(",") + String::num(y,1) +
-                                String(",") + String::num(w,1) + String(",") + String::num(h,1) +
-                                String(") rect=(") + String::num(rect.position.x,1) + String(",") +
-                                String::num(rect.position.y,1) + String(",") + String::num(rect.size.x,1) +
-                                String(",") + String::num(rect.size.y,1) +
-                                String(") draw=(") + String::num(draw_rect.position.x,1) + String(",") +
-                                String::num(draw_rect.position.y,1) + String(",") + String::num(draw_rect.size.x,1) +
-                                String(",") + String::num(draw_rect.size.y,1) +
-                                String(") src=(") + String::num(src.position.x,1) + String(",") +
-                                String::num(src.position.y,1) + String(",") + String::num(src.size.x,1) +
-                                String(",") + String::num(src.size.y,1) +
-                                String(") scissor=") + String(scissor_enabled ? "ON" : "OFF") +
-                                String(" scis_rect=(") + String::num(scissor_rect.position.x,1) + String(",") +
-                                String::num(scissor_rect.position.y,1) + String(",") + String::num(scissor_rect.size.x,1) +
-                                String(",") + String::num(scissor_rect.size.y,1) +
-                                String(") col=(") + String::num(draw_col.r,3) + String(",") +
-                                String::num(draw_col.g,3) + String(",") + String::num(draw_col.b,3) +
-                                String(",") + String::num(draw_col.a,3) +
-                                String(") blend=") + String::num(draw_blend) +
-                                String(" tex=") + String::num(tw,0) + String("x") + String::num(th,0) +
-                                String(" uv=") + String::num(s1,3) + String(",") + String::num(t1,3) +
-                                String("->") + String::num(s2,3) + String(",") + String::num(t2,3) +
-                                String(" scale=") + String::num(ui_scale_x,4) + String(",") + String::num(ui_scale_y,4));
-                        }
-                    }
-                    // Flipped UVs (s1>s2 or t1>t2) need explicit UV
-                    // mapping — canvas_item_add_texture_rect_region does
-                    // not flip with negative src dimensions.  Use a
-                    // textured polygon with per-vertex UVs for full control.
-                    bool need_flip = (src.size.x < 0.0f || src.size.y < 0.0f);
-                    if (!need_flip) {
-                        rs->canvas_item_add_texture_rect_region(target_ci, draw_rect, tex_rid, src, draw_col, false, false);
-                    } else {
-                        // Build quad as 2-triangle polygon with explicit UVs.
-                        // The raw s1/t1/s2/t2 already encode the flip direction.
-                        float dx = draw_rect.position.x;
-                        float dy = draw_rect.position.y;
-                        float dw = draw_rect.size.x;
-                        float dh = draw_rect.size.y;
-
-                        PackedVector2Array pts;
-                        PackedVector2Array fuv;
-                        PackedColorArray   cols;
-                        PackedInt32Array   idx;
-
-                        pts.resize(4);
-                        fuv.resize(4);
-                        cols.resize(4);
-                        idx.resize(6);
-
-                        pts[0] = Vector2(dx,      dy);
-                        pts[1] = Vector2(dx + dw,  dy);
-                        pts[2] = Vector2(dx + dw,  dy + dh);
-                        pts[3] = Vector2(dx,       dy + dh);
-
-                        fuv[0] = Vector2(s1, t1);
-                        fuv[1] = Vector2(s2, t1);
-                        fuv[2] = Vector2(s2, t2);
-                        fuv[3] = Vector2(s1, t2);
-
-                        cols[0] = cols[1] = cols[2] = cols[3] = draw_col;
-
-                        idx[0] = 0; idx[1] = 1; idx[2] = 2;
-                        idx[3] = 0; idx[4] = 2; idx[5] = 3;
-
-                        rs->canvas_item_add_triangle_array(target_ci, idx, pts, cols, fuv, PackedInt32Array(), PackedFloat32Array(), tex_rid, -1);
-                    }
+                    rs->canvas_item_add_texture_rect_region(target_ci, draw_rect, tex_rid, src, draw_col);
                 }
                 saw_textured_draw = true;
             }
@@ -5046,99 +4003,7 @@ void MoHAARunner::update_2d_overlay() {
             // StretchPic with no shader — draw unless it's a large opaque fill
             // that would cover the 3D view when in-game with no overlay.
             if (allow_fullscreen_fills || w * h < vid_area * 0.5f || color[3] < 0.9f) {
-                RID noshader_ci = get_segment_ci(BLEND_MIX);
-                rs->canvas_item_add_rect(noshader_ci, draw_rect, col);
-            }
-        } else if (type == 3 && shader > 0) {
-            // GR_2D_TRIANGLE — textured triangle (compass, needle, circle, spinner)
-            float tri_verts[6], tri_uvs[6];
-            if (Godot_Renderer_Get2DCmdTriVerts(i, tri_verts, tri_uvs)) {
-                Ref<ImageTexture> tex = get_shader_texture(shader);
-                if (tex.is_valid()) {
-                    // Transform triangle vertices from engine coords to viewport
-                    PackedVector2Array points;
-                    PackedVector2Array uvs;
-                    PackedColorArray colors_arr;
-                    points.resize(3);
-                    uvs.resize(3);
-                    colors_arr.resize(3);
-
-                    Color draw_col = col;
-                    // Apply shader stage rgbGen/alphaGen like STRETCHPIC
-                    const char *sname = Godot_Renderer_GetShaderName(shader);
-                    if (sname && sname[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
-                        if (sp && sp->stage_count > 0) {
-                            for (int st = 0; st < sp->stage_count; st++) {
-                                if (!sp->stages[st].active) continue;
-                                if (sp->stages[st].isLightmap) continue;
-                                const MohaaShaderStage *stg = &sp->stages[st];
-                                if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
-                                    draw_col.r = draw_col.g = draw_col.b = 1.0f;
-                                } else if (stg->rgbGen == STAGE_RGBGEN_CONST) {
-                                    draw_col.r = stg->rgbConst[0];
-                                    draw_col.g = stg->rgbConst[1];
-                                    draw_col.b = stg->rgbConst[2];
-                                }
-                                if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
-                                    draw_col.a = 1.0f;
-                                } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
-                                    draw_col.a = stg->alphaConst;
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    if (draw_col.a < 0.001f) continue;
-
-                    for (int v = 0; v < 3; v++) {
-                        float vx = ui_offset_x + tri_verts[v*2+0] * ui_scale_x;
-                        float vy = ui_offset_y + tri_verts[v*2+1] * ui_scale_y;
-                        points.set(v, Vector2(vx, vy));
-                        uvs.set(v, Vector2(tri_uvs[v*2+0], tri_uvs[v*2+1]));
-                        colors_arr.set(v, draw_col);
-                    }
-
-                    // Choose blend mode based on shader transparency
-                    int draw_blend = BLEND_MIX;
-                    if (sname && sname[0]) {
-                        const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
-                        if (sp2) {
-                            if (sp2->transparency == SHADER_MULTIPLICATIVE) {
-                                draw_blend = BLEND_MUL;
-                            } else if (sp2->transparency == SHADER_MULTIPLICATIVE_INV) {
-                                draw_blend = BLEND_MUL_INV;
-                            } else if (sp2->transparency == SHADER_ADDITIVE) {
-                                draw_blend = BLEND_ADD;
-                            } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
-                                draw_blend = BLEND_ALPHA_INV;
-                            } else if (sp2->transparency == SHADER_OPAQUE) {
-                                /* UI hover fix: use BLEND_MIX to properly resolve texture alpha */
-                                draw_blend = BLEND_MIX;
-                                if (sp2->stage_count > 1) {
-                                    for (int st = 0; st < sp2->stage_count; st++) {
-                                        if (sp2->stages[st].isLightmap) continue;
-                                        const char *sm = sp2->stages[st].map;
-                                        if (!sm[0]) continue;
-                                        if (strcmp(sm, "$lightmap") == 0) continue;
-                                        if (strcmp(sm, "$whiteimage") == 0) continue;
-                                        if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
-                                            sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
-                                            draw_blend = BLEND_ALPHA_INV;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    RID target_ci = get_segment_ci(draw_blend);
-
-                    RID tex_rid = tex->get_rid();
-                    rs->canvas_item_add_polygon(target_ci, points, colors_arr, uvs, tex_rid);
-                    saw_textured_draw = true;
-                }
+                rs->canvas_item_add_rect(ci, draw_rect, col);
             }
         }
     }
@@ -5160,8 +4025,7 @@ void MoHAARunner::update_2d_overlay() {
                     ui_offset_y + rect[1] * ui_scale_y,
                     rect[2] * ui_scale_x,
                     rect[3] * ui_scale_y);
-                RID hm_ci2 = get_segment_ci(BLEND_MIX);
-                rs->canvas_item_add_texture_rect(hm_ci2, screen_rect, vp_tex->get_rid());
+                rs->canvas_item_add_texture_rect(ci, screen_rect, vp_tex->get_rid());
             }
         }
         next_hud_model++;
@@ -5231,7 +4095,8 @@ void MoHAARunner::setup_audio() {
     // ── Phase 45: Initialise ubersound alias system ──
 #ifdef HAS_UBERSOUND_MODULE
     Godot_Ubersound_Init();
-    UtilityFunctions::print("[MoHAA] Ubersound accessor ready (aliases loaded by cgame at map load).");
+    UtilityFunctions::print(String("[MoHAA] Ubersound initialised: ") +
+                            String::num_int64(Godot_Ubersound_GetAliasCount()) + " aliases.");
 #endif
 
     // ── Phase 48: Enable sound occlusion ──
@@ -5420,33 +4285,6 @@ Ref<AudioStream> MoHAARunner::load_wav_from_vfs(int sfxHandle) {
     sfx_cache[sfxHandle] = wav;
 
     return wav;
-}
-
-/* ===================================================================
- *  Scoreboard overlay — previously rendered a custom layer at z=150.
- *
- *  The engine's own UI widget system (UIListCtrl + .urc menu widgets)
- *  already renders the complete scoreboard (DM_Scoreboard.urc etc.)
- *  through the 2D command buffer captured by update_2d_overlay() at
- *  layer 100.  Drawing a second copy on top at layer 150 causes the
- *  "washed out" / double-draw artefact visible as ghost text and
- *  excessive transparency.
- *
- *  The Godot_SB_* capture buffer still collects scoreboard data for
- *  potential future use (custom HUD, debug, etc.) but no custom
- *  rendering is performed here.
- * =================================================================== */
-
-void MoHAARunner::update_scoreboard() {
-    /* No custom rendering — the engine's .urc UI handles everything
-     * through the 2D overlay system (update_2d_overlay at layer 100).
-     * Hide any previously-created custom scoreboard layer. */
-    bool show = Godot_SB_IsVisible() || scoreboard_visible;
-
-    (void)show;
-    if (scoreboard_layer) {
-        scoreboard_layer->set_visible(false);
-    }
 }
 
 /* ===================================================================
@@ -5693,11 +4531,11 @@ void MoHAARunner::update_hud_models() {
                             gUVs.set(v, Vector2(texcoords[v*2+0], texcoords[v*2+1]));
                         }
 
-                        /* Indices as-is — det(id_to_godot_point) = +1, winding preserved */
+                        /* Reverse winding (id CW → Godot CCW) */
                         for (int t = 0; t < numTris; t++) {
                             gIdx.set(t*3+0, indices[t*3+0]);
-                            gIdx.set(t*3+1, indices[t*3+1]);
-                            gIdx.set(t*3+2, indices[t*3+2]);
+                            gIdx.set(t*3+1, indices[t*3+2]);
+                            gIdx.set(t*3+2, indices[t*3+1]);
                         }
 
                         Array arrays;
@@ -6220,49 +5058,18 @@ void MoHAARunner::_process(double delta) {
         return;
     }
 
-    // ── Pre-frame mouse injection (web only) ──────────────────────────────────
-    // MUST happen BEFORE Com_Frame() so that UI_Update() → ServiceEvents() sees
-    // the correct cl.mousex/cl.mousey and cl.mouseButtons this frame.
-    // We check the CURRENT keyCatcher state (not the cached value) so that the
-    // very first frame after a menu opens is handled correctly.
-    // SyncGuiMouseToOverlayState() first ensures in_guimouse matches keyCatchers.
-#ifdef __EMSCRIPTEN__
-    {
-        Godot_Client_SyncGuiMouseToOverlayState();
-        bool pre_overlay = Godot_Client_IsAnyOverlayActive() != 0;
-        // Also include in_guimouse in case it was set by a non-keycatcher path
-        if (!pre_overlay) pre_overlay = (Godot_Client_GetGuiMouse() != 0);
-        // Fall back to prev-frame value for the very first overlay frame
-        if (!pre_overlay) pre_overlay = overlay_prev_frame;
-        poll_mouse_input_web(pre_overlay);
-    }
-#endif
-
     Com_Frame();
     godot_jmpbuf_valid = false;
 
-    bool overlay_active_now = false;
-
-    // ── Cursor management: read engine overlay state to set Godot cursor mode ──
+    // ── Cursor management: read engine's in_guimouse to set Godot cursor mode ──
     // The engine manages in_guimouse internally via IN_MouseOn()/IN_MouseOff()
     // when menus open/close (UI_FocusMenuIfExists, UI_MenuEscape, etc.).
     // We simply mirror that state to Godot's cursor mode.
     // This is the ONLY place that sets mouse_captured / Godot mouse mode.
     // Placed AFTER Com_Frame() so state changes during the frame are immediate.
     {
-        // Ensure in_guimouse tracks overlay keycatchers (UI/console/message)
-        // on platforms where it can become stale.
-        Godot_Client_SyncGuiMouseToOverlayState();
-
-        bool overlay_active = Godot_Client_IsAnyOverlayActive() != 0;
-        overlay_active_now = overlay_active;
-        overlay_prev_frame = overlay_active;  // save for next frame's pre-frame poll
         bool engine_wants_gui = Godot_Client_GetGuiMouse() != 0;
-        bool should_capture = !(overlay_active || engine_wants_gui);
-        // Unified mouse-capture logic for ALL platforms (including web).
-        // On web, Godot's JS layer defers requestPointerLock() to the next
-        // user gesture (click) when MOUSE_MODE_CAPTURED is set.  This is safe
-        // to call from _process() — it stores intent, not an immediate lock.
+        bool should_capture = !engine_wants_gui;
         if (should_capture != mouse_captured) {
             mouse_captured = should_capture;
             Input *input = Input::get_singleton();
@@ -6275,25 +5082,7 @@ void MoHAARunner::_process(double delta) {
             }
             Godot_ResetMousePosition();
         }
-#ifdef __EMSCRIPTEN__
-        // On web, the browser can release pointer lock asynchronously
-        // (Escape key, Alt-Tab, focus loss).  When that happens the actual
-        // mouse mode reverts to VISIBLE even though mouse_captured is true.
-        // Re-assert CAPTURED so Godot's JS layer will re-lock on the next
-        // user click.  This is cheap (just stores intent, no DOM call).
-        else if (mouse_captured) {
-            Input *input = Input::get_singleton();
-            if (input && input->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
-                input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
-            }
-        }
-#endif
     }
-
-    // Post-frame poll: keeps button transition state in sync for events that
-    // arrive between frames (e.g. from Godot's input system on non-web builds).
-    // On web this is a no-op duplicate that ensures any lingering state is clean.
-    poll_mouse_input_web(overlay_active_now);
 
     // ── Phase 149: Apply engine cvar settings to Godot systems ──
     // Audio volume: read s_volume / s_musicvolume and apply to Godot AudioServer bus
@@ -6316,66 +5105,17 @@ void MoHAARunner::_process(double delta) {
         Godot_Music_SetVolume(music_vol);
     }
 
-    // Gamma: replicate GLimp_SetGamma hardware gamma ramp.
-    // The real renderer applies pow(color, 1/gamma) to the entire display via
-    // SDL_SetWindowGammaRamp.  We use a full-screen CanvasLayer with a
-    // SCREEN_TEXTURE shader to achieve the same effect on both 3D and 2D.
-    {
-        float gamma = Cvar_VariableValue("r_gamma");
-        if (gamma < 0.5f) gamma = 0.5f;
-        if (gamma > 3.0f) gamma = 3.0f;
-
-        // Create overlay on first use
-        if (!gamma_canvas_layer && gamma != 1.0f) {
-            gamma_shader.instantiate();
-            gamma_shader->set_code(
-                "shader_type canvas_item;\n"
-                "uniform float gamma_inv : hint_range(0.1, 2.0) = 1.0;\n"
-                "uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;\n"
-                "void fragment() {\n"
-                "    vec3 col = textureLod(screen_tex, SCREEN_UV, 0.0).rgb;\n"
-                "    COLOR = vec4(pow(col, vec3(gamma_inv)), 1.0);\n"
-                "}\n"
-            );
-            gamma_material.instantiate();
-            gamma_material->set_shader(gamma_shader);
-            gamma_material->set_shader_parameter("gamma_inv", 1.0f / gamma);
-
-            gamma_canvas_layer = memnew(CanvasLayer);
-            gamma_canvas_layer->set_layer(200);
-            gamma_canvas_layer->set_name("GammaOverlay");
-            add_child(gamma_canvas_layer);
-
-            gamma_color_rect = memnew(ColorRect);
-            gamma_color_rect->set_name("GammaRect");
-            gamma_color_rect->set_anchors_preset(Control::PRESET_FULL_RECT);
-            gamma_color_rect->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
-            gamma_color_rect->set_material(gamma_material);
-            gamma_canvas_layer->add_child(gamma_color_rect);
-
-            gamma_current = gamma;
-        }
-
-        // Update gamma uniform when value changes
-        if (gamma_canvas_layer) {
-            if (gamma == 1.0f) {
-                gamma_canvas_layer->set_visible(false);
-            } else {
-                gamma_canvas_layer->set_visible(true);
-                if (gamma != gamma_current) {
-                    gamma_material->set_shader_parameter("gamma_inv", 1.0f / gamma);
-                    gamma_current = gamma;
-                }
-            }
-        }
-
-        // BSP materials are now unshaded (lightmap is sole illumination),
-        // so no Environment brightness compensation is needed.  Disable
-        // adjustment to avoid dimming the correctly-lit scene.
-        if (world_env) {
-            Ref<Environment> env = world_env->get_environment();
-            if (env.is_valid()) {
-                env->set_adjustment_enabled(false);
+    // Gamma: read r_gamma and apply brightness adjustment to environment
+    if (world_env) {
+        Ref<Environment> env = world_env->get_environment();
+        if (env.is_valid()) {
+            float gamma = Cvar_VariableValue("r_gamma");
+            if (gamma < 0.5f) gamma = 0.5f;
+            if (gamma > 3.0f) gamma = 3.0f;
+            // Map gamma to brightness: gamma 1.0 = no change, higher = brighter
+            env->set_adjustment_enabled(gamma != 1.0f);
+            if (gamma != 1.0f) {
+                env->set_adjustment_brightness(gamma);
             }
         }
     }
@@ -6401,16 +5141,8 @@ void MoHAARunner::_process(double delta) {
             /* Renderer shader/model tables are rebuilt on vid_restart.
                Drop handle-keyed caches so 2D/UI textures are re-resolved. */
             shader_textures.clear();
-            s_shader_texture_loaded_names.clear();
             animmap_info.clear();
             animmap_frames.clear();
-            s_surf_anim_cache.clear();
-            s_sprite_mat_cache.clear();
-            s_beam_mat_cache.clear();
-            s_poly_mat_cache.clear();
-            s_terrain_mark_mat_cache.clear();
-            s_sprite_tint_cache.clear();
-            s_beam_tint_cache.clear();
 
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
@@ -6508,14 +5240,16 @@ void MoHAARunner::_process(double delta) {
     // ── Update 2D HUD overlay from captured draw commands (Phase 7h) ──
     update_2d_overlay();
 
-    // ── Update scoreboard overlay (TAB key) ──
-    update_scoreboard();
-
     // ── Update HUD model previews (Phase 148) ──
     update_hud_models();
 
     // ── Update audio from captured sound events (Phase 8) ──
     update_audio(delta);
+
+    // ── Phase 47: Update speaker entity sounds ──
+#ifdef HAS_SPEAKER_ENTITIES_MODULE
+    Godot_Speakers_Update((float)delta);
+#endif
 
     // ── Update cinematic video display (Phase 11) ──
     update_cinematic();
@@ -6585,16 +5319,6 @@ void MoHAARunner::_process(double delta) {
                 String(" mousePos=(") + String::num_int64(mx) + String(",") + String::num_int64(my) + String(")"));
 
             emit_signal("map_loaded", cur_map);
-
-            // The loading screen menu may still be active (waiting for
-            // a "continue" button click).  Dismiss it automatically so
-            // the 3D view is visible.  "finishloadingscreen" is the
-            // engine's own command (UI_FinishLoadingScreen_f) — it calls
-            // UI_ForceMenuOff(true), clears loading state, and unpauses.
-            if (Godot_Client_IsMenuUp()) {
-                UtilityFunctions::print("[MoHAA] Dismissing loading screen after map load.");
-                Cbuf_AddText("finishloadingscreen\n");
-            }
         }
         
         // Detect map unloaded: was in SS_GAME, now not
@@ -6665,15 +5389,6 @@ godot::String MoHAARunner::get_server_state_string() const {
         case 3: return "game";
         default: return "unknown";
     }
-}
-
-godot::String MoHAARunner::get_cvar_string(const godot::String &p_name) const {
-    if (!initialized) return "";
-    godot::CharString name = p_name.utf8();
-    char buffer[1024];
-    buffer[0] = '\0';
-    Cvar_VariableStringBuffer(name.get_data(), buffer, (int)sizeof(buffer));
-    return godot::String(buffer);
 }
 
 // ──────────────────────────────────────────────
@@ -6799,51 +5514,6 @@ bool MoHAARunner::is_hud_visible() const {
 void MoHAARunner::update_input_routing() {
     // Intentionally empty — cursor sync is handled at top of _process()
     // by reading Godot_Client_GetGuiMouse().
-}
-
-void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
-#ifdef __EMSCRIPTEN__
-    Viewport *vp = get_viewport();
-    if (!vp) {
-        return;
-    }
-
-    Vector2 pos = vp->get_mouse_position();
-
-    if (!mouse_poll_initialised) {
-        mouse_poll_prev_pos = pos;
-        for (int b = 0; b < 10; b++) {
-            mouse_poll_prev_buttons[b] = false;
-        }
-        mouse_poll_initialised = true;
-    }
-
-    // ALWAYS update position when in_guimouse is true (reliable check
-    // that bypasses any stale overlay_active parameter).
-    int gui_mouse_active = Godot_Client_GetGuiMouse();
-    bool should_poll = overlay_active || (gui_mouse_active != 0);
-
-    if (should_poll) {
-        update_ui_transform();
-        float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
-        float sy = (ui_scale_y > 0.0001f) ? ui_scale_y : 1.0f;
-        int ex = (int)((pos.x - ui_offset_x) / sx);
-        int ey = (int)((pos.y - ui_offset_y) / sy);
-        if (ex < 0) ex = 0;
-        if (ey < 0) ey = 0;
-        if (ex >= ui_vid_w) ex = ui_vid_w - 1;
-        if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-        Godot_Client_SetMousePos(ex, ey);
-    } else {
-        for (int b = 0; b < 10; b++) {
-            mouse_poll_prev_buttons[b] = false;
-        }
-    }
-
-    mouse_poll_prev_pos = pos;
-#else
-    (void)overlay_active;
-#endif
 }
 
 // ──────────────────────────────────────────────
@@ -7237,10 +5907,27 @@ void MoHAARunner::set_shadow_quality(int level) {
     level = (level < 0) ? 0 : (level > 3) ? 3 : level;
     shadow_quality = level;
 
-    // No sun_light exists — OpenMOHAA uses baked shadows only.
-    // Keep the atlas size setting for potential future use.
+    // Godot-side: configure sun shadow mode and atlas size
+    if (sun_light) {
+        if (level == 0) {
+            // Off — disable shadow casting
+            sun_light->set_shadow(false);
+        } else {
+            sun_light->set_shadow(true);
+            if (level == 1) {
+                sun_light->set_shadow_mode(DirectionalLight3D::SHADOW_ORTHOGONAL);
+            } else if (level == 2) {
+                sun_light->set_shadow_mode(DirectionalLight3D::SHADOW_PARALLEL_2_SPLITS);
+            } else {
+                sun_light->set_shadow_mode(DirectionalLight3D::SHADOW_PARALLEL_4_SPLITS);
+            }
+        }
+    }
+
+    // Godot-side: shadow atlas size via RenderingServer
     RenderingServer *rs = RenderingServer::get_singleton();
     if (rs) {
+        // 512 / 1024 / 2048 / 4096 for off/low/medium/high
         int atlas_sizes[] = { 512, 1024, 2048, 4096 };
         rs->directional_shadow_atlas_set_size(atlas_sizes[level], level < 2);
     }
@@ -7427,96 +6114,8 @@ bool MoHAARunner::is_menu_active() const {
     return Godot_UI_IsMenuActive() != 0;
 }
 
-void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
-    if (!initialized) return;
-
-    // Keep UI transform current for accurate viewport→engine cursor mapping.
-    update_ui_transform();
-
-    bool overlay_active = (Godot_Client_IsAnyOverlayActive() != 0) ||
-                          (Godot_Client_GetGuiMouse() != 0);
-
-    // ── Mouse motion ──
-    InputEventMouseMotion *motion_event = Object::cast_to<InputEventMouseMotion>(p_event.ptr());
-    if (motion_event) {
-        if (!overlay_active) {
-            Vector2 rel = motion_event->get_relative();
-            Godot_InjectMouseMotion((int)rel.x, (int)rel.y);
-        } else {
-            Vector2 pos = motion_event->get_position();
-            float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
-            float sy = (ui_scale_y > 0.0001f) ? ui_scale_y : 1.0f;
-            int ex = (int)((pos.x - ui_offset_x) / sx);
-            int ey = (int)((pos.y - ui_offset_y) / sy);
-            if (ex < 0) ex = 0;
-            if (ey < 0) ey = 0;
-            if (ex >= ui_vid_w) ex = ui_vid_w - 1;
-            if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-            Godot_Client_SetMousePos(ex, ey);
-        }
-
-        Viewport *vp = get_viewport();
-        if (vp) vp->set_input_as_handled();
-        return;
-    }
-
-    // ── Mouse buttons ──
-    InputEventMouseButton *button_event = Object::cast_to<InputEventMouseButton>(p_event.ptr());
-    if (button_event) {
-        int godot_button = (int)button_event->get_button_index();
-        bool pressed = button_event->is_pressed();
-
-        if (overlay_active) {
-            Vector2 pos = button_event->get_position();
-            float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
-            float sy = (ui_scale_y > 0.0001f) ? ui_scale_y : 1.0f;
-            int ex = (int)((pos.x - ui_offset_x) / sx);
-            int ey = (int)((pos.y - ui_offset_y) / sy);
-            if (ex < 0) ex = 0;
-            if (ey < 0) ey = 0;
-            if (ex >= ui_vid_w) ex = ui_vid_w - 1;
-            if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-            Godot_Client_SetMousePos(ex, ey);
-        }
-
-        if (godot_button >= 1 && godot_button <= 3) {
-            Godot_InjectMouseButton(godot_button, pressed ? 1 : 0);
-        } else if (godot_button == 8 || godot_button == 9) {
-            Godot_InjectMouseButton(godot_button, pressed ? 1 : 0);
-        } else if (godot_button >= 4 && godot_button <= 5) {
-            if (pressed) {
-                Godot_InjectMouseButton(godot_button, 1);
-                Godot_InjectMouseButton(godot_button, 0);
-            }
-        }
-
-#ifdef __EMSCRIPTEN__
-        // On web, pointer lock requires a user gesture (click/keydown).
-        // _input() runs inside the browser's DOM event handler, which is the
-        // only context where requestPointerLock() is allowed.  If we want
-        // capture but the browser doesn't have it yet, re-assert the mode
-        // NOW — inside the gesture context — so the lock actually activates.
-        if (pressed && !overlay_active) {
-            Input *inp = Input::get_singleton();
-            if (inp && inp->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
-                inp->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
-                mouse_captured = true;
-            }
-        }
-#endif
-
-        Viewport *vp = get_viewport();
-        if (vp) vp->set_input_as_handled();
-        return;
-    }
-}
-
 void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
     if (!initialized) return;
-
-    // Keep UI transform current for accurate viewport→engine cursor mapping,
-    // especially on web where canvas/layout scale can change dynamically.
-    update_ui_transform();
 
     // ── Keyboard events ──
     InputEventKey *key_event = Object::cast_to<InputEventKey>(p_event.ptr());
@@ -7663,13 +6262,6 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
             return;
         }
 
-        // TAB — track held state for Godot-side scoreboard overlay.
-        // The key event still flows through to the engine below so the
-        // engine's own +scores binding (if present) also fires.
-        if (!echo && key_event->get_keycode() == Key::KEY_TAB) {
-            scoreboard_visible = pressed;
-        }
-
         // Get the keycode (logical key, respects keyboard layout)
         int godot_key = (int)key_event->get_keycode();
         if (godot_key == 0) {
@@ -7703,6 +6295,56 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
         return;
     }
 
-    // Mouse events are handled in _input() so UI hover/click still works even
-    // when controls consume input before the unhandled phase.
+    // ── Mouse motion ──
+    InputEventMouseMotion *motion_event = Object::cast_to<InputEventMouseMotion>(p_event.ptr());
+    if (motion_event) {
+        if (mouse_captured) {
+            // Game mode (in_guimouse == false): forward relative motion.
+            // The engine's CL_MouseEvent stores deltas in cl.mouseDx/Dy
+            // which CL_MouseMove uses for freelook view rotation.
+            Vector2 rel = motion_event->get_relative();
+            Godot_InjectMouseMotion((int)rel.x, (int)rel.y);
+        } else {
+            // UI/menu mode (in_guimouse == true): the engine's CL_MouseEvent
+            // accumulates SE_MOUSE deltas into cl.mousex/mousey when
+            // in_guimouse is set.  However, Godot provides absolute cursor
+            // coordinates and the delta-based accumulation drifts.  Instead,
+            // we set the engine cursor position directly from the Godot
+            // viewport position mapped to engine's 640×480 virtual space.
+            Vector2 pos = motion_event->get_position();
+            int ex = (int)((pos.x - ui_offset_x) / ui_scale_x);
+            int ey = (int)((pos.y - ui_offset_y) / ui_scale_y);
+            if (ex < 0) ex = 0;
+            if (ey < 0) ey = 0;
+            if (ex >= ui_vid_w) ex = ui_vid_w - 1;
+            if (ey >= ui_vid_h) ey = ui_vid_h - 1;
+            Godot_Client_SetMousePos(ex, ey);
+        }
+        return;
+    }
+
+    // ── Mouse buttons ──
+    InputEventMouseButton *button_event = Object::cast_to<InputEventMouseButton>(p_event.ptr());
+    if (button_event) {
+        int godot_button = (int)button_event->get_button_index();
+        bool pressed = button_event->is_pressed();
+
+        // Always inject mouse buttons into the engine's event queue.
+        // CL_KeyEvent handles UI routing based on keyCatchers internally.
+        // In UI mode the engine tracks cl.mouseButtons for hit testing.
+        if (godot_button >= 1 && godot_button <= 3) {
+            Godot_InjectMouseButton(godot_button, pressed ? 1 : 0);
+        } else if (godot_button == 8 || godot_button == 9) {
+            Godot_InjectMouseButton(godot_button, pressed ? 1 : 0);
+        } else if (godot_button >= 4 && godot_button <= 5) {
+            // Wheel events: Godot only fires pressed=true, engine expects
+            // both press and release.
+            if (pressed) {
+                Godot_InjectMouseButton(godot_button, 1);
+                Godot_InjectMouseButton(godot_button, 0);
+            }
+        }
+
+        return;
+    }
 }

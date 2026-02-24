@@ -312,6 +312,9 @@ private:
     struct TikiMatSet {
         std::vector<Ref<StandardMaterial3D>> mats;
         std::vector<int> flat_surf_idx; // TIKI flat surface index per godot surface slot
+        /* TIKI pointer at build time — used to detect stale entries when a
+         * model slot is recycled (GR_MOD_BAD reuse). */
+        void *tiki_ptr = nullptr;
     };
     std::unordered_map<int, TikiMatSet> tiki_mat_cache;
 
