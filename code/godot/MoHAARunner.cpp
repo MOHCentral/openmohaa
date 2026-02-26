@@ -337,6 +337,18 @@ extern "C" {
 }
 
 // ──────────────────────────────────────────────
+//  Global runner instance (for free-function wrappers)
+// ──────────────────────────────────────────────
+static MoHAARunner *s_mohaa_runner_instance = nullptr;
+
+godot::Ref<godot::ImageTexture> Godot_GetShaderTexture(int shader_handle) {
+    if (s_mohaa_runner_instance) {
+        return s_mohaa_runner_instance->get_shader_texture(shader_handle);
+    }
+    return godot::Ref<godot::ImageTexture>();
+}
+
+// ──────────────────────────────────────────────
 //  Error / quit interception (Task 2.5.2)
 // ──────────────────────────────────────────────
 
@@ -1034,7 +1046,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
     if (sp->no_lightmap) {
         mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
     }
-    
+
     // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
     if (sp->has_deform) {
         if (sp->deform_type == 3) { // autosprite
@@ -1750,7 +1762,7 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // 
+        //
         if (renderfx & 0x80) {  // RF_DONTDRAW
             mi->set_visible(false);
             continue;
@@ -2206,7 +2218,7 @@ void MoHAARunner::update_entities() {
         bool has_light_tint = fabsf(light_mul.r - 1.0f) > 0.02f ||
                               fabsf(light_mul.g - 1.0f) > 0.02f ||
                               fabsf(light_mul.b - 1.0f) > 0.02f;
-        
+
         // Phase 134: Check if we need per-surface shader analysis for rgbGen/alphaGen entity
         bool needs_material_update = has_light_tint;
         if (!needs_material_update) {
@@ -2214,7 +2226,7 @@ void MoHAARunner::update_entities() {
             bool has_shader_rgba = (rgba[0] != 255 || rgba[1] != 255 || rgba[2] != 255 || rgba[3] < 255 || (renderfx & 0x0400));
             needs_material_update = has_shader_rgba;
         }
-        
+
         if (needs_material_update) {
             Ref<Mesh> mesh = mi->get_mesh();
             if (mesh.is_valid()) {
@@ -2250,7 +2262,7 @@ void MoHAARunner::update_entities() {
                     bool apply_rgb_one_minus_entity = false;
                     bool apply_alpha_entity = false;
                     bool apply_alpha_one_minus_entity = false;
-                    
+
                     if (sp && sp->stage_count > 0) {
                         // Find first non-lightmap stage (same logic as get_shader_texture)
                         for (int st = 0; st < sp->stage_count; st++) {
@@ -2349,7 +2361,7 @@ void MoHAARunner::update_entities() {
                         if (entity_tint.a < 0.999f || (apply_alpha_entity && rgba[3] < 255)) {
                             dup->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                         }
-                        
+
                         // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
                         if (sp && sp->has_deform) {
                             if (sp->deform_type == 3) { // autosprite
@@ -2358,7 +2370,7 @@ void MoHAARunner::update_entities() {
                                 dup->set_billboard_mode(BaseMaterial3D::BILLBOARD_FIXED_Y);
                             }
                         }
-                        
+
                         tinted_mat_cache[tint_key] = dup;
                         mi->set_surface_override_material(s, dup);
                     }
@@ -2598,7 +2610,7 @@ void MoHAARunner::update_polys() {
         if (hShader > 0) {
             const char *sn = Godot_Renderer_GetShaderName(hShader);
             Ref<ImageTexture> tex = get_shader_texture(hShader);
-            
+
             // Particle effect fallback: if shader name suggests particle/tracer/beam
             // but texture load failed, use white albedo + additive blending
             bool is_particle_effect = false;
@@ -2615,7 +2627,7 @@ void MoHAARunner::update_polys() {
                     }
                 }
             }
-            
+
             if (tex.is_valid()) {
                 mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
             } else if (is_particle_effect) {
@@ -2629,7 +2641,7 @@ void MoHAARunner::update_polys() {
                     logged_fallbacks.insert(sn);
                 }
             }
-            
+
             // Apply shader properties (additive blending, alpha, etc.)
             if (sn && sn[0]) {
                 apply_shader_props_to_material(mat, sn);
@@ -3484,24 +3496,24 @@ void MoHAARunner::update_ui_transform() {
     Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
     if (ui_vid_w < 1) ui_vid_w = 640;
     if (ui_vid_h < 1) ui_vid_h = 480;
-    
+
     // Get actual viewport size
     Vector2 viewport_size(0, 0);
     if (hud_control) {
         viewport_size = hud_control->get_size();
     }
-    
+
     // Fallback chain if Control hasn't been laid out yet
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
         Rect2 visible_rect = get_viewport()->get_visible_rect();
         viewport_size = visible_rect.size;
-        
+
         if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
             Vector2i win = DisplayServer::get_singleton()->window_get_size();
             viewport_size = Vector2(win);
         }
     }
-    
+
     // Non-uniform scaling — stretch 640×480 to fill the entire viewport.
     // This matches OPM behaviour: SCR_AdjustFrom640() scales X by
     // vidWidth/640 and Y by vidHeight/480 independently, so the HUD
@@ -4931,6 +4943,7 @@ void MoHAARunner::_ready() {
         return;
     }
 
+    s_mohaa_runner_instance = this;
     g_godot_ready = true;
 
     UtilityFunctions::print("[MoHAA] Initialising engine...");
@@ -5320,7 +5333,7 @@ void MoHAARunner::_process(double delta) {
 
             emit_signal("map_loaded", cur_map);
         }
-        
+
         // Detect map unloaded: was in SS_GAME, now not
         else if (last_server_state == 3 && cur_state != 3) {
             UtilityFunctions::print("[MoHAA] Map unloaded.");
@@ -6112,6 +6125,11 @@ void MoHAARunner::hide_menu(const String &menu_name) {
 bool MoHAARunner::is_menu_active() const {
     if (!initialized) return false;
     return Godot_UI_IsMenuActive() != 0;
+}
+
+void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
+    // All input is handled in _unhandled_input() — the engine's CL_KeyEvent
+    // routes events to UI/console/game internally based on keyCatchers.
 }
 
 void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {

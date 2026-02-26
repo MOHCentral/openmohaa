@@ -165,6 +165,18 @@ elif env["platform"] == "macos":
 elif env["platform"] == "web":
     env.Append(CPPDEFINES=["__EMSCRIPTEN__", "_LINUX", "__linux__"])
     env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
+    # godot-cpp injects -fno-exceptions and -sSUPPORT_LONGJMP='wasm' by
+    # default.  We need C++ throw/catch for the engine, so we must use
+    # -fexceptions (Emscripten JS-based EH via invoke_* wrappers).
+    # -fwasm-exceptions would import a __cpp_exception WebAssembly.Tag that
+    # Godot's main module doesn't provide (LinkError at instantiation).
+    # -fexceptions is INCOMPATIBLE with -sSUPPORT_LONGJMP='wasm' at the
+    # compiler level, so we must strip the wasm longjmp flag too and fall
+    # back to Emscripten's JS-based longjmp (invoke_* + __THREW__).
+    # The JS patches in build-web.sh provide emscripten_longjmp fallbacks.
+    env["CXXFLAGS"] = [f for f in env.get("CXXFLAGS", []) if str(f) != "-fno-exceptions"]
+    env["CCFLAGS"] = [f for f in env.get("CCFLAGS", []) if "-sSUPPORT_LONGJMP" not in str(f)]
+    env["LINKFLAGS"] = [f for f in env.get("LINKFLAGS", []) if "-sSUPPORT_LONGJMP" not in str(f)]
     env.Append(CXXFLAGS=["-fexceptions", "-frtti"])
 
 sources.extend(sys_sources)
@@ -321,12 +333,10 @@ if env["platform"] == "linux":
     # Bind template symbols locally within each .so to prevent ELF interposition
     env.Append(LINKFLAGS=["-Wl,-Bsymbolic-functions"])
 elif env["platform"] == "web":
-    env["CCFLAGS"] = [flag for flag in env.get("CCFLAGS", []) if "SUPPORT_LONGJMP='wasm'" not in str(flag)]
-    env["LINKFLAGS"] = [flag for flag in env.get("LINKFLAGS", []) if "SUPPORT_LONGJMP='wasm'" not in str(flag)]
-    env.Append(CCFLAGS=["-sSUPPORT_LONGJMP='emscripten'"])
-    env.Append(LINKFLAGS=["-sSUPPORT_LONGJMP='emscripten'"])
-    env.Append(LINKFLAGS=["-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=['$$emscripten_longjmp','$$emscripten_throw_longjmp']"])
-    env.Append(LINKFLAGS=["-sDISABLE_EXCEPTION_CATCHING=0"])
+    # Use Emscripten JS-based exception handling (invoke_* wrappers).
+    # -fwasm-exceptions would import __cpp_exception WebAssembly.Tag which
+    # Godot's main module does not provide.
+    env.Append(LINKFLAGS=["-fexceptions"])
     env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
     env.Append(CPPPATH=["code/thirdparty/zlib-1.3.1"])
     sources.extend([
@@ -452,7 +462,6 @@ elif env["platform"] == "web":
     ])
     cgame_env.Append(CXXFLAGS=[
         "-std=c++17", "-fexceptions", "-frtti",
-        "-sSUPPORT_LONGJMP=emscripten",
     ])
     # Replace SHLINKFLAGS entirely — we do NOT want SCons's default -shared
     # flag; emcc uses -sSIDE_MODULE instead.
@@ -461,8 +470,7 @@ elif env["platform"] == "web":
     cgame_env.Replace(SHLINKFLAGS=[
         "-sSIDE_MODULE=2",
         "-pthread",
-        "-sDISABLE_EXCEPTION_CATCHING=0",
-        "-sSUPPORT_LONGJMP=emscripten",
+        "-fexceptions",
         "-Wl,--allow-multiple-definition",
         "-sEXPORTED_FUNCTIONS=['_GetCGameAPI']",
     ])
