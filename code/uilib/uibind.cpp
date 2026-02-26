@@ -174,7 +174,7 @@ void UIBindButton::DrawUnpressed(void)
 
     str s = uWinMan.GetKeyStringForCommand(m_bindcommand, m_bindindex, m_alternate, NULL, NULL);
 
-    m_font->setColor(m_background_color);
+    m_font->setColor(m_foreground_color);
 
     if (str::cmp(s, m_last_keyname)) {
         m_mat = uWinMan.RegisterShader("textures/bind/" + s);

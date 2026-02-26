@@ -148,6 +148,18 @@ static bool needs_diffuse_lighting(const GodotShaderProps *props) {
     return false;
 }
 
+/* Returns true if any stage uses tcMod turb */
+static bool needs_turb(const GodotShaderProps *props) {
+    for (int i = 0; i < props->stage_count; i++) {
+        const MohaaShaderStage *s = &props->stages[i];
+        if (!s->active) continue;
+        for (int t = 0; t < s->tcModCount; t++) {
+            if (s->tcMods[t].type == TCMOD_TURB) return true;
+        }
+    }
+    return false;
+}
+
 /* ===================================================================
  *  Shader code generation
  * ================================================================ */
@@ -321,13 +333,15 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 code += "    uv" + si + " *= vec2(" + ftos(tm->params[0]) + ", " +
                         ftos(tm->params[1]) + ");\n";
                 break;
-            case TCMOD_TURB:
-                /* turb: params[0]=base, params[1]=amp, params[2]=phase, params[3]=freq */
-                code += "    uv" + si + " += vec2(sin(uv" + si + ".y * " + ftos(tm->params[3]) +
-                        " * 6.283185 + TIME * " + ftos(tm->params[3]) + ") * " + ftos(tm->params[1]) +
-                        ", sin(uv" + si + ".x * " + ftos(tm->params[3]) +
-                        " * 6.283185 + TIME * " + ftos(tm->params[3]) + ") * " + ftos(tm->params[1]) + ");\n";
+            case TCMOD_TURB: {
+                /* turb: params[0]=base, params[1]=amp, params[2]=phase, params[3]=freq
+                 * OpenMOHAA parity: turbulence uses vertex position for spatial offset.
+                 * Formula: uv += amp * sin((pos.xz + pos.y) * scale + (phase + time*freq) * 2PI)
+                 * matching id Tech 3's ModTexCoords. */
+                std::string now_expr = "(" + ftos(tm->params[2]) + " + TIME * " + ftos(tm->params[3]) + ") * 6.283185";
+                code += "    uv" + si + " += " + ftos(tm->params[1]) + " * sin(vec2(v_pos.x + v_pos.z, v_pos.y) * (6.283185 / 1024.0) + vec2(" + now_expr + "));\n";
                 break;
+            }
             case TCMOD_STRETCH: {
                 std::string stretch_val = wave_call(&tm->wave, "TIME");
                 code += "    {\n";
@@ -664,6 +678,10 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         code += "uniform vec2 entity_tcmod_translate = vec2(0.0, 0.0);\n";
     }
 
+    if (needs_turb(props)) {
+        code += "varying vec3 v_pos;\n";
+    }
+
     code += "\n";
 
     /* Wave function definitions (if needed) */
@@ -678,8 +696,15 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         if (!deform_glsl.is_empty()) {
             code += "void vertex() {\n";
             code += std::string(deform_glsl.utf8().get_data());
+            if (needs_turb(props)) {
+                code += "    v_pos = VERTEX;\n";
+            }
             code += "}\n\n";
         }
+    } else if (needs_turb(props)) {
+        code += "void vertex() {\n";
+        code += "    v_pos = VERTEX;\n";
+        code += "}\n\n";
     }
 
     /* Fragment shader */
