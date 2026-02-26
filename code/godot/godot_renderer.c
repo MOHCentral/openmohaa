@@ -187,7 +187,7 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
                     mod->spriteScale  = 1.0f;
                 }
             }
-            
+
             ri.Printf( PRINT_DEVELOPER,
                 "[GodotRenderer] RegisterModel SPRITE: %s -> shader '%s' (handle #%d) dims=%dx%d spriteScale=%.2f realH=%d\n",
                 name, shadername, mod->shaderHandle,
@@ -828,6 +828,11 @@ static void GR_BeginFrame( stereoFrame_t stereoFrame )
     /* Reset HUD model state so the first ClearScene does a full clear */
     gr_mainSceneRendered = 0;
     gr_numHudModels = 0;
+    /* Reset HUD entity start so menu-only frames (no world scene)
+     * don't carry a stale offset from a previous world render.
+     * Without this, GR_RenderScene's gr_numEntities > gr_hudEntityStart
+     * check would fail when transitioning from in-game to a menu. */
+    gr_hudEntityStart = 0;
 }
 
 static void GR_EndFrame( int *frontEndMsec, int *backEndMsec )
