@@ -1818,10 +1818,10 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // RF_THIRD_PERSON    (0x0002): local player body — not culled here (no mirrors in our renderer)
-        // RF_FIRST_PERSON   (0x0004): view weapon — route to weapon SubViewport
-        // RF_DEPTHHACK      (0x0008): view weapon depth hack — route to weapon SubViewport
-        // RF_LIGHTING_ORIGIN (0x0080): use refEntity->lightingOrigin for light sampling (tr_types.h)
+        // RF_THIRD_PERSON    (0x0001): local player body — not culled here (no mirrors in our renderer)
+        // RF_FIRST_PERSON   (0x0002): view weapon — route to weapon SubViewport
+        // RF_DEPTHHACK      (0x0004): view weapon depth hack — route to weapon SubViewport
+        // RF_LIGHTING_ORIGIN (0x0080): use refEntity->lightingOrigin for light sampling (q_shared.h)
         //   NOTE: RF_DONTDRAW (q_shared.h, (1<<7)=0x80) lives in entityState_t.renderfx, NOT
         //   refEntity_t.renderfx.  The cgame filters RF_DONTDRAW entities before calling
         //   R_AddRefEntityToScene, so they never reach this buffer.  Do NOT hide on bit 0x80.
@@ -1840,7 +1840,7 @@ void MoHAARunner::update_entities() {
         // culling per MeshInstance3D — no manual sphere test is needed or correct here.
         // The original MOHAA renderer (tr_main.c) does NOT manually frustum-cull entities.
 #ifdef HAS_DRAW_DISTANCE_MODULE
-        if (!(renderfx & 0x0C)) {  // Skip for RF_FIRST_PERSON(0x04)|RF_DEPTHHACK(0x08)
+        if (!(renderfx & 0x06)) {  // Skip for RF_FIRST_PERSON(0x02)|RF_DEPTHHACK(0x04)
             Vector3 ent_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
             float cull_dist = Godot_DrawDistance_GetCullDistance();
             if (cull_dist > 0.0f) {
@@ -2206,8 +2206,8 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        bool is_first_person = (renderfx & 0x04) != 0;  // RF_FIRST_PERSON
-        bool is_depthhack    = (renderfx & 0x08) != 0;  // RF_DEPTHHACK
+        bool is_first_person = (renderfx & 0x02) != 0;  // RF_FIRST_PERSON
+        bool is_depthhack    = (renderfx & 0x04) != 0;  // RF_DEPTHHACK
 
         EntityCacheKey key { hModel, reType, 0, renderfx };
         bool same_key = (i < (int)entity_cache_keys.size() && entity_cache_keys[i] == key);
@@ -2627,6 +2627,7 @@ void MoHAARunner::update_entities() {
                             " entNum=" + String::num_int64(entityNumber));
                     }
                 }
+
 #ifdef GODOT_DEBUG_WHITE_ENTITIES
                 // DEBUG: show a tiny orange box at NO-MESH entity positions
                 // so we can see the entity is present even with no TIKI mesh.
@@ -7757,21 +7758,25 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
         if (godot_key != 0) {
             /* Suppress SE_CHAR for console toggle keys (backtick/tilde)
                to prevent typing ` or ~ into the console input field. */
-            static const int GODOT_KEY_BACKTICK = 96;  /* KEY_QUOTELEFT  */
-            static const int GODOT_KEY_TILDE    = 126; /* KEY_ASCIITILDE */
-            bool is_console_key = (godot_key == GODOT_KEY_BACKTICK
-                                   || godot_key == GODOT_KEY_TILDE);
+            bool is_console_key = (godot_key == Key::KEY_QUOTELEFT
+                                   || godot_key == Key::KEY_ASCIITILDE);
 
             // Always inject key events into the engine's event queue.
             // The engine's CL_KeyEvent (cl_keys.cpp) checks keyCatchers
             // internally and routes to UI_KeyEvent / Console_Key / game
             // bindings as appropriate.  No need for a parallel routing layer.
-            if (!echo) {
-                Godot_InjectKeyEvent(godot_key, pressed ? 1 : 0);
-            }
+            Godot_InjectKeyEvent(godot_key, pressed ? 1 : 0);
             if ((pressed || echo) && !is_console_key) {
                 int64_t unicode = key_event->get_unicode();
-                if (unicode > 0) {
+                // Most non-printable keys (Tab=9, Delete=127, etc.) are handled
+                // via SE_KEY (Godot_InjectKeyEvent) above, but UIField specifically
+                // expects Backspace as a character event '\b' (8).
+                // Godot's get_unicode() might return 0 for Backspace on some layouts.
+                if (godot_key == Key::KEY_BACKSPACE || (int)key_event->get_physical_keycode() == Key::KEY_BACKSPACE) {
+                    unicode = 8;
+                }
+
+                if ((unicode >= 32 && unicode != 127) || unicode == 8) {
                     Godot_InjectCharEvent((int)unicode);
                 }
             }

@@ -111,6 +111,12 @@ godot_ui_state_t Godot_UI_Update(void)
         return s_uiState;
     }
 
+    /* ── CGAME / Scoreboard / Weapon select ── */
+    if (catchers & KEYCATCH_CGAME) {
+        s_uiState = GODOT_UI_SCOREBOARD;
+        return s_uiState;
+    }
+
     /* ── No UI active ── */
     s_uiState = GODOT_UI_NONE;
     return s_uiState;
@@ -162,9 +168,9 @@ int Godot_UI_GetBackgroundData(int *cols, int *rows, int *bgr,
 
 int Godot_UI_ShouldShowCursor(void)
 {
-    /* Show cursor when UI or console is active */
+    /* Show cursor when UI, console, message, or cgame overlay (weapon select) is active */
     int catchers = Godot_Client_GetKeyCatchers();
-    if (catchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) {
+    if (catchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) {
         return 1;
     }
     return 0;

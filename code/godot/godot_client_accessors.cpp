@@ -117,7 +117,7 @@ void Godot_Client_GetUIMousePos(int *mx, int *my) {
  *   capturing input (UI, console, or message mode).
  */
 int Godot_Client_IsAnyOverlayActive(void) {
-    return (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) ? 1 : 0;
+    return (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) ? 1 : 0;
 }
 
 /*
@@ -126,7 +126,7 @@ int Godot_Client_IsAnyOverlayActive(void) {
  *   when KEYCATCH_UI is active, which breaks hover/click hit testing.
  */
 void Godot_Client_SyncGuiMouseToOverlayState(void) {
-    if (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) {
+    if (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) {
         IN_MouseOn();
     } else {
         IN_MouseOff();
