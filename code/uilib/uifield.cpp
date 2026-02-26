@@ -161,7 +161,56 @@ void UIField::Draw(void)
 
 qboolean UIField::KeyEvent(int key, unsigned int time)
 {
-    if (key == 'l' && uii.Sys_IsKeyDown(K_CTRL)) {
+    if (tolower(key) == 'l' && uii.Sys_IsKeyDown(K_CTRL)) {
+        return qtrue;
+    }
+
+    // Ctrl + C: Copy
+    if (tolower(key) == 'c' && uii.Sys_IsKeyDown(K_CTRL)) {
+        uii.Sys_SetClipboard(m_edit.m_buffer);
+        return qtrue;
+    }
+
+    // Ctrl + X: Cut
+    if (tolower(key) == 'x' && uii.Sys_IsKeyDown(K_CTRL)) {
+        uii.Sys_SetClipboard(m_edit.m_buffer);
+        m_edit.m_buffer[0] = 0;
+        m_edit.m_cursor    = 0;
+        if (m_cvarname.length()) {
+            uii.Cvar_Set(m_cvarname, m_edit.m_buffer);
+        }
+        return qtrue;
+    }
+
+    // Ctrl + V: Paste
+    if (tolower(key) == 'v' && uii.Sys_IsKeyDown(K_CTRL)) {
+        const char *clip = uii.Sys_GetClipboard();
+        if (clip && clip[0]) {
+            int clipLen    = strlen(clip);
+            int currentLen = strlen(m_edit.m_buffer);
+
+            // Limit paste to fit in buffer
+            if (currentLen + clipLen >= EDITFIELD_BUFSIZE) {
+                clipLen = EDITFIELD_BUFSIZE - currentLen - 1;
+            }
+
+            if (clipLen > 0) {
+                // Make room for the clipboard text
+                memmove(
+                    &m_edit.m_buffer[m_edit.m_cursor + clipLen], &m_edit.m_buffer[m_edit.m_cursor],
+                    currentLen - m_edit.m_cursor + 1
+                );
+
+                // Copy from clipboard
+                memcpy(&m_edit.m_buffer[m_edit.m_cursor], clip, clipLen);
+
+                m_edit.m_cursor += clipLen;
+
+                if (m_cvarname.length()) {
+                    uii.Cvar_Set(m_cvarname, m_edit.m_buffer);
+                }
+            }
+        }
         return qtrue;
     }
 

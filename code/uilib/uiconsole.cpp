@@ -650,6 +650,46 @@ qboolean UIConsole::KeyEvent(int key, unsigned int time)
 		}
 		break;
 
+	case 'v':
+	case 'V':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			const char *clip = uii.Sys_GetClipboard();
+			if (clip && clip[0]) {
+				if (m_caret >= m_currentline.length()) {
+					m_currentline.append(clip);
+				} else {
+					m_currentline = str(m_currentline, 0, (int)m_caret) + clip + (m_currentline.c_str() + m_caret);
+				}
+				m_caret += strlen(clip);
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
+
+	case 'c':
+	case 'C':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+			}
+			break;
+		}
+		return false;
+
+	case 'x':
+	case 'X':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+				m_currentline             = "";
+				m_caret                   = 0;
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
+
 	case K_DEL:
 		if (m_caret >= m_currentline.length()) {
 			break;
@@ -1126,6 +1166,46 @@ qboolean UIDMConsole::KeyEvent(int key, unsigned int time)
 			m_caret++;
 		}
 		break;
+
+	case 'v':
+	case 'V':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			const char *clip = uii.Sys_GetClipboard();
+			if (clip && clip[0]) {
+				if (m_caret >= m_currentline.length()) {
+					m_currentline.append(clip);
+				} else {
+					m_currentline = str(m_currentline, 0, (int)m_caret) + clip + (m_currentline.c_str() + m_caret);
+				}
+				m_caret += strlen(clip);
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
+
+	case 'c':
+	case 'C':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+			}
+			break;
+		}
+		return false;
+
+	case 'x':
+	case 'X':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+				m_currentline             = "";
+				m_caret                   = 0;
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
 
 	case K_DEL:
 		if (m_caret >= m_currentline.length()) {

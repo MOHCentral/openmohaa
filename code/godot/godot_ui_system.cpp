@@ -29,6 +29,7 @@ extern "C" {
 extern int  Godot_Client_GetKeyCatchers(void);
 extern int  Godot_Client_GetState(void);
 extern void Godot_Client_GetMousePos(int *mx, int *my);
+extern void Godot_Client_SyncGuiMouseToOverlayState(void);
 
 /* ── Accessors from godot_renderer.c ── */
 extern int Godot_Renderer_GetBackground(int *cols, int *rows, int *bgr,
@@ -71,6 +72,10 @@ extern "C" {
 
 godot_ui_state_t Godot_UI_Update(void)
 {
+    /* Force guimouse sync on every UI tick so mouse returns immediately
+       when weapon menu or main menu activates */
+    Godot_Client_SyncGuiMouseToOverlayState();
+
     int catchers = Godot_Client_GetKeyCatchers();
     int connState = Godot_Client_GetState();
 
