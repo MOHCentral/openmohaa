@@ -118,141 +118,207 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
     CachedModel &model = cache_[hModel];
     model.tiki_scale = tikiScale;
 
-    Ref<ArrayMesh> arrayMesh;
-    arrayMesh.instantiate();
-
     int totalVerts = 0;
     int totalTris  = 0;
     static bool logged_first = false;
 
-    /* Iterate all meshes and all surfaces */
-    for (int mesh = 0; mesh < meshCount; mesh++) {
-        int surfCount = Godot_Skel_GetSurfaceCount(tikiPtr, mesh);
+    /* Get the number of expected LOD levels */
+    int lodCount = Godot_Skel_GetLodIndexCount();
+    if (lodCount <= 0) lodCount = 1;
 
-        for (int surf = 0; surf < surfCount; surf++) {
-            int numVerts = 0, numTris = 0;
-            char surfName[64]   = {0};
-            char shaderName[64] = {0};
+    /* Build a mesh for each LOD level */
+    for (int lod = 0; lod < lodCount; lod++) {
+        bool all_surfaces_identical = true;
 
-            if (!Godot_Skel_GetSurfaceInfo(tikiPtr, mesh, surf,
-                                            &numVerts, &numTris,
-                                            surfName, sizeof(surfName),
-                                            shaderName, sizeof(shaderName))) {
-                continue;
+        if (lod > 0) {
+            for (int m = 0; m < meshCount; m++) {
+                int sCount = Godot_Skel_GetSurfaceCount(tikiPtr, m);
+                for (int s = 0; s < sCount; s++) {
+                    int lodVertLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, m, s, lod);
+                    int prevLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, m, s, lod - 1);
+                    if (lodVertLimit != prevLimit) {
+                        all_surfaces_identical = false;
+                        break;
+                    }
+                }
+                if (!all_surfaces_identical) break;
             }
+        } else {
+            all_surfaces_identical = false; // Always build LOD 0
+        }
 
-            if (numVerts <= 0 || numTris <= 0) continue;
+        if (all_surfaces_identical && model.lod_meshes.size() > 0) {
+            model.lod_meshes.push_back(model.lod_meshes.back());
+            continue;
+        }
 
-            /* Allocate temp buffers for vertex data */
-            float *positions = (float *)malloc(numVerts * 3 * sizeof(float));
-            float *normals   = (float *)malloc(numVerts * 3 * sizeof(float));
-            float *texcoords = (float *)malloc(numVerts * 2 * sizeof(float));
-            int   *indices   = (int *)malloc(numTris * 3 * sizeof(int));
+        Ref<ArrayMesh> arrayMesh;
+        arrayMesh.instantiate();
 
-            if (!positions || !normals || !texcoords || !indices) {
-                free(positions); free(normals); free(texcoords); free(indices);
-                continue;
-            }
+        bool valid_mesh = false;
 
-            if (!Godot_Skel_GetSurfaceVertices(tikiPtr, mesh, surf,
-                                                positions, normals, texcoords)) {
-                free(positions); free(normals); free(texcoords); free(indices);
-                continue;
-            }
+        /* Iterate all meshes and all surfaces */
+        for (int mesh = 0; mesh < meshCount; mesh++) {
+            int surfCount = Godot_Skel_GetSurfaceCount(tikiPtr, mesh);
 
-            if (!Godot_Skel_GetSurfaceIndices(tikiPtr, mesh, surf, indices)) {
-                free(positions); free(normals); free(texcoords); free(indices);
-                continue;
-            }
+            for (int surf = 0; surf < surfCount; surf++) {
+                int lodVertLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, mesh, surf, lod);
+                
+                int numVerts = 0, numTris = 0;
+                char surfName[64]   = {0};
+                char shaderName[64] = {0};
 
-            /* Build Godot PackedArrays with coordinate conversion */
-            PackedVector3Array godotPositions;
-            PackedVector3Array godotNormals;
-            PackedVector2Array godotUVs;
-            PackedInt32Array   godotIndices;
-
-            godotPositions.resize(numVerts);
-            godotNormals.resize(numVerts);
-            godotUVs.resize(numVerts);
-            godotIndices.resize(numTris * 3);
-
-            for (int v = 0; v < numVerts; v++) {
-                float px = positions[v * 3 + 0];
-                float py = positions[v * 3 + 1];
-                float pz = positions[v * 3 + 2];
-
-                /* Apply tiki load_scale then convert id→Godot.
-                 * load_origin is handled at the entity level via transform,
-                 * since the mesh is in model-local space. */
-                Vector3 pos = id_to_godot_point(px, py, pz) * tikiScale * MOHAA_UNIT_SCALE;
-
-                float nx = normals[v * 3 + 0];
-                float ny = normals[v * 3 + 1];
-                float nz = normals[v * 3 + 2];
-                Vector3 nrm = id_to_godot_normal(nx, ny, nz);
-                /* Normalise to handle any engine quirks */
-                if (nrm.length_squared() > 0.001f) {
-                    nrm = nrm.normalized();
+                if (!Godot_Skel_GetSurfaceInfo(tikiPtr, mesh, surf,
+                                                &numVerts, &numTris,
+                                                surfName, sizeof(surfName),
+                                                shaderName, sizeof(shaderName))) {
+                    continue;
                 }
 
-                float u = texcoords[v * 2 + 0];
-                float vt = texcoords[v * 2 + 1];
+                if (numVerts <= 0 || numTris <= 0) continue;
+                valid_mesh = true;
 
-                godotPositions.set(v, pos);
-                godotNormals.set(v, nrm);
-                godotUVs.set(v, Vector2(u, vt));
+                /* Allocate temp buffers for vertex data */
+                float *positions = (float *)malloc(numVerts * 3 * sizeof(float));
+                float *normals   = (float *)malloc(numVerts * 3 * sizeof(float));
+                float *texcoords = (float *)malloc(numVerts * 2 * sizeof(float));
+                int   *indices   = (int *)malloc(numTris * 3 * sizeof(int));
+
+                if (!positions || !normals || !texcoords || !indices) {
+                    free(positions); free(normals); free(texcoords); free(indices);
+                    continue;
+                }
+
+                if (!Godot_Skel_GetSurfaceVertices(tikiPtr, mesh, surf,
+                                                    positions, normals, texcoords)) {
+                    free(positions); free(normals); free(texcoords); free(indices);
+                    continue;
+                }
+
+                if (!Godot_Skel_GetSurfaceIndices(tikiPtr, mesh, surf, indices)) {
+                    free(positions); free(normals); free(texcoords); free(indices);
+                    continue;
+                }
+
+                int outNumVerts = numVerts;
+                int outNumTris  = numTris;
+                int *outIndices = indices;
+
+                /* Phase 59: LOD Collapse */
+                if (lod > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
+                    int *collapsedIndices = (int *)malloc(numTris * 3 * sizeof(int));
+                    if (collapsedIndices) {
+                        if (Godot_Skel_BuildLodMesh(tikiPtr, mesh, surf, lodVertLimit,
+                                                     positions, normals, texcoords, numVerts,
+                                                     indices, numTris, tikiScale,
+                                                     collapsedIndices, &outNumTris)) {
+                            outIndices = collapsedIndices;
+                            outNumVerts = lodVertLimit;
+                        } else {
+                            free(collapsedIndices);
+                        }
+                    }
+                }
+
+                /* Build Godot PackedArrays with coordinate conversion */
+                PackedVector3Array godotPositions;
+                PackedVector3Array godotNormals;
+                PackedVector2Array godotUVs;
+                PackedInt32Array   godotIndices;
+
+                godotPositions.resize(outNumVerts);
+                godotNormals.resize(outNumVerts);
+                godotUVs.resize(outNumVerts);
+                godotIndices.resize(outNumTris * 3);
+
+                for (int v = 0; v < outNumVerts; v++) {
+                    float px = positions[v * 3 + 0];
+                    float py = positions[v * 3 + 1];
+                    float pz = positions[v * 3 + 2];
+
+                    /* Apply tiki load_scale then convert id→Godot.
+                     * load_origin is handled at the entity level via transform,
+                     * since the mesh is in model-local space. */
+                    Vector3 pos = id_to_godot_point(px, py, pz) * tikiScale * MOHAA_UNIT_SCALE;
+
+                    float nx = normals[v * 3 + 0];
+                    float ny = normals[v * 3 + 1];
+                    float nz = normals[v * 3 + 2];
+                    Vector3 nrm = id_to_godot_normal(nx, ny, nz);
+                    /* Normalise to handle any engine quirks */
+                    if (nrm.length_squared() > 0.001f) {
+                        nrm = nrm.normalized();
+                    }
+
+                    float u = texcoords[v * 2 + 0];
+                    float vt = texcoords[v * 2 + 1];
+
+                    godotPositions.set(v, pos);
+                    godotNormals.set(v, nrm);
+                    godotUVs.set(v, Vector2(u, vt));
+                }
+
+                /* Copy indices as-is.  The id_to_godot_point conversion
+                 * has det = +1 (proper rotation), so winding is preserved.
+                 * Q3/MOHAA model triangles are already CCW from the visible
+                 * side, matching Godot's default front-face convention. */
+                for (int t = 0; t < outNumTris; t++) {
+                    godotIndices.set(t * 3 + 0, outIndices[t * 3 + 0]);
+                    godotIndices.set(t * 3 + 1, outIndices[t * 3 + 1]);
+                    godotIndices.set(t * 3 + 2, outIndices[t * 3 + 2]);
+                }
+
+                /* Build ArrayMesh surface */
+                Array arrays;
+                arrays.resize(Mesh::ARRAY_MAX);
+                arrays[Mesh::ARRAY_VERTEX] = godotPositions;
+                arrays[Mesh::ARRAY_NORMAL] = godotNormals;
+                arrays[Mesh::ARRAY_TEX_UV] = godotUVs;
+                arrays[Mesh::ARRAY_INDEX]  = godotIndices;
+
+                arrayMesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+
+                /* Track surface shader info (only needed once, from LOD 0) */
+                if (lod == 0) {
+                    SurfaceInfo sinfo;
+                    sinfo.shader_name = String(shaderName);
+                    model.surfaces.push_back(sinfo);
+
+                    totalVerts += numVerts;
+                    totalTris  += numTris;
+                }
+
+                free(positions);
+                free(normals);
+                free(texcoords);
+                free(indices);
+                if (outIndices != indices) {
+                    free(outIndices);
+                }
             }
+        }
 
-            /* Copy indices as-is.  The id_to_godot_point conversion
-             * has det = +1 (proper rotation), so winding is preserved.
-             * Q3/MOHAA model triangles are already CCW from the visible
-             * side, matching Godot's default front-face convention. */
-            for (int t = 0; t < numTris; t++) {
-                godotIndices.set(t * 3 + 0, indices[t * 3 + 0]);
-                godotIndices.set(t * 3 + 1, indices[t * 3 + 1]);
-                godotIndices.set(t * 3 + 2, indices[t * 3 + 2]);
-            }
-
-            /* Build ArrayMesh surface */
-            Array arrays;
-            arrays.resize(Mesh::ARRAY_MAX);
-            arrays[Mesh::ARRAY_VERTEX] = godotPositions;
-            arrays[Mesh::ARRAY_NORMAL] = godotNormals;
-            arrays[Mesh::ARRAY_TEX_UV] = godotUVs;
-            arrays[Mesh::ARRAY_INDEX]  = godotIndices;
-
-            arrayMesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-
-            /* Track surface shader info */
-            SurfaceInfo sinfo;
-            sinfo.shader_name = String(shaderName);
-            model.surfaces.push_back(sinfo);
-
-            totalVerts += numVerts;
-            totalTris  += numTris;
-
-            free(positions);
-            free(normals);
-            free(texcoords);
-            free(indices);
+        if (arrayMesh->get_surface_count() > 0) {
+            model.lod_meshes.push_back(arrayMesh);
+        } else if (lod == 0) {
+            /* If LOD 0 has no surfaces, the model is invalid */
+            cache_.erase(hModel);
+            return nullptr;
+        } else {
+            /* If a lower LOD fails but LOD 0 exists, just duplicate the previous LOD */
+            model.lod_meshes.push_back(model.lod_meshes.back());
         }
     }
 
-    if (arrayMesh->get_surface_count() == 0) {
-        cache_.erase(hModel);
-        return nullptr;
-    }
-
-    model.mesh = arrayMesh;
-
     /* Log first successful model build */
-    if (!logged_first) {
+    if (!logged_first && model.lod_meshes.size() > 0) {
         const char *name = Godot_Skel_GetName(tikiPtr);
         UtilityFunctions::print(
             String("[MoHAA] First skeletal model built: ") + String(name) +
             String(" — ") + String::num_int64(totalVerts) + String(" verts, ") +
             String::num_int64(totalTris) + String(" tris, ") +
-            String::num_int64(arrayMesh->get_surface_count()) + String(" surfaces")
+            String::num_int64(model.lod_meshes[0]->get_surface_count()) + String(" surfaces, ") +
+            String::num_int64(model.lod_meshes.size()) + String(" LODs")
         );
         logged_first = true;
     }
@@ -304,7 +370,7 @@ int Godot_Skel_SelectLodLevel(void *tikiPtr, int meshIndex, float distance)
     return lodCount - 1;  /* Maximum LOD (lowest detail) */
 }
 
-int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int lodLevel)
+int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int surfIndex, int lodLevel)
 {
     if (!tikiPtr) return -1;
 
@@ -314,11 +380,61 @@ int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int lodLevel)
     }
 
     int lodCount = Godot_Skel_GetLodIndexCount();
-    if (lodLevel < 0) lodLevel = 0;
+    if (lodLevel <= 0) {
+        return -1; // LOD 0 is ALWAYS full detail (LOD->curve[0].val = 0.0f)
+    }
     if (lodLevel >= lodCount) lodLevel = lodCount - 1;
 
-    int limit = lodIndex[lodLevel];
-    return (limit > 0) ? limit : -1;
+    int lod_cutoff = lodIndex[lodLevel];
+    if (lod_cutoff <= 0) {
+        return -1; // No restriction
+    }
+    
+    // Evaluate against pCollapseIndex to find the actual vertex limit
+    int numVerts = 0, numTris = 0;
+    if (!Godot_Skel_GetSurfaceInfo(tikiPtr, meshIndex, surfIndex, &numVerts, &numTris, nullptr, 0, nullptr, 0)) {
+        return -1;
+    }
+
+    if (numVerts <= 3) {
+        return numVerts;
+    }
+
+    int *collapseIndex = (int *)malloc(numVerts * sizeof(int));
+    if (!collapseIndex) return -1;
+
+    if (!Godot_Skel_GetCollapseData(tikiPtr, meshIndex, surfIndex, nullptr, collapseIndex)) {
+        free(collapseIndex);
+        return -1;
+    }
+
+    if (collapseIndex[2] < lod_cutoff) {
+        free(collapseIndex);
+        return 0; // Surface fully collapsed away
+    }
+
+    int low = 3;
+    int mid = 3;
+    int high = numVerts;
+
+    while (high >= low) {
+        mid = (low + high) >> 1;
+        if (collapseIndex[mid] < lod_cutoff) {
+            high = mid - 1;
+            if (collapseIndex[mid - 1] >= lod_cutoff) {
+                break;
+            }
+        } else {
+            mid++;
+            low = mid;
+            if (high == mid || collapseIndex[mid] < lod_cutoff) {
+                break;
+            }
+        }
+    }
+
+    free(collapseIndex);
+    return mid;
 }
 
 int Godot_Skel_BuildLodMesh(void *tikiPtr, int meshIndex, int surfIndex,

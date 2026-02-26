@@ -36,14 +36,15 @@ static String generate_wave_vertex(float div, float base, float amplitude,
     String code;
     code += "    float _dv = " + String::num(div, 6) + ";\n";
     if (div > 0.001f) {
-        code += "    float _off = (VERTEX.x + VERTEX.y + VERTEX.z) / _dv;\n";
+        code += "    vec3 _q_pos = vec3(-VERTEX.z, -VERTEX.x, VERTEX.y) * 39.37;\n";
+        code += "    float _off = (_q_pos.x + _q_pos.y + _q_pos.z) / _dv;\n";
     } else {
         code += "    float _off = 0.0;\n";
     }
     code += "    float _t = TIME * " + String::num(frequency, 6) +
             " + " + String::num(phase, 6) + " + _off;\n";
-    code += "    float _wave = " + String::num(base, 6) +
-            " + " + String::num(amplitude, 6) + " * sin(_t * 6.283185);\n";
+    code += "    float _wave = (" + String::num(base, 6) +
+            " + " + String::num(amplitude, 6) + " * sin(_t * 6.283185)) / 39.37;\n";
     code += "    VERTEX += NORMAL * _wave;\n";
     return code;
 }
@@ -62,8 +63,8 @@ static String generate_bulge_vertex(float bulge_width, float bulge_height,
     String code;
     code += "    float _bulge_now = TIME * " + String::num(bulge_speed, 6) + ";\n";
     code += "    float _bulge_off = UV.x * " + String::num(bulge_width, 6) + ";\n";
-    code += "    float _bulge = " + String::num(bulge_height, 6) +
-            " * sin((_bulge_now + _bulge_off) * 6.283185);\n";
+    code += "    float _bulge = (" + String::num(bulge_height, 6) +
+            " * sin((_bulge_now + _bulge_off) * 6.283185)) / 39.37;\n";
     code += "    VERTEX += NORMAL * _bulge;\n";
     return code;
 }
@@ -93,8 +94,8 @@ static String generate_move_vertex(float base, float amplitude,
     String code;
     code += "    float _t = TIME * " + String::num(frequency, 6) +
             " + " + String::num(phase, 6) + ";\n";
-    code += "    float _move = " + String::num(base, 6) +
-            " + " + String::num(amplitude, 6) + " * sin(_t * 6.283185);\n";
+    code += "    float _move = (" + String::num(base, 6) +
+            " + " + String::num(amplitude, 6) + " * sin(_t * 6.283185)) / 39.37;\n";
     code += "    VERTEX += NORMAL * _move;\n";
     return code;
 }

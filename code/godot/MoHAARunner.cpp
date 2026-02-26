@@ -256,7 +256,8 @@ extern "C" {
                                    int *outBoneCount);
     int   Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
                                   const void *boneCache, int boneCount,
-                                  float *outPositions, float *outNormals);
+                                  float *outPositions, float *outNormals,
+                                  int maxVerts = -1);
     int   Godot_Skel_GetMeshCount(void *tikiPtr);
     float Godot_Skel_GetScale(void *tikiPtr);
     void  Godot_Skel_GetOrigin(void *tikiPtr, float *out);
@@ -265,6 +266,8 @@ extern "C" {
                                      int *numVerts, int *numTriangles,
                                      char *surfName, int surfNameLen,
                                      char *shaderName, int shaderNameLen);
+
+    int Godot_Cvar_VariableIntegerValue(const char *var_name);
     // Skin-aware shader name lookup: mirrors tr_model.cpp hShader[skinNum + (bsurf & 3)] selection.
     int   Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfIndex,
                                               int iShaderNum,
@@ -783,7 +786,7 @@ void MoHAARunner::setup_3d_scene() {
     env->set_ambient_light_energy(0.5);
 
     // Phase 81: Tonemap and exposure to match MOHAA's overbright/gamma
-    // Set to linear. The real overbright math is baked directly into the 
+    // Set to linear. The real overbright math is baked directly into the
     // lightmap build pipeline (godot_bsp_mesh load_lightmaps)
     env->set_tonemapper(Environment::TONE_MAPPER_LINEAR);
     env->set_tonemap_exposure(1.0);
@@ -1341,7 +1344,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
     if (sp->no_lightmap) {
         mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
     }
-    
+
     // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
     if (sp->has_deform) {
         if (sp->deform_type == 3) { // autosprite
@@ -1474,7 +1477,7 @@ void MoHAARunner::load_static_models() {
         const GodotSkelModelCache::CachedModel *cached =
             GodotSkelModelCache::get().get_model(hModel);
 
-        if (!cached || !cached->mesh.is_valid()) {
+        if (!cached || cached->lod_meshes.empty() || !cached->lod_meshes[0].is_valid()) {
             failed++;
             continue;
         }
@@ -1482,7 +1485,7 @@ void MoHAARunner::load_static_models() {
         // Create MeshInstance3D
         MeshInstance3D *mi = memnew(MeshInstance3D);
         mi->set_name(String("SM_") + String::num_int64(i));
-        mi->set_mesh(cached->mesh);
+        mi->set_mesh(cached->lod_meshes[0]);
         mi->set_extra_cull_margin(4.0f);
 
         // Apply shader textures to each surface.
@@ -1988,7 +1991,7 @@ void MoHAARunner::update_entities() {
                         smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
                     }
                 }
-                
+
                 static std::unordered_set<int> logged_active_sprites;
                 if (logged_active_sprites.find(spriteShader) == logged_active_sprites.end()) {
                     const char *sn = (spriteShader > 0) ? Godot_Renderer_GetShaderName(spriteShader) : "(none)";
@@ -2007,7 +2010,7 @@ void MoHAARunner::update_entities() {
                         String(" tex_alpha=") + String(tex_alpha ? "yes" : "no"));
                     logged_active_sprites.insert(spriteShader);
                 }
-                
+
                 s_sprite_mat_cache[spriteShader] = smat;
                 sp_it = s_sprite_mat_cache.find(spriteShader);
             }
@@ -2302,7 +2305,7 @@ void MoHAARunner::update_entities() {
                                 }
                             }
                         }
-                    } else if (cached && cached->mesh.is_valid()) {
+                    } else if (cached && !cached->lod_meshes.empty()) {
                         // Fallback: TIKI ptr unavailable — use cached shader names (skin 0 only)
                         surf_total = (int)cached->surfaces.size();
                         for (int s = 0; s < surf_total; s++) {
@@ -2362,6 +2365,31 @@ void MoHAARunner::update_entities() {
                 }
             }
 
+            // ── Phase 59: LOD Selection ──
+            int lodLevel = 0;
+            // First-person weapons/hands (RF_FIRST_PERSON) are always LOD 0.
+            if (!is_first_person) {
+                // Determine `distance` from camera to entity origin
+                Vector3 camPos = camera->get_global_position();
+                Vector3 entPos = id_to_godot_position(origin[0], origin[1], origin[2]);
+                // Convert Godot meters back to id Tech 3 inches for LOD thresholds
+                float distInches = camPos.distance_to(entPos) * (1.0f / MOHAA_UNIT_SCALE);
+
+                // Adjust for FOV. engine uses: distance *= (90.0f / fov_x)
+                float fov_x = camera->get_fov();
+                distInches *= (90.0f / fov_x);
+
+                // Apply r_lodbias (from CVar)
+                int lodbias = Godot_Cvar_VariableIntegerValue("r_lodbias");
+
+                void *tikiForLod = Godot_Model_GetTikiPtr(hModel);
+                if (tikiForLod) {
+                    lodLevel = Godot_Skel_SelectLodLevel(tikiForLod, 0, distInches);
+                    lodLevel += lodbias;
+                    if (lodLevel < 0) lodLevel = 0;
+                }
+            }
+
             // ── CPU skinning — works independently of bind-pose cache ──
             void *tikiPtr = nullptr;
             int entNum = 0;
@@ -2380,6 +2408,7 @@ void MoHAARunner::update_entities() {
             if (has_anim && tikiPtr) {
                 // Phase 60: Compute FNV-1a hash of animation state to
                 // skip mesh rebuild when the pose hasn't changed.
+                // Include LOD level in the hash since different LODs need different meshes!
                 uint64_t anim_hash = 14695981039346656037ULL;
                 auto fnv_bytes = [&anim_hash](const void *p, size_t n) {
                     const unsigned char *b = (const unsigned char *)p;
@@ -2393,14 +2422,23 @@ void MoHAARunner::update_entities() {
                 fnv_bytes(boneQuatBuf, sizeof(boneQuatBuf));
                 fnv_bytes(&actionWeight, sizeof(actionWeight));
                 fnv_bytes(&hModel, sizeof(hModel));
+                fnv_bytes(&lodLevel, sizeof(lodLevel));
 
-                // Check cache: if animation state unchanged, reuse mesh
-                auto cache_it = skel_mesh_cache.find(entNum);
-                if (cache_it != skel_mesh_cache.end() &&
-                    cache_it->second.anim_hash == anim_hash &&
-                    cache_it->second.mesh != nullptr) {
-                    skinned_mesh = cache_it->second.mesh;
-                } else {
+                // ENTITYNUM_NONE (1023) is shared by many unrelated temp
+                // entities (debris, particles, effects).  Caching by entNum
+                // would thrash — always rebuild these.
+                bool skip_cache = (entNum == 1023 || entNum < 0);
+
+                // Check cache: if animation state & LOD unchanged, reuse mesh
+                if (!skip_cache) {
+                    auto cache_it = skel_mesh_cache.find(entNum);
+                    if (cache_it != skel_mesh_cache.end() &&
+                        cache_it->second.anim_hash == anim_hash &&
+                        cache_it->second.mesh != nullptr) {
+                        skinned_mesh = cache_it->second.mesh;
+                    }
+                }
+                if (!skinned_mesh.is_valid()) {
                     int boneCount = 0;
                     void *boneCache = Godot_Skel_PrepareBones(
                         tikiPtr, entNum,
@@ -2416,6 +2454,8 @@ void MoHAARunner::update_entities() {
                         for (int mesh = 0; mesh < meshCount; mesh++) {
                             int surfCount = Godot_Skel_GetSurfaceCount(tikiPtr, mesh);
                             for (int surf = 0; surf < surfCount; surf++) {
+                                int lodVertLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, mesh, surf, lodLevel);
+
                                 int numVerts = 0, numTris = 0;
                                 Godot_Skel_GetSurfaceInfo(tikiPtr, mesh, surf,
                                     &numVerts, &numTris,
@@ -2433,10 +2473,10 @@ void MoHAARunner::update_entities() {
                                     continue;
                                 }
 
-                                // Get skinned positions + normals
+                                // Get skinned positions + normals (cap at LOD vertex limit)
                                 if (!Godot_Skel_SkinSurface(tikiPtr, mesh, surf,
                                         boneCache, boneCount,
-                                        positions, normals)) {
+                                        positions, normals, lodVertLimit)) {
                                     ::free(positions); ::free(normals);
                                     ::free(texcoords); ::free(indices);
                                     continue;
@@ -2448,16 +2488,36 @@ void MoHAARunner::update_entities() {
                                 Godot_Skel_GetSurfaceIndices(tikiPtr, mesh, surf,
                                     indices);
 
+                                int outNumVerts = numVerts;
+                                int outNumTris  = numTris;
+                                int *outIndices = indices;
+
+                                // Phase 59: Apply LOD index collapse if not LOD 0
+                                if (lodLevel > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
+                                    int *collapsedIndices = (int *)malloc(numTris * 3 * sizeof(int));
+                                    if (collapsedIndices) {
+                                        if (Godot_Skel_BuildLodMesh(tikiPtr, mesh, surf, lodVertLimit,
+                                                                     positions, normals, texcoords, numVerts,
+                                                                     indices, numTris, tikiScale,
+                                                                     collapsedIndices, &outNumTris)) {
+                                            outIndices = collapsedIndices;
+                                            outNumVerts = lodVertLimit;
+                                        } else {
+                                            ::free(collapsedIndices);
+                                        }
+                                    }
+                                }
+
                                 // Build Godot arrays with coord conversion
                                 PackedVector3Array gPos, gNrm;
                                 PackedVector2Array gUVs;
                                 PackedInt32Array   gIdx;
-                                gPos.resize(numVerts);
-                                gNrm.resize(numVerts);
-                                gUVs.resize(numVerts);
-                                gIdx.resize(numTris * 3);
+                                gPos.resize(outNumVerts);
+                                gNrm.resize(outNumVerts);
+                                gUVs.resize(outNumVerts);
+                                gIdx.resize(outNumTris * 3);
 
-                                for (int v = 0; v < numVerts; v++) {
+                                for (int v = 0; v < outNumVerts; v++) {
                                     Vector3 p = id_to_godot_point(
                                         positions[v*3+0],
                                         positions[v*3+1],
@@ -2478,10 +2538,10 @@ void MoHAARunner::update_entities() {
                                 }
 
                                 // Indices as-is — det(id_to_godot_point) = +1, winding preserved
-                                for (int t = 0; t < numTris; t++) {
-                                    gIdx.set(t*3+0, indices[t*3+0]);
-                                    gIdx.set(t*3+1, indices[t*3+1]);
-                                    gIdx.set(t*3+2, indices[t*3+2]);
+                                for (int t = 0; t < outNumTris; t++) {
+                                    gIdx.set(t*3+0, outIndices[t*3+0]);
+                                    gIdx.set(t*3+1, outIndices[t*3+1]);
+                                    gIdx.set(t*3+2, outIndices[t*3+2]);
                                 }
 
                                 Array arrays;
@@ -2497,6 +2557,9 @@ void MoHAARunner::update_entities() {
                                 ::free(normals);
                                 ::free(texcoords);
                                 ::free(indices);
+                                if (outIndices != indices) {
+                                    ::free(outIndices);
+                                }
                             }
                         }
 
@@ -2504,13 +2567,20 @@ void MoHAARunner::update_entities() {
                     }
 
                     // Phase 60: Cache the newly built skinned mesh
-                    if (skinned_mesh.is_valid() && skinned_mesh->get_surface_count() > 0) {
+                    if (!skip_cache && skinned_mesh.is_valid() && skinned_mesh->get_surface_count() > 0) {
                         auto &entry = skel_mesh_cache[entNum];
                         entry.anim_hash = anim_hash;
                         entry.mesh = skinned_mesh;
                         entry.mesh_surfaces = skinned_mesh->get_surface_count();
+                    } else if (!skip_cache && (!skinned_mesh.is_valid() || skinned_mesh->get_surface_count() == 0)) {
+                        // PrepareBones failed or produced empty mesh — reuse
+                        // the stale cache entry rather than hiding the entity.
+                        auto stale_it = skel_mesh_cache.find(entNum);
+                        if (stale_it != skel_mesh_cache.end() && stale_it->second.mesh != nullptr) {
+                            skinned_mesh = stale_it->second.mesh;
+                        }
                     }
-                }  // end else (cache miss)
+                }  // end cache miss rebuild
             }
 
             // Use skinned mesh if available, else cached bind pose, else hide
@@ -2528,9 +2598,16 @@ void MoHAARunner::update_entities() {
                         String(" surfaces)."));
                     logged_skin = true;
                 }
-            } else if (cached && cached->mesh.is_valid()) {
-                if (mi->get_mesh() != cached->mesh) {
-                    mi->set_mesh(cached->mesh);
+            } else if (cached && !cached->lod_meshes.empty()) {
+                // Determine clamped LOD index for the static array
+                int cacheLodIdx = lodLevel;
+                if (cacheLodIdx >= (int)cached->lod_meshes.size()) {
+                    cacheLodIdx = (int)cached->lod_meshes.size() - 1;
+                }
+
+                Ref<ArrayMesh> lod_mesh = cached->lod_meshes[cacheLodIdx];
+                if (lod_mesh.is_valid() && mi->get_mesh() != lod_mesh) {
+                    mi->set_mesh(lod_mesh);
                     mesh_changed = true;
                 }
             } else {
@@ -2756,7 +2833,7 @@ void MoHAARunner::update_entities() {
         bool has_light_tint = fabsf(light_mul.r - 1.0f) > 0.02f ||
                               fabsf(light_mul.g - 1.0f) > 0.02f ||
                               fabsf(light_mul.b - 1.0f) > 0.02f;
-        
+
         // Phase 134: Check if we need per-surface shader analysis for rgbGen/alphaGen entity
         bool needs_material_update = has_light_tint;
         if (!needs_material_update) {
@@ -2764,7 +2841,7 @@ void MoHAARunner::update_entities() {
             bool has_shader_rgba = (rgba[0] != 255 || rgba[1] != 255 || rgba[2] != 255 || rgba[3] < 255 || (renderfx & 0x0400));
             needs_material_update = has_shader_rgba;
         }
-        
+
         if (needs_material_update) {
             Ref<Mesh> mesh = mi->get_mesh();
             if (mesh.is_valid()) {
@@ -2800,7 +2877,7 @@ void MoHAARunner::update_entities() {
                     bool apply_rgb_one_minus_entity = false;
                     bool apply_alpha_entity = false;
                     bool apply_alpha_one_minus_entity = false;
-                    
+
                     if (sp && sp->stage_count > 0) {
                         // Find first non-lightmap stage (same logic as get_shader_texture)
                         for (int st = 0; st < sp->stage_count; st++) {
@@ -2899,7 +2976,7 @@ void MoHAARunner::update_entities() {
                         if (entity_tint.a < 0.999f || (apply_alpha_entity && rgba[3] < 255)) {
                             dup->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                         }
-                        
+
                         // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
                         if (sp && sp->has_deform) {
                             if (sp->deform_type == 3) { // autosprite
@@ -2908,7 +2985,7 @@ void MoHAARunner::update_entities() {
                                 dup->set_billboard_mode(BaseMaterial3D::BILLBOARD_FIXED_Y);
                             }
                         }
-                        
+
                         tinted_mat_cache[tint_key] = dup;
                         mi->set_surface_override_material(s, dup);
                     }
@@ -3117,9 +3194,9 @@ void MoHAARunner::update_polys() {
         auto pm_it = s_poly_mat_cache.find(poly_mat_key);
         if (pm_it == s_poly_mat_cache.end()) {
             const char *sn = Godot_Renderer_GetShaderName(hShader);
-            UtilityFunctions::print(String("[MoHAA][Poly] Caching new poly material: shader='") + String(sn ? sn : "none") + 
+            UtilityFunctions::print(String("[MoHAA][Poly] Caching new poly material: shader='") + String(sn ? sn : "none") +
                                     String("', blend_type=") + String::num_int64(blend_type));
-            
+
             // First time seeing this (shader, blend) combo — create and cache
             if (blend_type == 1) {
                 // Inverse-multiplicative: result = dst * (1 - src*vertex_color)
@@ -3206,7 +3283,7 @@ void MoHAARunner::update_polys() {
                         mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                     }
                 }
-                
+
                 // CRITICAL: Polys are generated by the C engine with absolute world-space
                 // coordinates and added to a Node3D at origin(0,0,0). If the shader definition
                 // specified an autosprite deform, apply_shader_props_to_material will
@@ -4332,24 +4409,24 @@ void MoHAARunner::update_ui_transform() {
     Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
     if (ui_vid_w < 1) ui_vid_w = 640;
     if (ui_vid_h < 1) ui_vid_h = 480;
-    
+
     // Get actual viewport size
     Vector2 viewport_size(0, 0);
     if (hud_control) {
         viewport_size = hud_control->get_size();
     }
-    
+
     // Fallback chain if Control hasn't been laid out yet
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
         Rect2 visible_rect = get_viewport()->get_visible_rect();
         viewport_size = visible_rect.size;
-        
+
         if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
             Vector2i win = DisplayServer::get_singleton()->window_get_size();
             viewport_size = Vector2(win);
         }
     }
-    
+
     // Non-uniform scaling — stretch 640×480 to fill the entire viewport.
     // This matches OPM behaviour: SCR_AdjustFrom640() scales X by
     // vidWidth/640 and Y by vidHeight/480 independently, so the HUD
@@ -6596,7 +6673,7 @@ void MoHAARunner::_process(double delta) {
                 Cbuf_AddText("finishloadingscreen\n");
             }
         }
-        
+
         // Detect map unloaded: was in SS_GAME, now not
         else if (last_server_state == 3 && cur_state != 3) {
             UtilityFunctions::print("[MoHAA] Map unloaded.");

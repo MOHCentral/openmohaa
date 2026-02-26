@@ -29,7 +29,7 @@ public:
 
     /* Cached model = mesh + per-surface shader names + scale */
     struct CachedModel {
-        Ref<ArrayMesh>            mesh;
+        std::vector<Ref<ArrayMesh>> lod_meshes;
         std::vector<SurfaceInfo>  surfaces;
         float                     tiki_scale;    /* dtiki_t::load_scale */
     };
@@ -74,7 +74,7 @@ int Godot_Skel_SelectLodLevel(void *tikiPtr, int meshIndex, float distance);
  * @param lodLevel  LOD level from Godot_Skel_SelectLodLevel().
  * @return Maximum vertex count, or -1 if LOD data is absent (use all verts).
  */
-int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int lodLevel);
+int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int surfIndex, int lodLevel);
 
 /*
  * Godot_Skel_BuildLodMesh — build an ArrayMesh with LOD vertex collapse.

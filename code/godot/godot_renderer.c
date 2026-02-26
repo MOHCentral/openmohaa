@@ -2997,6 +2997,11 @@ int Godot_Renderer_GetBackgroundCmdIndex( void )
     return gr_bgCmdIndex;
 }
 
+int Godot_Cvar_VariableIntegerValue( const char *var_name )
+{
+    return ri.Cvar_VariableIntegerValue( var_name );
+}
+
 int Godot_Renderer_GetDlightCount( void )
 {
     return gr_numDlights;

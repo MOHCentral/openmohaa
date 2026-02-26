@@ -372,7 +372,7 @@ private:
     std::vector<MeshInstance3D *> hud_model_meshes;
     std::vector<int> hud_model_last_hmodels;
     std::vector<uint64_t> hud_model_last_anim_hashes;
-    
+
     // Viewport coordinate transformation (for HUD rendering and mouse input)
     // These are calculated once per frame and used for both rendering UI and transforming mouse coords
     float ui_scale_x = 1.0f;       // Scale from engine 640×480 to viewport

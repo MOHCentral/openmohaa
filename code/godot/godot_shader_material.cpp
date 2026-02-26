@@ -148,8 +148,9 @@ static bool needs_diffuse_lighting(const GodotShaderProps *props) {
     return false;
 }
 
-/* Returns true if any stage uses tcMod turb */
-static bool needs_turb(const GodotShaderProps *props) {
+/* Returns true if any stage uses tcMod turb or tcGen vector (which need v_pos local coordinates) */
+static bool needs_v_pos(const GodotShaderProps *props) {
+    if (needs_tcgen_vector(props)) return true;
     for (int i = 0; i < props->stage_count; i++) {
         const MohaaShaderStage *s = &props->stages[i];
         if (!s->active) continue;
@@ -283,11 +284,14 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
             code += "    vec2 uv" + si + " = env_refl" + si + ".xy * 0.5 + 0.5;\n";
             break;
         case STAGE_TCGEN_VECTOR:
-            code += "    vec2 uv" + si + " = vec2(dot(VERTEX, vec3(" +
+            code += "    {\n";
+            code += "        vec3 q_pos" + si + " = vec3(-v_pos.z, -v_pos.x, v_pos.y) * 39.37;\n";
+            code += "        uv" + si + " = vec2(dot(q_pos" + si + ", vec3(" +
                     ftos(s->tcGenVecS[0]) + ", " + ftos(s->tcGenVecS[1]) + ", " + ftos(s->tcGenVecS[2]) +
-                    ")), dot(VERTEX, vec3(" +
+                    ")), dot(q_pos" + si + ", vec3(" +
                     ftos(s->tcGenVecT[0]) + ", " + ftos(s->tcGenVecT[1]) + ", " + ftos(s->tcGenVecT[2]) +
                     ")));\n";
+            code += "    }\n";
             break;
         case STAGE_TCGEN_BASE:
         default:
@@ -317,8 +321,8 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 std::string start_expr = (tm->flags & TCMOD_FLAG_FROMENTITY_ROT_START)
                     ? "entity_tcmod_rotate_start"
                     : ftos(tm->params[1]);
-                code += "        float rot_angle" + si + " = radians((" + speed_expr + " * TIME + " +
-                        start_expr + ") * " + ftos(tm->params[2]) + ");\n";
+                code += "        float rot_angle" + si + " = radians(-(" + speed_expr + " * " + ftos(tm->params[2]) + " * TIME + " +
+                        start_expr + "));\n";
                 code += "        float rc" + si + " = cos(rot_angle" + si + ");\n";
                 code += "        float rs" + si + " = sin(rot_angle" + si + ");\n";
                 code += "        vec2 rot_center" + si + " = vec2(0.5, 0.5);\n";
@@ -337,9 +341,11 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 /* turb: params[0]=base, params[1]=amp, params[2]=phase, params[3]=freq
                  * OpenMOHAA parity: turbulence uses vertex position for spatial offset.
                  * Formula: uv += amp * sin((pos.xz + pos.y) * scale + (phase + time*freq) * 2PI)
-                 * matching id Tech 3's ModTexCoords. */
+                 * In idTech3 coordinates: S maps to X+Z, T maps to Y
+                 * In Godot coordinates: Quake X is -Z, Quake Z is Y, Quake Y is -X 
+                 * And Godot local pos is scaled down by 39.37 relative to Quake space. */
                 std::string now_expr = "(" + ftos(tm->params[2]) + " + TIME * " + ftos(tm->params[3]) + ") * 6.283185";
-                code += "    uv" + si + " += " + ftos(tm->params[1]) + " * sin(vec2(v_pos.x + v_pos.z, v_pos.y) * (6.283185 / 1024.0) + vec2(" + now_expr + "));\n";
+                code += "    uv" + si + " += " + ftos(tm->params[1]) + " * sin(vec2(-v_pos.z + v_pos.y, -v_pos.x) * (39.37 * 6.283185 / 1024.0) + vec2(" + now_expr + "));\n";
                 break;
             }
             case TCMOD_STRETCH: {
@@ -375,11 +381,8 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 break;
             }
             case TCMOD_BULGE:
-                code += "    uv" + si + " += vec2(sin((uv" + si + ".y * " + ftos(tm->wave.frequency) +
-                        " + TIME + " + ftos(tm->wave.phase) + ") * 6.283185), "
-                        "sin((uv" + si + ".x * " + ftos(tm->wave.frequency) +
-                        " + TIME + " + ftos(tm->wave.phase) + ") * 6.283185)) * " +
-                        ftos(tm->wave.amplitude) + " + vec2(" + ftos(tm->wave.base) + ");\n";
+                /* OpenMOHAA parity: tr_shade_calc.c RB_CalcBulgeTexCoords calculates 
+                 * an offset but never applies it to 'st'. Bulge is a no-op for tex mapping. */
                 break;
             case TCMOD_TRANSFORM:
                 code += "    uv" + si + " = mat2(" + ftos(tm->params[0]) + ", " + ftos(tm->params[1]) + ", " +
@@ -390,7 +393,11 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 code += "    uv" + si + " += entity_tcmod_translate;\n";
                 break;
             case TCMOD_PARALLAX:
-                code += "    uv" + si + " += normalize(VIEW).xy * vec2(" + ftos(tm->params[0]) + ", " +
+                /* Parallax: offsetS = tr.refdef.vieworg[0] * rateS, offsetT = vieworg[1] * rateT
+                 * vieworg is Quake World Space Camera Position.
+                 * Godot World Camera Position is INV_VIEW_MATRIX[3].xyz
+                 * Quake X = -Godot Z * 39.37. Quake Y = -Godot X * 39.37 */
+                code += "    uv" + si + " += vec2(-INV_VIEW_MATRIX[3].z, -INV_VIEW_MATRIX[3].x) * 39.37 * vec2(" + ftos(tm->params[0]) + ", " +
                         ftos(tm->params[1]) + ");\n";
                 break;
             case TCMOD_MACRO:
@@ -678,7 +685,7 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         code += "uniform vec2 entity_tcmod_translate = vec2(0.0, 0.0);\n";
     }
 
-    if (needs_turb(props)) {
+    if (needs_v_pos(props)) {
         code += "varying vec3 v_pos;\n";
     }
 
@@ -696,12 +703,12 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         if (!deform_glsl.is_empty()) {
             code += "void vertex() {\n";
             code += std::string(deform_glsl.utf8().get_data());
-            if (needs_turb(props)) {
+            if (needs_v_pos(props)) {
                 code += "    v_pos = VERTEX;\n";
             }
             code += "}\n\n";
         }
-    } else if (needs_turb(props)) {
+    } else if (needs_v_pos(props)) {
         code += "void vertex() {\n";
         code += "    v_pos = VERTEX;\n";
         code += "}\n\n";

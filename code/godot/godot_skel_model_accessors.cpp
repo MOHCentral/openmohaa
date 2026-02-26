@@ -67,6 +67,8 @@ int   Godot_RI_GetNumChannels(void *tiki);
 int   Godot_RI_GetLocalChannel(void *tiki, int globalChannel);
 int   Godot_RI_GetSkelAnimFrame(void *tiki, void *bonesOut, float *radiusOut);
 
+void  Com_DPrintf(const char *fmt, ...);
+
 /* Model type: 0=bad, 1=brush, 2=tiki, 3=sprite
  * Returns -1 if handle is out of range.
  * NOTE: gr_models[] is defined in godot_renderer.c. We access the
@@ -433,18 +435,30 @@ void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
                                float actionWeight,
                                int *outBoneCount)
 {
-    if (!tikiPtr || !frameInfo) return NULL;
+    if (!tikiPtr || !frameInfo) {
+        Com_DPrintf("[GodotSkel] PrepareBones: NULL tikiPtr=%p frameInfo=%p entNum=%d\n",
+            tikiPtr, (const void *)frameInfo, entityNumber);
+        return NULL;
+    }
 
     /* 1. Set animation pose on the skeletor */
     void *skeletor = Godot_RI_GetSkeletor(tikiPtr, entityNumber);
-    if (!skeletor) return NULL;
+    if (!skeletor) {
+        Com_DPrintf("[GodotSkel] PrepareBones: GetSkeletor returned NULL for entNum=%d tiki=%p\n",
+            entityNumber, tikiPtr);
+        return NULL;
+    }
 
     Godot_RI_SetPoseInternal(skeletor, frameInfo, bone_tag,
                               (const vec4_t *)bone_quat, actionWeight);
 
     /* 2. Allocate frame buffer for bone output */
     int numChannels = Godot_RI_GetNumChannels(tikiPtr);
-    if (numChannels <= 0) return NULL;
+    if (numChannels <= 0) {
+        Com_DPrintf("[GodotSkel] PrepareBones: numChannels=%d for entNum=%d tiki=%p\n",
+            numChannels, entityNumber, tikiPtr);
+        return NULL;
+    }
 
     size_t frameSize = sizeof(godot_skelAnimFrame_t)
                      + numChannels * sizeof(godot_SkelMat4_t);
@@ -507,7 +521,8 @@ void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
  */
 int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
                              const void *boneCachePtr, int boneCount,
-                             float *outPositions, float *outNormals)
+                             float *outPositions, float *outNormals,
+                             int maxVerts)
 {
     dtiki_t *tiki = (dtiki_t *)tikiPtr;
     if (!tiki || meshIndex < 0 || meshIndex >= tiki->numMeshes)
@@ -523,6 +538,9 @@ int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
     if (!bones || boneCount <= 0) return 0;
 
     int numVerts = surf->numVerts;
+    if (maxVerts >= 0 && maxVerts < numVerts) {
+        numVerts = maxVerts;
+    }
     skeletorVertex_t *vert = surf->pVerts;
 
     for (int v = 0; v < numVerts; v++) {
