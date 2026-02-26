@@ -345,6 +345,8 @@ private:
     std::vector<CanvasSegment> overlay_segments;
     int overlay_segment_count = 0;   // active segments this frame
     int overlay_current_blend = -1;  // blend mode of current segment
+    RID mul_canvas_item;
+    RID mul_inv_canvas_item;
     Ref<CanvasItemMaterial> mul_canvas_material;
     Ref<ShaderMaterial> mul_inv_material;
     Ref<Shader> mul_inv_shader;
