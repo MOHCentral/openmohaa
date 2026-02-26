@@ -22,7 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 /*****************************************************************************
  * name:		files.c
  *
- * desc:		handle based filesystem for Quake III Arena 
+ * desc:		handle based filesystem for Quake III Arena
  *
  * $Archive: /MissionPack/code/qcommon/files.c $
  *
@@ -51,7 +51,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 QUAKE3 FILESYSTEM
 
-All of Quake's data access is through a hierarchical file system, but the contents of 
+All of Quake's data access is through a hierarchical file system, but the contents of
 the file system can be transparently merged from several sources.
 
 A "qpath" is a reference to game file data.  MAX_ZPATH is 256 characters, which must include
@@ -744,7 +744,7 @@ static FILE	*FS_FileForHandle( fileHandle_t f ) {
 	if ( ! fsh[f].handleFiles.file.o ) {
 		Com_Error( ERR_DROP, "FS_FileForHandle: NULL" );
 	}
-	
+
 	return fsh[f].handleFiles.file.o;
 }
 
@@ -788,7 +788,7 @@ long FS_filelength(fileHandle_t f)
 	FILE	*h;
 
 	h = FS_FileForHandle(f);
-	
+
 	if(h == NULL)
 		return -1;
 	else
@@ -966,7 +966,7 @@ Creates any directories needed to store the given filename
 qboolean FS_CreatePath (const char *OSPath) {
 	char	*ofs;
 	char	path[MAX_OSPATH];
-	
+
 	if (!OSPath || !*OSPath) {
 		return qfalse;
 	}
@@ -1059,13 +1059,13 @@ qboolean FS_FileInPathExists(const char *testpath)
 	FILE *filep;
 
 	filep = Sys_FOpen(testpath, "rb");
-	
+
 	if(filep)
 	{
 		fclose(filep);
 		return qtrue;
 	}
-	
+
 	return qfalse;
 }
 
@@ -1615,7 +1615,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 	// make absolutely sure that it can't back up the path.
 	// The searchpaths do guarantee that something will always
-	// be prepended, so we don't need to worry about "c:" or "//limbo" 
+	// be prepended, so we don't need to worry about "c:" or "//limbo"
 	if(strstr(filename, ".." ) || strstr(filename, "::"))
 	{
 		if(file == NULL)
@@ -1723,9 +1723,9 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					// found it!
 
 					// mark the pak as having been referenced and mark specifics on cgame and ui
-					// shaders, txt, arena files  by themselves do not count as a reference as 
-					// these are loaded from all pk3s 
-					// from every pk3 file.. 
+					// shaders, txt, arena files  by themselves do not count as a reference as
+					// these are loaded from all pk3s
+					// from every pk3 file..
 					len = strlen(filename);
 
 					if (!(pak->referenced & FS_GENERAL_REF))
@@ -1782,7 +1782,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 					if(fs_debug->integer)
 					{
-						Com_Printf("FS_FOpenFileRead: %s (found in '%s')\n", 
+						Com_Printf("FS_FOpenFileRead: %s (found in '%s')\n",
 								filename, pak->pakFilename);
 					}
 
@@ -1901,7 +1901,7 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 			FS_FCloseFile(*file);
 		}
 	}
-	
+
 #ifdef FS_MISSING
 	if(missingFiles)
 		fprintf(missingFiles, "%s\n", filename);
@@ -2792,7 +2792,7 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, const char
 
 					// check for directory match
 					name = buildBuffer[i].name;
-					
+
 					zpathLen = FS_ReturnPath(name, zpath, &depth);
 
 					if ( pathLength > (zpathLen + 1) || Q_stricmpn( name, path, pathLength ) || ((!wantSubs || bDirSearch) && depth - pathDepth != 1) ) {
@@ -3647,7 +3647,7 @@ qboolean FS_CheckDirTraversal(const char *checkdir)
 {
 	if(strstr(checkdir, "../") || strstr(checkdir, "..\\"))
 		return qtrue;
-	
+
 	return qfalse;
 }
 
@@ -3968,7 +3968,7 @@ static void FS_Startup(const char* gameName)
 	fs_homestatepath = Cvar_Get ("fs_homestatepath", statePath, CVAR_INIT|CVAR_PROTECTED );
 	fs_gamedirvar = Cvar_Get ("fs_game", "", CVAR_INIT|CVAR_SYSTEMINFO );
 	fs_restrict = Cvar_Get( "fs_restrict", "", CVAR_INIT );
-	fs_assetAudit = Cvar_Get( "fs_assetAudit", "1", 0 );
+	fs_assetAudit = Cvar_Get( "fs_assetAudit", "0", 0 );
 	fs_assetAuditFile = Cvar_Get( "fs_assetAuditFile", "asset_usage_keep_list.txt", 0 );
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED );
