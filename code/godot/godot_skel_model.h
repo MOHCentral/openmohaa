@@ -32,9 +32,6 @@ public:
         Ref<ArrayMesh>            mesh;
         std::vector<SurfaceInfo>  surfaces;
         float                     tiki_scale;    /* dtiki_t::load_scale */
-        /* Stored at build time; compared on each lookup to detect stale
-         * entries caused by model-slot recycling (GR_MOD_BAD reuse). */
-        void                     *tiki_ptr = nullptr;
     };
 
     /* Singleton access */

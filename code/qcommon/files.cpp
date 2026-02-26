@@ -3968,7 +3968,7 @@ static void FS_Startup(const char* gameName)
 	fs_homestatepath = Cvar_Get ("fs_homestatepath", statePath, CVAR_INIT|CVAR_PROTECTED );
 	fs_gamedirvar = Cvar_Get ("fs_game", "", CVAR_INIT|CVAR_SYSTEMINFO );
 	fs_restrict = Cvar_Get( "fs_restrict", "", CVAR_INIT );
-	fs_assetAudit = Cvar_Get( "fs_assetAudit", "0", 0 );
+	fs_assetAudit = Cvar_Get( "fs_assetAudit", "1", 0 );
 	fs_assetAuditFile = Cvar_Get( "fs_assetAuditFile", "asset_usage_keep_list.txt", 0 );
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED );
