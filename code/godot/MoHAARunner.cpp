@@ -3159,8 +3159,9 @@ void MoHAARunner::update_polys() {
             if (normal.length_squared() > 1e-12f) {
                 normal = normal.normalized();
                 // 0.005 m ~ 0.2 id units — invisible but prevents Z-fight
+                // Subtract normal because the vertices are wound clockwise, meaning normal points INTO the surface.
                 for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] + normal * 0.005f);
+                    gPos.set(v, gPos[v] - normal * 0.005f);
                 }
             }
         }
@@ -3543,8 +3544,9 @@ void MoHAARunner::update_terrain_marks() {
             Vector3 normal = e1.cross(e2);
             if (normal.length_squared() > 1e-12f) {
                 normal = normal.normalized();
+                // Subtract normal because the vertices are wound clockwise, meaning normal points INTO the surface.
                 for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] + normal * 0.005f);
+                    gPos.set(v, gPos[v] - normal * 0.005f);
                 }
             }
         }
