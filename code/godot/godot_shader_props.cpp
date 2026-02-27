@@ -1092,7 +1092,16 @@ static void parse_shader(char **text, GodotShaderProps *props)
             if (token[0] && Q_stricmp(token, "-")) {
                 Q_strncpyz(props->sky_env, token, sizeof(props->sky_env));
             }
+            /* cloudHeight */
+            token = COM_ParseExt(text, 0);
+            if (token[0] && Q_stricmp(token, "-")) {
+                props->sky_cloud_height = (float)atof(token);
+                if (props->sky_cloud_height == 0.0f) {
+                    props->sky_cloud_height = 512.0f;
+                }
+            }
             props->is_sky = true;
+            /* innerBox — skip */
             SkipRestOfLine(text);
         }
         else if (!Q_stricmp(token, "deformVertexes") || !Q_stricmp(token, "deformvertexes"))
@@ -1660,6 +1669,34 @@ const char *Godot_ShaderProps_GetSkyEnv() {
             return pair.second.sky_env;
     }
     return nullptr;
+}
+
+extern "C" int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
+                                      char *out_cloud_map, int map_size) {
+    if (!out_cloud_height || !out_cloud_map || map_size <= 0) return 0;
+
+    for (const auto &pair : s_shader_props) {
+        if (!pair.second.is_sky || !pair.second.sky_env[0]) continue;
+        if (pair.second.sky_cloud_height <= 0.0f) continue;
+
+        *out_cloud_height = pair.second.sky_cloud_height;
+
+        /* Find first non-lightmap stage texture as the cloud map */
+        for (int s = 0; s < pair.second.stage_count; s++) {
+            const MohaaShaderStage *stg = &pair.second.stages[s];
+            if (!stg->active) continue;
+            if (stg->isLightmap) continue;
+            if (!stg->map[0]) continue;
+            if (!Q_stricmp(stg->map, "$lightmap")) continue;
+            Q_strncpyz(out_cloud_map, stg->map, map_size);
+            return 1;
+        }
+
+        /* No stage texture found but cloudHeight exists */
+        *out_cloud_height = 0.0f;
+        return 0;
+    }
+    return 0;
 }
 
 /* ── C-linkage helper for godot_renderer.c ── */

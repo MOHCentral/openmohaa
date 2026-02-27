@@ -14,6 +14,7 @@
 
 #include "../qcommon/q_shared.h"
 #include "../renderercommon/tr_public.h"
+#include "godot_shader_props.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -734,6 +735,33 @@ static qhandle_t GR_RegisterShaderNoMip( const char *name )
     }
 
     if ( gr_numShaders >= GR_MAX_SHADERS ) return 0;
+
+    /* Match OpenMOHAA RE_RegisterShaderNoMip: if the image doesn't exist
+     * and there's no .shader definition, return 0 (defaultShader).
+     * This is critical for UIBindButton which checks GetMaterial() to
+     * decide whether to show a texture image or fall back to text. */
+    {
+        qboolean found = qfalse;
+
+        /* Check for .shader definition */
+        if ( Godot_ShaderProps_Find( name ) ) {
+            found = qtrue;
+        }
+
+        /* Check for image file in VFS */
+        if ( !found ) {
+            if ( ri.FS_FileExists( name ) ||
+                 ri.FS_FileExists( va( "%s.tga", name ) ) ||
+                 ri.FS_FileExists( va( "%s.jpg", name ) ) ||
+                 ri.FS_FileExists( va( "%s.png", name ) ) ) {
+                found = qtrue;
+            }
+        }
+
+        if ( !found ) {
+            return 0;
+        }
+    }
 
     i = gr_numShaders++;
     Q_strncpyz( gr_shaders[i].name, name, sizeof( gr_shaders[i].name ) );
@@ -3616,3 +3644,10 @@ refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp )
 
     return &re;
 }
+
+void Godot_Renderer_CM_BoxTrace(void *results, const float *start, const float *end, const float *mins, const float *maxs, int model, int brushMask, int cylinder) {
+    if (ri.CM_BoxTrace) {
+        ri.CM_BoxTrace((trace_t *)results, start, end, mins, maxs, model, brushMask, cylinder);
+    }
+}
+

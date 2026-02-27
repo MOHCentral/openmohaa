@@ -193,6 +193,7 @@ typedef struct GodotShaderProps {
     bool no_lightmap;        /* surfaceparm nolightmap — render fullbright */
     bool has_surfaceparm_trans; /* surfaceparm trans — BSP compiler flag only */
     char sky_env[64];        /* skyParms env basename (e.g. "env/m5l2") */
+    float sky_cloud_height;  /* skyParms cloudHeight (0 = no clouds) */
 
     /* Phase 36: tcMod scroll/rotate/scale animation parameters */
     float tcmod_scroll_s;    /* texcoord S scroll speed (units/sec) */
@@ -306,6 +307,15 @@ int Godot_ShaderProps_Count();
  * or nullptr if no sky shader was parsed.  E.g. "env/m5l2".
  */
 const char *Godot_ShaderProps_GetSkyEnv();
+
+/*
+ * Returns sky cloud data for the first sky shader found.
+ * out_cloud_height is set to the cloud height value.
+ * out_cloud_map receives the first non-lightmap stage texture path.
+ * Returns 1 if cloud data is available, 0 otherwise.
+ */
+int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
+                                      char *out_cloud_map, int map_size);
 
 /*
  * C-linkage helper: look up a shader's first non-lightmap stage `map`

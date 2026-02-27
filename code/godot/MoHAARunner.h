@@ -33,6 +33,9 @@
 #include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/rendering_server.hpp>
 #include <godot_cpp/classes/world3d.hpp>
+#include <godot_cpp/classes/sprite2d.hpp>
+#include <godot_cpp/classes/physics_ray_query_parameters3d.hpp>
+#include <godot_cpp/classes/physics_direct_space_state3d.hpp>
 
 #include <vector>
 #include <unordered_map>
@@ -271,6 +274,21 @@ private:
     struct AnimMapInfo { float freq; int num_frames; };
     std::unordered_map<int, AnimMapInfo> animmap_info;
 
+    // Vanity mirror hack container
+    struct MirrorViewport {
+        SubViewport *viewport = nullptr;
+        Camera3D *camera = nullptr;
+        MeshInstance3D *mesh_instance = nullptr;
+        Vector3 normal; // Mirror facing direction in real Godot world space
+        Vector3 center; // Mirror center in real Godot world space
+        int surface_idx = 0;
+        Ref<StandardMaterial3D> override_mat;
+    };
+    std::vector<MirrorViewport> active_mirrors;
+    
+    void update_mirrors(); // Update mirror camera positions
+
+
     // Sound entity position tracking (Phase 49 rendering side)
     // Sound fade state (Phase 50 rendering side)
     float sound_fade_elapsed = 0.0f;
@@ -435,6 +453,31 @@ private:
     void update_hud_models(); // Render HUD model previews (Phase 148)
     void update_scoreboard(); // Draw scoreboard overlay when TAB is held
     void load_skybox();  // Load skybox cubemap from BSP sky shader (Phase 12)
+    void load_sun_flare();  // Parse sun flare data from entity string + lensflaredefs.txt
+    void update_sun_flare();  // Render sun flare 2D overlay each frame
+
+    // ── Sun flare data ──
+    struct SunFlareSprite {
+        float size;       // Screen-space size
+        float where;      // Position along flare axis (0..1)
+        int shader_handle; // Godot shader/texture handle
+        float alphascale;  // Alpha multiplier
+    };
+    bool sun_exists = false;
+    float sun_direction[3] = {0, 0, 0};  // World-space direction vector (id coords)
+    float sun_color[3] = {1, 1, 1};      // Sun color (0-1 range)
+    float sun_flare_direction[3] = {0, 0, 0}; // Flare direction (may differ from sun)
+    char sun_flare_name[64] = {0};       // Flare definition name (e.g. "sun")
+    float sun_flare_dot_min = 0.8f;      // Minimum dot for flare visibility
+    float sun_flare_fullscale = 0.7f;    // Fullscreen blend scale
+    int sun_flare_fullfade = 0;          // Fade time in ms
+    int sun_flare_fullscreen_shader = 0; // Shader for fullscreen blend
+    std::vector<SunFlareSprite> sun_flare_sprites; // Parsed flare sprites
+    bool sun_flare_initialized = false;
+    CanvasLayer *sun_flare_canvas = nullptr;
+    Control *sun_flare_control = nullptr;
+    float sun_flare_blend_alpha = 0.0f;  // Current fullscreen blend alpha
+    double sun_flare_last_visible_time = 0.0; // Time when flare was last visible
 
 protected:
     static void _bind_methods();

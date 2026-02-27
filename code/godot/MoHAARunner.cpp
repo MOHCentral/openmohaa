@@ -379,6 +379,14 @@ extern "C" {
     void        Godot_SB_GetFontColor(float *r, float *g, float *b, float *a);
     int         Godot_SB_GetDrawHeader(void);
     const char *Godot_SB_GetMenuName(void);
+
+    // Quake3 common parsing utilities (from qcommon/q_shared.c / q_parse.cpp)
+    char *COM_Parse(char **data_p);
+    char *COM_ParseExt(char **data_p, int allowLineBreak);
+    int   Q_stricmp(const char *s1, const char *s2);
+
+    // BSP entity string accessor — from godot_bsp_mesh.cpp
+    const char *Godot_BSP_GetEntityString(void);
 }
 
 // ──────────────────────────────────────────────
@@ -822,6 +830,7 @@ void MoHAARunner::setup_3d_scene() {
         weapon_camera = memnew(Camera3D);
         weapon_camera->set_near(0.01);
         weapon_camera->set_far(100.0);
+        weapon_camera->set_current(true);   // must be current for SubViewport to render
         weapon_viewport->add_child(weapon_camera);
 
         // Root node for FPS entity meshes inside the weapon viewport
@@ -1069,6 +1078,9 @@ void MoHAARunner::check_world_load() {
         // Load skybox cubemap from sky shader (Phase 12)
         load_skybox();
         UtilityFunctions::print(String("[MoHAA] Loading load_skybox: ") + new_bsp);
+
+        // Load sun flare data from entity string + lensflaredefs.txt
+        load_sun_flare();
 
         // ── Module hooks for world load (defensive) ──
 #ifdef HAS_WEATHER_MODULE
@@ -1536,6 +1548,96 @@ void MoHAARunner::load_static_models() {
             if (!shader_name.is_empty()) {
                 CharString cs = shader_name.ascii();
                 apply_shader_props_to_material(mat, cs.get_data());
+
+/*
+                if (shader_name.to_lower().contains("vanity")) {
+                    UtilityFunctions::print(String("[MoHAA][MIRROR-DEBUG-STATIC] TIKI shader name contains vanity: '") + shader_name + "'");
+                }
+
+                if (shader_name == "static_Vanity" || shader_name.to_lower() == "static_vanity" || shader_name.to_lower().contains("vanity")) {
+                    UtilityFunctions::print(String("[MoHAA][MIRROR-DEBUG-STATIC] Vanity mirror hack triggered for surface ") + String::num_int64(s));
+                    
+                    MirrorViewport *mv = nullptr;
+                    for (auto &m : active_mirrors) {
+                        if (m.mesh_instance == nullptr || m.mesh_instance == mi) {
+                            mv = &m;
+                            break;
+                        }
+                    }
+                    if (!mv) {
+                        active_mirrors.push_back(MirrorViewport());
+                        mv = &active_mirrors.back();
+                    }
+
+                    if (!mv->viewport) {
+                        mv->viewport = memnew(SubViewport);
+                        mv->viewport->set_size(get_viewport()->get_visible_rect().size);
+                        mv->viewport->set_update_mode(SubViewport::UPDATE_ALWAYS);
+                        mv->viewport->set_world_3d(get_viewport()->find_world_3d());
+                        add_child(mv->viewport);
+                    }
+
+                    if (!mv->camera) {
+                        mv->camera = memnew(Camera3D);
+                        mv->viewport->add_child(mv->camera);
+                        mv->camera->set_cull_mask(~(1 << 20)); // Exclude if we used layer 20
+                    }
+
+                    mv->mesh_instance = mi;
+                    mv->surface_idx = s;
+                    
+                    mv->normal = Vector3(0, 0, 1); 
+                    mv->center = Vector3(0, 0, 0);
+
+                    Ref<ViewportTexture> vtex = mv->viewport->get_texture();
+                    
+                    Ref<Shader> mshader;
+                    mshader.instantiate();
+                    mshader->set_code(
+                        "shader_type spatial;\n"
+                        "render_mode unshaded, cull_disabled;\n"
+                        "uniform sampler2D base_texture : source_color, filter_linear_mipmap;\n"
+                        "uniform sampler2D cutout_texture : source_color, filter_linear_mipmap;\n"
+                        "uniform sampler2D mirror_texture : source_color, filter_linear;\n"
+                        "void fragment() {\n"
+                        "    vec4 base_color = texture(base_texture, UV);\n"
+                        "    vec4 cutout = texture(cutout_texture, UV);\n"
+                        "    vec4 reflection = texture(mirror_texture, SCREEN_UV);\n"
+                        "    \n"
+                        "    if (base_color.a < 0.5) {\n"
+                        "        discard; // Cut out the feet of the vanity\n"
+                        "    }\n"
+                        "    \n"
+                        "    // The cutout texture likely uses its alpha (or rgb) to mask the mirror.\n"
+                        "    // We'll use alpha, but if it's solid white we fallback to color luminance.\n"
+                        "    float mask = cutout.a;\n"
+                        "    if (mask > 0.99 && cutout.r < 0.1) mask = cutout.r; // heuristic fallback\n"
+                        "    \n"
+                        "    ALBEDO = mix(base_color.rgb, reflection.rgb, mask);\n"
+                        "}\n"
+                    );
+
+                    Ref<ShaderMaterial> smat;
+                    smat.instantiate();
+                    smat->set_shader(mshader);
+
+                    Ref<Texture2D> base_tex = mat->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+                    smat->set_shader_parameter("base_texture", base_tex);
+                    smat->set_shader_parameter("mirror_texture", vtex);
+                    
+                    int cutout_handle = Godot_Renderer_RegisterShader("textures/models/items/vanity_cutout.tga");
+                    if (cutout_handle > 0) {
+                        Ref<ImageTexture> cutout_tex = get_shader_texture(cutout_handle);
+                        if (cutout_tex.is_valid()) {
+                            smat->set_shader_parameter("cutout_texture", cutout_tex);
+                        }
+                    }
+                    
+                    mv->override_mat = smat;
+                    mi->set_surface_override_material(s, smat);
+                    continue;
+                }
+                */
             }
 
             mi->set_surface_override_material(s, mat);
@@ -1682,22 +1784,140 @@ void MoHAARunner::load_skybox() {
         return;
     }
 
-    // Create a sky shader that samples the cubemap
+    // ── Check for cloud layer ──
+    float cloud_height = 0.0f;
+    char cloud_map_path[256] = {0};
+    bool has_clouds = (Godot_ShaderProps_GetSkyCloudData(
+        &cloud_height, cloud_map_path, sizeof(cloud_map_path)) != 0);
+
+    Ref<ImageTexture> cloud_tex;
+    if (has_clouds && cloud_map_path[0]) {
+        // Try loading the cloud texture (with common extensions)
+        static const char *cloud_exts[] = { "", ".tga", ".jpg", nullptr };
+        for (int e = 0; cloud_exts[e]; e++) {
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s%s", cloud_map_path, cloud_exts[e]);
+
+            void *raw = nullptr;
+            long len = Godot_VFS_ReadFile(full_path, &raw);
+            if (len <= 0 || !raw) continue;
+
+            PackedByteArray buf;
+            buf.resize(len);
+            memcpy(buf.ptrw(), raw, len);
+            Godot_VFS_FreeFile(raw);
+
+            Ref<Image> cloud_img;
+            cloud_img.instantiate();
+            Error cerr;
+            // Detect format from extension
+            const char *ext = strrchr(full_path, '.');
+            if (ext && (ext[1] == 'j' || ext[1] == 'J')) {
+                cerr = cloud_img->load_jpg_from_buffer(buf);
+            } else {
+                cerr = cloud_img->load_tga_from_buffer(buf);
+            }
+
+            if (cerr == OK && cloud_img->get_width() > 0) {
+                if (cloud_img->get_format() != Image::FORMAT_RGBA8) {
+                    cloud_img->convert(Image::FORMAT_RGBA8);
+                }
+                cloud_tex = ImageTexture::create_from_image(cloud_img);
+                UtilityFunctions::print(
+                    String("[MoHAA] Sky cloud texture loaded: ") + full_path +
+                    " (cloudHeight=" + String::num(cloud_height, 0) + ")");
+                break;
+            }
+        }
+        if (!cloud_tex.is_valid()) {
+            UtilityFunctions::print(
+                String("[MoHAA] Sky cloud texture not found: ") + cloud_map_path +
+                " — skybox without clouds.");
+            has_clouds = false;
+        }
+    }
+
+    // ── Build Sky shader ──
     Ref<Shader> sky_shader;
     sky_shader.instantiate();
-    sky_shader->set_code(
-        "shader_type sky;\n"
-        "uniform samplerCube sky_cubemap : source_color;\n"
-        "void sky() {\n"
-        "    COLOR = texture(sky_cubemap, EYEDIR).rgb;\n"
-        "}\n"
-    );
+
+    if (has_clouds && cloud_tex.is_valid()) {
+        // Sky shader with cubemap + cloud layer overlay.
+        // Cloud UV uses spherical projection matching id Tech 3's
+        // R_InitSkyTexCoords: the cloud is projected onto a dome at
+        // cloudHeight above a sphere of radius 4096 units.
+        sky_shader->set_code(
+            "shader_type sky;\n"
+            "uniform samplerCube sky_cubemap : source_color;\n"
+            "uniform sampler2D cloud_texture : source_color, filter_linear, repeat_enable;\n"
+            "uniform float cloud_height = 512.0;\n"
+            "uniform float time_scale = 0.0;\n"
+            "\n"
+            "void sky() {\n"
+            "    vec3 sky_color = texture(sky_cubemap, EYEDIR).rgb;\n"
+            "\n"
+            "    // Spherical cloud projection (matches id Tech 3 R_InitSkyTexCoords)\n"
+            "    vec3 dir = normalize(EYEDIR);\n"
+            "    float radius_world = 4096.0;\n"
+            "    \n"
+            "    // Only process clouds above horizon to avoid divide by zero\n"
+            "    if (dir.y > 0.01) {\n"
+            "        // Compute parametric intersection with cloud dome\n"
+            "        float dot_dir = dot(dir, dir);\n"
+            "        float p = (1.0 / (2.0 * dot_dir)) *\n"
+            "            (-2.0 * dir.y * radius_world +\n"
+            "             2.0 * sqrt(dir.y * dir.y * radius_world * radius_world +\n"
+            "                        2.0 * dir.x * dir.x * radius_world * cloud_height +\n"
+            "                        dir.x * dir.x * cloud_height * cloud_height +\n"
+            "                        2.0 * dir.z * dir.z * radius_world * cloud_height +\n"
+            "                        dir.z * dir.z * cloud_height * cloud_height +\n"
+            "                        2.0 * dir.y * dir.y * radius_world * cloud_height +\n"
+            "                        dir.y * dir.y * cloud_height * cloud_height));\n"
+            "        \n"
+            "        vec3 v = dir * p;\n"
+            "        v.y += radius_world;\n"
+            "        v = normalize(v);\n"
+            "        \n"
+            "        float s_coord = acos(v.x);\n"
+            "        float t_coord = acos(v.z);\n"
+            "        \n"
+            "        vec4 cloud_sample = texture(cloud_texture, vec2(s_coord, t_coord));\n"
+            "        \n"
+            "        // Fade out near horizon\n"
+            "        float horizon_mask = smoothstep(0.01, 0.1, dir.y);\n"
+            "        \n"
+            "        // OpenMOHAA shaders typically use an additive/blend mode for the cloud stage.\n"
+            "        // We'll apply the cloud sample rgb over the sky_color using its alpha, boosted slightly.\n"
+            "        float cloud_alpha = clamp(cloud_sample.a, 0.0, 1.0) * horizon_mask;\n"
+            "        COLOR = mix(sky_color, cloud_sample.rgb, cloud_alpha);\n"
+            "        // Optional: additive blend fallback if texture has no alpha\n"
+            "        // COLOR = sky_color + cloud_sample.rgb * cloud_sample.rgb * horizon_mask;\n"
+            "    } else {\n"
+            "        COLOR = sky_color;\n"
+            "    }\n"
+            "}\n"
+        );
+    } else {
+        // Simple cubemap-only sky shader (no clouds)
+        sky_shader->set_code(
+            "shader_type sky;\n"
+            "uniform samplerCube sky_cubemap : source_color;\n"
+            "void sky() {\n"
+            "    COLOR = texture(sky_cubemap, EYEDIR).rgb;\n"
+            "}\n"
+        );
+    }
 
     // Create ShaderMaterial and assign cubemap
     Ref<ShaderMaterial> sky_mat;
     sky_mat.instantiate();
     sky_mat->set_shader(sky_shader);
     sky_mat->set_shader_parameter("sky_cubemap", cubemap);
+
+    if (has_clouds && cloud_tex.is_valid()) {
+        sky_mat->set_shader_parameter("cloud_texture", cloud_tex);
+        sky_mat->set_shader_parameter("cloud_height", cloud_height);
+    }
 
     // Create Sky resource
     Ref<Sky> sky;
@@ -1711,7 +1931,377 @@ void MoHAARunner::load_skybox() {
         env->set_background(Environment::BG_SKY);
         env->set_sky(sky);
         UtilityFunctions::print(
-            String("[MoHAA] Skybox loaded: ") + sky_env + " (6 faces).");
+            String("[MoHAA] Skybox loaded: ") + sky_env +
+            (has_clouds ? " (6 faces + cloud layer)." : " (6 faces)."));
+    }
+}
+
+// ──────────────────────────────────────────────
+//  Sun flare loading + rendering
+// ──────────────────────────────────────────────
+
+void MoHAARunner::load_sun_flare() {
+    sun_exists = false;
+    sun_flare_initialized = false;
+    sun_flare_sprites.clear();
+    sun_flare_blend_alpha = 0.0f;
+
+    // ── Parse entity string for sun properties ──
+    const char *ents = Godot_BSP_GetEntityString();
+    if (!ents || !ents[0]) {
+        UtilityFunctions::print("[MoHAA] No entity string — no sun flare.");
+        return;
+    }
+
+    bool flare_dir_set = false;
+    bool world_processed = false;
+    bool is_world = false;
+
+    sun_direction[0] = sun_direction[1] = sun_direction[2] = 0.0f;
+    sun_color[0] = sun_color[1] = sun_color[2] = 1.0f;
+    sun_flare_name[0] = 0;
+
+    // Make a mutable copy since COM_Parse modifies the pointer
+    size_t ent_len = strlen(ents);
+    char *ent_buf = (char *)malloc(ent_len + 1);
+    memcpy(ent_buf, ents, ent_len + 1);
+    char *p = ent_buf;
+
+    while (p && *p) {
+        char *ret = COM_Parse(&p);
+        if (!ret || !ret[0]) break;
+
+        if (ret[0] == '{' || ret[0] == '}') continue;
+
+        if (!world_processed && !strcmp(ret, "classname")) {
+            ret = COM_Parse(&p);
+            if (!strcmp(ret, "worldspawn")) {
+                is_world = true;
+            } else {
+                world_processed = true;
+            }
+            continue;
+        }
+
+        if (!strcmp(ret, "suncolor") || !strcmp(ret, "sunlight")) {
+            if (world_processed) { COM_Parse(&p); continue; }
+            ret = COM_Parse(&p);
+            sscanf(ret, "%f %f %f", &sun_color[0], &sun_color[1], &sun_color[2]);
+            // Normalize to 0-1 range (original multiplies by overbrightMult)
+            float max_c = fmaxf(fmaxf(sun_color[0], sun_color[1]), sun_color[2]);
+            if (max_c > 1.0f) {
+                sun_color[0] /= max_c;
+                sun_color[1] /= max_c;
+                sun_color[2] /= max_c;
+            }
+            sun_exists = true;
+        } else if (!strcmp(ret, "sundirection")) {
+            if (world_processed) { COM_Parse(&p); continue; }
+            float dir[3];
+            ret = COM_Parse(&p);
+            sscanf(ret, "%f %f %f", &dir[0], &dir[1], &dir[2]);
+            // AngleVectorsLeft: get forward vector from euler angles
+            id_angle_vectors_left(dir, sun_direction, nullptr, nullptr);
+            sun_exists = true;
+            if (!flare_dir_set) {
+                sun_flare_direction[0] = sun_direction[0];
+                sun_flare_direction[1] = sun_direction[1];
+                sun_flare_direction[2] = sun_direction[2];
+            }
+        } else if (!strcmp(ret, "sunflaredirection")) {
+            if (world_processed) { COM_Parse(&p); continue; }
+            float dir[3];
+            ret = COM_Parse(&p);
+            sscanf(ret, "%f %f %f", &dir[0], &dir[1], &dir[2]);
+            id_angle_vectors_left(dir, sun_flare_direction, nullptr, nullptr);
+            flare_dir_set = true;
+        } else if (!strcmp(ret, "sunflarename")) {
+            if (world_processed) { COM_Parse(&p); continue; }
+            ret = COM_Parse(&p);
+            snprintf(sun_flare_name, sizeof(sun_flare_name), "%s", ret);
+        } else {
+            COM_Parse(&p);  // Skip value
+        }
+    }
+    ::free(ent_buf);
+
+    if (sun_exists && !sun_flare_name[0]) {
+        snprintf(sun_flare_name, sizeof(sun_flare_name), "sun");
+    }
+
+    if (!sun_exists) {
+        UtilityFunctions::print("[MoHAA] No sun defined in map — no sun flare.");
+        return;
+    }
+
+    UtilityFunctions::print(
+        String("[MoHAA] Sun found: dir=(") + String::num(sun_direction[0], 2) + "," +
+        String::num(sun_direction[1], 2) + "," + String::num(sun_direction[2], 2) +
+        ") color=(" + String::num(sun_color[0], 2) + "," +
+        String::num(sun_color[1], 2) + "," + String::num(sun_color[2], 2) +
+        ") flare=" + sun_flare_name);
+
+    // ── Parse global/lensflaredefs.txt for flare definition ──
+    if (!strcmp(sun_flare_name, "none")) {
+        UtilityFunctions::print("[MoHAA] Sun flare name is 'none' — no flare rendered.");
+        return;
+    }
+
+    void *flare_raw = nullptr;
+    long flare_len = Godot_VFS_ReadFile("global/lensflaredefs.txt", &flare_raw);
+    if (flare_len <= 0 || !flare_raw) {
+        UtilityFunctions::print("[MoHAA] Could not open global/lensflaredefs.txt — no sun flare.");
+        return;
+    }
+
+    char *flare_buf = (char *)malloc(flare_len + 1);
+    memcpy(flare_buf, flare_raw, flare_len);
+    flare_buf[flare_len] = '\0';
+    Godot_VFS_FreeFile(flare_raw);
+
+    char *fp = flare_buf;
+    bool found_section = false;
+
+    // Find the matching "begin <name>" section
+    while (fp && *fp) {
+        char *token = COM_ParseExt(&fp, 1);
+        if (!token[0]) break;
+
+        if (!Q_stricmp(token, "begin")) {
+            token = COM_ParseExt(&fp, 0);
+            if (!Q_stricmp(token, sun_flare_name)) {
+                found_section = true;
+                break;
+            }
+        }
+    }
+
+    if (!found_section) {
+        UtilityFunctions::print(
+            String("[MoHAA] Flare section '") + sun_flare_name +
+            "' not found in lensflaredefs.txt.");
+        ::free(flare_buf);
+        return;
+    }
+
+    // Parse the section
+    sun_flare_dot_min = 0.8f;
+    sun_flare_fullscale = 0.7f;
+    sun_flare_fullfade = 0;
+    sun_flare_fullscreen_shader = 0;
+
+    while (fp && *fp) {
+        char *token = COM_ParseExt(&fp, 1);
+        if (!token[0]) break;
+
+        if (!Q_stricmp(token, "end")) break;
+
+        if (!Q_stricmp(token, "dot_min")) {
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sun_flare_dot_min = (float)atof(token);
+        } else if (!Q_stricmp(token, "flare")) {
+            SunFlareSprite sprite = {};
+            sprite.alphascale = 1.0f;
+
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sprite.size = (float)atof(token);
+
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sprite.where = (float)atof(token);
+
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) {
+                sprite.shader_handle = Godot_Renderer_RegisterShader(token);
+            }
+
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sprite.alphascale = (float)atof(token);
+
+            sun_flare_sprites.push_back(sprite);
+        } else if (!Q_stricmp(token, "fullscale")) {
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sun_flare_fullscale = (float)atof(token);
+        } else if (!Q_stricmp(token, "fullscreen")) {
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sun_flare_fullscreen_shader = Godot_Renderer_RegisterShader(token);
+        } else if (!Q_stricmp(token, "fullfade")) {
+            token = COM_ParseExt(&fp, 0);
+            if (token[0]) sun_flare_fullfade = (int)atof(token);
+        }
+    }
+
+    ::free(flare_buf);
+
+    if (sun_flare_sprites.empty()) {
+        UtilityFunctions::print("[MoHAA] No flare sprites defined — no sun flare rendered.");
+        return;
+    }
+
+    sun_flare_initialized = true;
+    UtilityFunctions::print(
+        String("[MoHAA] Sun flare loaded: ") + String::num_int64(sun_flare_sprites.size()) +
+        " sprites, dot_min=" + String::num(sun_flare_dot_min, 2) +
+        ", fullscale=" + String::num(sun_flare_fullscale, 2));
+
+    // ── Create canvas layer for sun flare overlay ──
+    if (!sun_flare_canvas) {
+        sun_flare_canvas = memnew(CanvasLayer);
+        sun_flare_canvas->set_layer(95); // Above world, below HUD (100)
+        add_child(sun_flare_canvas);
+
+        sun_flare_control = memnew(Control);
+        sun_flare_control->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
+        sun_flare_control->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+        sun_flare_canvas->add_child(sun_flare_control);
+    }
+}
+
+extern "C" {
+    void Godot_Renderer_CM_BoxTrace(void *results, const float *start, const float *end, const float *mins, const float *maxs, int model, int brushMask, int cylinder);
+}
+
+struct GodotTraceResult {
+    int allsolid;
+    int startsolid;
+    float fraction;
+    float endpos[3];
+    struct {
+        float normal[3];
+        float dist;
+        uint8_t type;
+        uint8_t signbits;
+        uint8_t pad[2];
+    } plane;
+    int surfaceFlags;
+    int shaderNum;
+    int contents;
+    int entityNum;
+    int location;
+    void *ent;
+};
+
+void MoHAARunner::update_sun_flare() {
+    if (!sun_exists || !sun_flare_initialized || !camera || !sun_flare_control) return;
+
+    RenderingServer *rs = RenderingServer::get_singleton();
+    RID ci = sun_flare_control->get_canvas_item();
+
+    // Clear previous frame's draws
+    rs->canvas_item_clear(ci);
+
+    // ── Project sun direction to screen space ──
+    // Sun is at camera_pos + sun_flare_direction * large_distance (in id coords)
+    float cam_id[3];
+    Godot_Renderer_GetViewOrigin(cam_id);
+
+    // Convert sun direction to Godot coordinates
+    Vector3 sun_dir_godot = id_to_godot_point(
+        sun_flare_direction[0], sun_flare_direction[1], sun_flare_direction[2]);
+    sun_dir_godot = sun_dir_godot.normalized();
+
+    // Sun position far away in Godot space
+    Vector3 cam_pos = camera->get_global_position();
+    Vector3 sun_world_pos = cam_pos + sun_dir_godot * 1000.0f;
+
+    // Check if sun is in front of camera
+    Vector3 cam_forward = -camera->get_global_transform().basis.get_column(2);
+    float dot = cam_forward.dot(sun_dir_godot);
+
+    if (dot < sun_flare_dot_min) {
+        return; // Sun behind camera or below dot threshold
+    }
+
+    // Project sun position to screen coordinates
+    if (!camera->is_position_behind(sun_world_pos)) {
+        Vector2 screen_pos = camera->unproject_position(sun_world_pos);
+        Vector2 viewport_size = get_viewport()->get_visible_rect().size;
+
+        // ── Occlusion test via id Tech BSP CM_BoxTrace ──
+        // Uses the original quake 3 collision system rather than Godot physics
+        bool sun_visible = true;
+        GodotTraceResult trace;
+        float trace_start[3];
+        Godot_Renderer_GetViewOrigin(trace_start);
+        
+        float trace_end[3] = {
+            trace_start[0] + sun_flare_direction[0] * 10000.0f,
+            trace_start[1] + sun_flare_direction[1] * 10000.0f,
+            trace_start[2] + sun_flare_direction[2] * 10000.0f
+        };
+        float mins[3] = {0,0,0};
+        float maxs[3] = {0,0,0};
+        
+        // CONTENTS_SOLID = 1
+        Godot_Renderer_CM_BoxTrace(&trace, trace_start, trace_end, mins, maxs, 0, 1, 0);
+        
+        // The original renderer checks for sky surface flag (4). If it hits sky, it's visible.
+        // trace.surfaceFlags & 4 (SURF_SKY)
+        if (trace.fraction < 1.0f) {
+            if ((trace.surfaceFlags & 4) == 0) {
+                sun_visible = false;
+            }
+        }
+
+        if (!sun_visible) {
+            return;
+        }
+
+        // ── Compute flare alpha based on dot product ──
+        float alpha = (dot - sun_flare_dot_min) / (1.0f - sun_flare_dot_min);
+        alpha = CLAMP(alpha, 0.0f, 1.0f);
+
+        // Normalize screen position to -1..1 range (matching original renderer)
+        float nx = (screen_pos.x / viewport_size.x) * 2.0f - 1.0f;
+        float ny = (screen_pos.y / viewport_size.y) * 2.0f - 1.0f;
+
+        // Flare axis direction: from screen center to sun position (and beyond)
+        float diff_x = -2.0f * nx;
+        float diff_y = -2.0f * ny;
+
+        // ── Draw each flare sprite ──
+        for (int i = 0; i < (int)sun_flare_sprites.size(); i++) {
+            const SunFlareSprite &sprite = sun_flare_sprites[i];
+
+            // Position along flare axis
+            float fx = nx + sprite.where * diff_x;
+            float fy = ny + sprite.where * diff_y;
+
+            // Convert from normalized coords back to pixel coords
+            float px = (fx + 1.0f) * 0.5f * viewport_size.x;
+            float py = (fy + 1.0f) * 0.5f * viewport_size.y;
+
+            // Size in pixels (sprite.size is in normalized coords)
+            float size_px = sprite.size * viewport_size.x * 0.5f;
+
+            float sprite_alpha = alpha * sprite.alphascale;
+
+            // Get flare texture
+            if (sprite.shader_handle > 0) {
+                Ref<ImageTexture> tex = get_shader_texture(sprite.shader_handle);
+                if (tex.is_valid()) {
+                    Rect2 dst_rect(px - size_px, py - size_px,
+                                   size_px * 2.0f, size_px * 2.0f);
+                    Color modulate(sun_color[0], sun_color[1], sun_color[2], sprite_alpha);
+
+                    rs->canvas_item_add_texture_rect(ci, dst_rect, tex->get_rid(), false, modulate);
+                }
+            }
+        }
+
+        // ── Fullscreen bloom/blend effect ──
+        if (sun_flare_fullscreen_shader > 0) {
+            float blend_alpha = alpha * alpha * alpha * alpha * sun_flare_fullscale;
+            if (blend_alpha > 0.001f) {
+                Ref<ImageTexture> fs_tex = get_shader_texture(sun_flare_fullscreen_shader);
+                if (fs_tex.is_valid()) {
+                    Rect2 fs_rect(0, 0, viewport_size.x, viewport_size.y);
+                    Color fs_mod(1.0f, 1.0f, 1.0f, blend_alpha);
+                    rs->canvas_item_add_texture_rect(ci, fs_rect, fs_tex->get_rid(), false, fs_mod);
+                }
+            }
+        }
+
+        sun_flare_last_visible_time = shader_anim_time;
     }
 }
 
@@ -2725,6 +3315,12 @@ void MoHAARunner::update_entities() {
                         }
                     }
                 }
+                // applying MDL_SURFACE_NODRAW.
+                for (auto &m : active_mirrors) {
+                    if (m.mesh_instance == mi && m.override_mat.is_valid()) {
+                        mi->set_surface_override_material(m.surface_idx, m.override_mat);
+                    }
+                }
             }
         }  // end else (TIKI model)
 
@@ -2769,19 +3365,17 @@ void MoHAARunner::update_entities() {
             mi->set_global_transform(Transform3D(basis, pos));
         }
 
-        // ── Phase 62: Weapon viewport for first-person entities ──
-        // NOTE: SubViewport reparenting is disabled — the weapon SubViewport
-        // rendering path has a compositing issue (entities render but the
-        // viewport texture does not display them).  FPS entities now render
-        // in the main scene alongside world geometry so the viewmodel is
-        // visible.  Depth-hack (preventing viewmodel wall-clipping) is
-        // deferred until the SubViewport path is debugged.
-        // Ensure FPS entities stay in entity_root (main scene).
+        // ── Phase 62: Weapon viewport for first-person entities (depth-hack) ──
+        // RF_FIRST_PERSON (0x02) or RF_DEPTHHACK (0x04) → weapon_root (separate
+        // SubViewport with its own depth buffer, composited on top of the main
+        // scene).  This prevents the viewmodel from clipping into walls.
+        // All other entities stay in entity_root (main scene).
         if (weapon_root) {
+            Node *target_parent = (is_first_person || is_depthhack) ? weapon_root : entity_root;
             Node *cur_parent = mi->get_parent();
-            if (cur_parent && cur_parent != entity_root) {
+            if (cur_parent && cur_parent != target_parent) {
                 cur_parent->remove_child(mi);
-                entity_root->add_child(mi);
+                target_parent->add_child(mi);
             }
         }
 
@@ -4450,6 +5044,79 @@ void MoHAARunner::update_ui_transform() {
     ui_offset_y = 0.0f;
 }
 
+/*
+void MoHAARunner::update_mirrors() {
+    if (!camera || active_mirrors.empty()) {
+        return;
+    }
+
+    // Mirror debugging hotkeys
+    if (Input::get_singleton()) {
+        float step = 0.05f;
+        for (auto &m : active_mirrors) {
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_8)) m.normal.y += step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_2)) m.normal.y -= step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_6)) m.normal.x += step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_4)) m.normal.x -= step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_9)) m.normal.z += step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_7)) m.normal.z -= step;
+            
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_ADD)) m.center.z += step;
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_SUBTRACT)) m.center.z -= step;
+
+            if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_5)) {
+                UtilityFunctions::print(String("[MIRROR] normal = (") + String::num(m.normal.x) + ", " + String::num(m.normal.y) + ", " + String::num(m.normal.z) + ") center.z=" + String::num(m.center.z));
+            }
+            m.normal = m.normal.normalized();
+        }
+    }
+
+    Transform3D cam_transform = camera->get_global_transform();
+    Vector2i vp_size = get_viewport()->get_visible_rect().size;
+
+    for (auto &m : active_mirrors) {
+        if (!m.viewport || !m.camera || !m.mesh_instance || !m.mesh_instance->is_visible()) {
+            continue;
+        }
+
+        // Ensure resolution matches main game window for accurate SCREEN_UV projection
+        if (m.viewport->get_size() != vp_size) {
+            m.viewport->set_size(vp_size);
+        }
+
+        // Get world space mirror info from the model's transform
+        Transform3D model_transform = m.mesh_instance->get_global_transform();
+        
+        // Let's assume the local normal is looking up +Z for TIKI models typically
+        // but it might need tweaking based on vanity.tik's exact orientation.
+        // Easiest is to trace or visually debug. Defaulting to +Y local as a plane.
+        Vector3 world_normal = model_transform.basis.xform(m.normal).normalized();
+        Vector3 world_center = model_transform.xform(m.center);
+
+        Plane mirror_plane(world_normal, world_center);
+
+        // Reflect camera position across the mirror plane
+        Vector3 ref_pos = mirror_plane.project(cam_transform.origin);
+        ref_pos = ref_pos + (ref_pos - cam_transform.origin);
+
+        // Reflect camera basis
+        Basis ref_basis = cam_transform.basis;
+        ref_basis.set_column(0, ref_basis.get_column(0) - 2.0 * world_normal * world_normal.dot(ref_basis.get_column(0)));
+        ref_basis.set_column(1, ref_basis.get_column(1) - 2.0 * world_normal * world_normal.dot(ref_basis.get_column(1)));
+        ref_basis.set_column(2, ref_basis.get_column(2) - 2.0 * world_normal * world_normal.dot(ref_basis.get_column(2)));
+
+        m.camera->set_global_transform(Transform3D(ref_basis, ref_pos));
+        m.camera->set_fov(camera->get_fov());
+        
+        // In a proper implementation we would set up an oblique near-plane frustum.
+        // For this fun quick hack, we'll just let the geometry intersect.
+
+        // We are using a ShaderMaterial that statically binds the viewport texture,
+        // so we don't need to reapply the material or texture here anymore.
+    }
+}
+*/
+
 void MoHAARunner::update_2d_overlay() {
     static std::unordered_set<int> logged_serverback_draw;
     static std::unordered_set<int> logged_serverback_geometry;
@@ -4848,9 +5515,19 @@ void MoHAARunner::update_2d_overlay() {
                             if (sp->stages[st].isLightmap) continue;
                             const MohaaShaderStage *stg = &sp->stages[st];
 
-                            // rgbGen handling: identity/const override vertex colour.
-                            if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
+                            // OpenMOHAA's FinishShader sets CGEN_GLOBAL_COLOR for
+                            // LIGHTMAP_2D (implicit) shaders.  But explicit shaders
+                            // with rgbGen identity mean "multiply by white" (show
+                            // texture as-is).  We only reach here if sp != NULL
+                            // (explicit shader), so IDENTITY → white is correct.
+                            //
+                            // Exception: font shaders.  OpenMOHAA's R_LoadFontShader
+                            // overrides them to CGEN_GLOBAL_COLOR at runtime.
+                            bool is_font = (sname && strstr(sname, "gfx/fonts/") != nullptr);
+
+                            // rgbGen handling
+                            if (!is_font && (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                             stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING)) {
                                 draw_col.r = 1.0f;
                                 draw_col.g = 1.0f;
                                 draw_col.b = 1.0f;
@@ -4860,8 +5537,8 @@ void MoHAARunner::update_2d_overlay() {
                                 draw_col.b = stg->rgbConst[2];
                             }
 
-                            // alphaGen handling: identity/const override vertex alpha.
-                            if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                            // alphaGen handling
+                            if (!is_font && stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                 draw_col.a = 1.0f;
                             } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                 draw_col.a = stg->alphaConst;
@@ -4957,6 +5634,12 @@ void MoHAARunner::update_2d_overlay() {
                              * Forcing BLEND_OPAQUE causes these halos to render as solid black boxes.
                              * We unconditionally use BLEND_MIX here so texture transparency resolves correctly. */
                             draw_blend = BLEND_MIX;
+
+                            if (sname && (strstr(sname, "levelshot") != nullptr || strstr(sname, "mohdm") != nullptr || strstr(sname, "serverback") != nullptr || strstr(sname, "mainback") != nullptr)) {
+                                // Full screen backgrounds often have garbage alpha that causes holes if blended
+                                draw_blend = BLEND_OPAQUE;
+                            }
+
                             /* Multi-stage shader: check the actual texture stage
                              * for a custom blendFunc that overrides the opaque
                              * default (e.g. GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA). */
@@ -4967,9 +5650,16 @@ void MoHAARunner::update_2d_overlay() {
                                     if (!sm[0]) continue;
                                     if (strcmp(sm, "$lightmap") == 0) continue;
                                     if (strcmp(sm, "$whiteimage") == 0) continue;
+                                    
                                     if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
                                         sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
                                         draw_blend = BLEND_ALPHA_INV;
+                                    } else if (sp2->stages[st].blendSrc == BLEND_SRC_ALPHA &&
+                                               sp2->stages[st].blendDst == BLEND_ONE_MINUS_SRC_ALPHA) {
+                                        draw_blend = BLEND_MIX;
+                                    } else if (sp2->stages[st].blendSrc == BLEND_ONE &&
+                                               sp2->stages[st].blendDst == BLEND_ONE) {
+                                        draw_blend = BLEND_ADD;
                                     }
                                     break;
                                 }
@@ -5163,15 +5853,18 @@ void MoHAARunner::update_2d_overlay() {
                                 if (!sp->stages[st].active) continue;
                                 if (sp->stages[st].isLightmap) continue;
                                 const MohaaShaderStage *stg = &sp->stages[st];
-                                if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
+                                // Match STRETCHPIC: explicit shaders with rgbGen
+                                // identity → white.  Fonts exempt (GLOBAL_COLOR).
+                                bool is_font_t = (sname && strstr(sname, "gfx/fonts/") != nullptr);
+                                if (!is_font_t && (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING)) {
                                     draw_col.r = draw_col.g = draw_col.b = 1.0f;
                                 } else if (stg->rgbGen == STAGE_RGBGEN_CONST) {
                                     draw_col.r = stg->rgbConst[0];
                                     draw_col.g = stg->rgbConst[1];
                                     draw_col.b = stg->rgbConst[2];
                                 }
-                                if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                                if (!is_font_t && stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                     draw_col.a = 1.0f;
                                 } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                     draw_col.a = stg->alphaConst;
@@ -6604,7 +7297,11 @@ void MoHAARunner::_process(double delta) {
     update_swipe_effects();     // Phase 24: swipe/melee trails
     update_terrain_marks();     // Phase 25: terrain mark decals
     update_shadow_blobs();      // Shadow blob projection under RF_SHADOW entities
-    update_shader_animations(delta);  // Phase 36: tcMod scroll/rotate
+    update_shader_animations(delta);
+    update_sun_flare();         // Sun lens flare 2D overlay
+    
+    // Update planar reflections early before drawing HUD
+    // update_mirrors(); // Vanity mirror hack (Phase FUN) - Commented out as requested.
 
     // ── Update 2D HUD overlay from captured draw commands (Phase 7h) ──
     update_2d_overlay();

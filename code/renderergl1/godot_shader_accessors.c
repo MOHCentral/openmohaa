@@ -454,6 +454,8 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
     out->alphagen_const = 1.0f;
     out->rgbgen_const[0] = out->rgbgen_const[1] = out->rgbgen_const[2] = 1.0f;
 
+    out->sky_cloud_height = sh->sky.cloudHeight;
+
     /* Sky environment path */
     if (sh->isSky && sh->sky.outerbox[0]) {
         /* The sky box image names are e.g. "env/m5l2_ft", we want "env/m5l2".
@@ -1041,4 +1043,38 @@ int Godot_Sprite_GetEngineSize(const char *shader_name,
     if (out_height)       *out_height       = img->height;
     if (out_sprite_scale) *out_sprite_scale = sh->sprite.scale;
     return 1;
+}
+
+int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
+                                      char *out_cloud_map, int map_size) {
+    int i;
+    shader_cache_entry_t *e;
+    
+    if (!out_cloud_height || !out_cloud_map || map_size <= 0) return 0;
+
+    for (i = 0; i < SHADER_CACHE_SIZE; i++) {
+        for (e = s_shaderCache[i]; e; e = e->next) {
+            GodotShaderProps *props = &e->props;
+            int s;
+            
+            if (!props->is_sky || !props->sky_env[0]) continue;
+            if (props->sky_cloud_height <= 0.0f) continue;
+
+            *out_cloud_height = props->sky_cloud_height;
+
+            for (s = 0; s < props->stage_count; s++) {
+                struct MohaaShaderStage *stg = &props->stages[s];
+                if (!stg->active) continue;
+                if (stg->isLightmap) continue;
+                if (!stg->map[0]) continue;
+                if (!Q_stricmp(stg->map, "$lightmap")) continue;
+                Q_strncpyz(out_cloud_map, stg->map, map_size);
+                return 1;
+            }
+
+            *out_cloud_height = 0.0f;
+            return 0;
+        }
+    }
+    return 0;
 }
