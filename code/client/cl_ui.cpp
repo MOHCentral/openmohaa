@@ -52,6 +52,7 @@ extern "C" {
                           const float *textColor, const float *backColor,
                           int isHeader);
     void Godot_SB_DeleteItemsAfter(int maxIndex);
+    int Godot_Client_IsAnyOverlayActive(void);
 }
 #endif
 
@@ -1891,8 +1892,12 @@ void UI_Update(void)
          * and no console.  ActivateControl() may not fire
          * View3D::OnActivate if view3d was already active, leaving
          * KEYCATCH_UI stuck and routing WASD keys to UI_KeyEvent
-         * instead of game bindings. */
-        if (Key_GetCatcher() & KEYCATCH_UI) {
+         * instead of game bindings.
+         *
+         * OPM-Godot fix: only clear KEYCATCH_UI if no overlays are active.
+         * The weapon menu is an overlay (KEYCATCH_UI) but menuManager.CurrentMenu()
+         * is NULL here. */
+        if ((Key_GetCatcher() & KEYCATCH_UI) && !Godot_Client_IsAnyOverlayActive()) {
             Key_SetCatcher(Key_GetCatcher() & ~KEYCATCH_UI);
             IN_MouseOff();
         }

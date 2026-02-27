@@ -1352,5 +1352,8 @@ Key_SetCatcher
 */
 void Key_SetCatcher(int catcher)
 {
+    if (cls.keyCatchers != catcher) {
+        // Com_Printf("[MoHAA] Key_SetCatcher: 0x%x -> 0x%x caller=%p\n", cls.keyCatchers, catcher, __builtin_return_address(0));
+    }
     cls.keyCatchers = catcher;
 }

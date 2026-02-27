@@ -78,6 +78,7 @@ void IN_ToggleMouse( void ) {
 void IN_MouseOn( void ) {
 	if( !in_guimouse )
 	{
+		// Com_Printf( "[MoHAA] IN_MouseOn (guimouse -> true) caller=%p\n", __builtin_return_address(0) );
 		for( int k = 0; k <= K_MWHEELUP; k++ )
 		{
 			if( keys[ k ].down )
@@ -91,6 +92,10 @@ void IN_MouseOn( void ) {
 }
 
 void IN_MouseOff( void ) {
+	if( in_guimouse )
+	{
+		// Com_Printf( "[MoHAA] IN_MouseOff (guimouse -> false) caller=%p\n", __builtin_return_address(0) );
+	}
 	in_guimouse = qfalse;
 }
 

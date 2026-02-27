@@ -228,6 +228,7 @@ extern "C" {
     int  Godot_Client_IsUIStarted(void);
     int  Godot_Client_IsMenuUp(void);
     const char *Godot_Client_GetKeyBinding(int keynum);
+    int  Godot_Client_GetPlayerZoom(void);
     int  Godot_Client_GetMouseButtons(void);
     void Godot_Client_DumpInputState(void);
 
@@ -2585,6 +2586,7 @@ void MoHAARunner::update_entities() {
 
             // Use skinned mesh if available, else cached bind pose, else hide
             bool mesh_changed = false;
+
             if (skinned_mesh.is_valid() &&
                 skinned_mesh->get_surface_count() > 0) {
                 mi->set_mesh(skinned_mesh);
@@ -2703,18 +2705,24 @@ void MoHAARunner::update_entities() {
                 }
                 // Apply MDL_SURFACE_NODRAW (TIKI_SURF_NODRAW = bit 2) per-entity hide flag.
                 // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
-                static Ref<StandardMaterial3D> s_nodraw_mat;
-                if (!s_nodraw_mat.is_valid()) {
-                    s_nodraw_mat.instantiate();
-                    s_nodraw_mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                    s_nodraw_mat->set_albedo(Color(0.0f, 0.0f, 0.0f, 0.0f));
-                    s_nodraw_mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                    s_nodraw_mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                }
-                for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
-                    int fi = entry.flat_surf_idx[s];
-                    if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
-                        mi->set_surface_override_material(s, s_nodraw_mat);
+                // Skip for RF_FIRST_PERSON entities: the cgame may incorrectly set
+                // NODRAW on all FPS surfaces due to a state sync issue in our
+                // GDExtension environment (EF_UNARMED or STAT flags stuck).
+                // Zoom-based hiding is handled below via Godot_Client_GetPlayerZoom().
+                if (!is_first_person) {
+                    static Ref<StandardMaterial3D> s_nodraw_mat;
+                    if (!s_nodraw_mat.is_valid()) {
+                        s_nodraw_mat.instantiate();
+                        s_nodraw_mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                        s_nodraw_mat->set_albedo(Color(0.0f, 0.0f, 0.0f, 0.0f));
+                        s_nodraw_mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                        s_nodraw_mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+                    }
+                    for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
+                        int fi = entry.flat_surf_idx[s];
+                        if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
+                            mi->set_surface_override_material(s, s_nodraw_mat);
+                        }
                     }
                 }
             }
@@ -2762,28 +2770,18 @@ void MoHAARunner::update_entities() {
         }
 
         // ── Phase 62: Weapon viewport for first-person entities ──
-        // Reparent RF_FIRST_PERSON / RF_DEPTHHACK entities into the
-        // weapon SubViewport so they render in a separate pass and
-        // composite on top of the main scene (correct self-occlusion).
-        if (is_first_person || is_depthhack) {
-            // Reparent FPS entities into the weapon SubViewport so they
-            // render with a separate depth buffer and composite on top.
-            if (weapon_root) {
-                Node *cur_parent = mi->get_parent();
-                if (cur_parent && cur_parent != weapon_root) {
-                    cur_parent->remove_child(mi);
-                    weapon_root->add_child(mi);
-                }
-            }
-        } else {
-            // Non-weapon entity — ensure it is parented under entity_root
-            // (it may have been in weapon_root from a previous frame)
-            if (weapon_root) {
-                Node *cur_parent = mi->get_parent();
-                if (cur_parent && cur_parent != entity_root) {
-                    cur_parent->remove_child(mi);
-                    entity_root->add_child(mi);
-                }
+        // NOTE: SubViewport reparenting is disabled — the weapon SubViewport
+        // rendering path has a compositing issue (entities render but the
+        // viewport texture does not display them).  FPS entities now render
+        // in the main scene alongside world geometry so the viewmodel is
+        // visible.  Depth-hack (preventing viewmodel wall-clipping) is
+        // deferred until the SubViewport path is debugged.
+        // Ensure FPS entities stay in entity_root (main scene).
+        if (weapon_root) {
+            Node *cur_parent = mi->get_parent();
+            if (cur_parent && cur_parent != entity_root) {
+                cur_parent->remove_child(mi);
+                entity_root->add_child(mi);
             }
         }
 
@@ -2992,6 +2990,18 @@ void MoHAARunner::update_entities() {
                     }
                 }
             }
+        }
+
+        // ── FPS viewmodel zoom hiding ──
+        // When the player is zooming (e.g. sniper scope), the first-person
+        // viewmodel should be hidden.  The cgame normally signals this via
+        // MDL_SURFACE_NODRAW in the surfaces[] array, but in our GDExtension
+        // the cgame may set NODRAW unconditionally due to a state sync issue.
+        // Instead, we check STAT_INZOOM directly from the player state.
+        if (is_first_person && Godot_Client_GetPlayerZoom() > 0) {
+            mi->set_visible(false);
+            entity_cache_keys[i] = key;
+            continue;
         }
 
         mi->set_visible(true);
@@ -6337,6 +6347,17 @@ void MoHAARunner::_process(double delta) {
         overlay_prev_frame = overlay_active;  // save for next frame's pre-frame poll
         bool engine_wants_gui = Godot_Client_GetGuiMouse() != 0;
         bool should_capture = !(overlay_active || engine_wants_gui);
+
+        static int last_catchers = -1;
+        int cur_catchers = Godot_Client_GetKeyCatchers();
+        if (cur_catchers != last_catchers) {
+            UtilityFunctions::print(String("[MoHAA] Mouse State Change: catchers=0x") + String::num_int64(cur_catchers, 16) +
+                String(" overlay=") + String::num_int64(overlay_active) +
+                String(" guimouse=") + String::num_int64(engine_wants_gui) +
+                String(" should_capture=") + String::num_int64(should_capture));
+            last_catchers = cur_catchers;
+        }
+
         // Unified mouse-capture logic for ALL platforms (including web).
         // On web, Godot's JS layer defers requestPointerLock() to the next
         // user gesture (click) when MOUSE_MODE_CAPTURED is set.  This is safe

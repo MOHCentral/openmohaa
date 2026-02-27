@@ -203,6 +203,7 @@ int Godot_InjectKeyEvent(int godot_key, int down)
 {
     int engine_key = godot_key_to_engine(godot_key);
     if (engine_key) {
+        // Com_Printf("[MoHAA] InjectKey: %d (%d) down=%d\n", engine_key, godot_key, down);
         Com_QueueEvent(Sys_Milliseconds(), SE_KEY, engine_key, down, 0, NULL);
     }
     return engine_key;
@@ -262,6 +263,7 @@ void Godot_InjectMouseButton(int godot_button, int down)
         return;
     }
 
+    // Com_Printf("[MoHAA] InjectMouseButton: %d down=%d\n", engine_key, down);
     Com_QueueEvent(Sys_Milliseconds(), SE_KEY, engine_key, down, 0, NULL);
 }
 

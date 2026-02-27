@@ -55,7 +55,7 @@ void Godot_Client_SetGameInputMode(void) {
        UI_ForceMenuOff which may call IN_MouseOn internally.
        This ensures mouse look works in game mode. */
     IN_MouseOff();
-    
+
     /* Force unpause — in single-player listen-server mode the engine
        may auto-pause when the UI/console was active. */
     if (paused && paused->integer) {
@@ -127,8 +127,14 @@ int Godot_Client_IsAnyOverlayActive(void) {
  */
 void Godot_Client_SyncGuiMouseToOverlayState(void) {
     if (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) {
+        if (!in_guimouse) {
+            Com_Printf("[MoHAA] SyncGuiMouse: Force ON (catchers=0x%x)\n", cls.keyCatchers);
+        }
         IN_MouseOn();
     } else {
+        if (in_guimouse) {
+            Com_Printf("[MoHAA] SyncGuiMouse: Force OFF (catchers=0x%x)\n", cls.keyCatchers);
+        }
         IN_MouseOff();
     }
 }
@@ -200,6 +206,13 @@ void Godot_Client_DumpInputState(void) {
     Com_Printf("  ESC: '%s'\n", keys[K_ESCAPE].binding ? keys[K_ESCAPE].binding : "(null)");
     Com_Printf("  SPACE: '%s'\n", keys[' '].binding ? keys[' '].binding : "(null)");
     Com_Printf("========================\n");
+}
+
+/* Player zoom state — returns STAT_INZOOM from playerState_t.
+ * 0 = not zooming, >0 = zoom FOV value. Used by the Godot side
+ * to hide first-person viewmodel during weapon zoom. */
+int Godot_Client_GetPlayerZoom(void) {
+    return cl.snap.ps.stats[8]; /* STAT_INZOOM = 8 in bg_public.h enum */
 }
 
 } /* extern "C" */
