@@ -227,6 +227,7 @@ varname         [a-zA-Z0-9_\"$\\]+
 \"{string}\"                    { TextEscapeValue(yytext + 1, yyleng - 2); YYLEX(TOKEN_STRING); }
 
 "?"                             { YYLEX(TOKEN_TERNARY); }
+"end"                           { TextEscapeValue(yytext, yyleng); YYLEX(TOKEN_IDENTIFIER); }
 "if"                            { YYLEX(TOKEN_IF); }
 "else"                          { YYLEX(TOKEN_ELSE); }
 "while"                         { YYLEX(TOKEN_WHILE); }

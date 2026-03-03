@@ -1356,6 +1356,7 @@ void UIFakkLabel::DrawStatSpinner(float frac)
     re.DrawTrianglePic(vVerts, vTexCoords, m_statbar_material->GetMaterial());
 
     if (alpha != 0.f && m_statbar_material_flash) {
+        re.SetColor(col);
         re.DrawTrianglePic(vVerts, vTexCoords, m_statbar_material_flash->GetMaterial());
     }
 
@@ -1376,6 +1377,7 @@ void UIFakkLabel::DrawStatSpinner(float frac)
     re.DrawTrianglePic(vVerts, vTexCoords, m_statbar_material->GetMaterial());
 
     if (alpha != 0.f && m_statbar_material_flash) {
+        re.SetColor(col);
         re.DrawTrianglePic(vVerts, vTexCoords, m_statbar_material_flash->GetMaterial());
     }
 }
