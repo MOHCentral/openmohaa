@@ -430,6 +430,11 @@ static std::unordered_map<int64_t, Ref<Material>> s_terrain_mark_mat_cache;
 static std::unordered_map<uint64_t, Ref<StandardMaterial3D>> s_sprite_tint_cache;
 static std::unordered_map<uint64_t, Ref<StandardMaterial3D>> s_beam_tint_cache;
 
+// ALPHA_INV pre-composited texture cache: keyed on shader_handle.
+// These textures have the two-stage ALPHA_INV blend baked in on the CPU
+// in sRGB space, bypassing GPU sRGB decode/encode mismatches.
+static std::unordered_map<int, Ref<ImageTexture>> s_alpha_inv_tex_cache;
+
 static MoHAARunner* s_mohaa_runner_instance = nullptr;
 
 godot::Ref<godot::ImageTexture> Godot_GetShaderTexture(int shader_handle) {
@@ -803,6 +808,28 @@ void MoHAARunner::setup_3d_scene() {
     world_env->set_environment(env);
     game_world->add_child(world_env);
 
+    // ── Dynamic entity shadow light (r_shadows cvar) ──
+    // Directional light casting GPU shadows for all RF_SHADOW entities onto PER_PIXEL BSP surfaces.
+    // Hidden until r_shadows 1. Direction set per-map from worldspawn sundirection/suncolor.
+    // Energy = 0.5: shadow areas = ambient (baseline), lit areas ~10-40% brighter depending on angle.
+    entity_shadow_light = memnew(DirectionalLight3D);
+    entity_shadow_light->set_name("EntityShadowLight");
+    // Direction is set per-map by apply_sun_light_direction() after BSP entity string is parsed.
+    // Fallback: nearly-overhead sun to minimise wall bleed until map loads.
+    entity_shadow_light->set_rotation_degrees(Vector3(-75.0f, 45.0f, 0.0f));
+    entity_shadow_light->set_param(Light3D::PARAM_ENERGY, 0.5f);
+    entity_shadow_light->set_color(Color(1.0f, 1.0f, 1.0f));
+    entity_shadow_light->set_shadow(true);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_BIAS, 0.02f);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_NORMAL_BIAS, 2.0f);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_BLUR, 1.5f);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_FADE_START, 0.8f);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_MAX_DISTANCE, 80.0f);
+    entity_shadow_light->set_param(Light3D::PARAM_SHADOW_PANCAKE_SIZE, 20.0f);
+    entity_shadow_light->set_shadow_mode(DirectionalLight3D::SHADOW_PARALLEL_4_SPLITS);
+    entity_shadow_light->set_visible(false);  // Off until r_shadows 1
+    game_world->add_child(entity_shadow_light);
+
     UtilityFunctions::print("[MoHAA] 3D scene created (Camera3D + light + environment).");
 
     // ── Weapon viewport (Phase 62) ──
@@ -993,12 +1020,14 @@ void MoHAARunner::check_world_load() {
             s_terrain_mark_mat_cache.clear();
             s_sprite_tint_cache.clear();
             s_beam_tint_cache.clear();
+            s_alpha_inv_tex_cache.clear();
 #ifdef HAS_MESH_CACHE_MODULE
             Godot_MeshCache::get().clear();
             Godot_MaterialCache::get().clear();
 #endif
 #ifdef HAS_SHADER_MATERIAL_MODULE
             Godot_Shader_ClearCache();
+            Godot_Shader_ClearMaterialRegistry();
 #endif
 #ifdef HAS_WEATHER_MODULE
             Godot_Weather_Shutdown();
@@ -1050,6 +1079,7 @@ void MoHAARunner::check_world_load() {
     s_terrain_mark_mat_cache.clear();
     s_sprite_tint_cache.clear();
     s_beam_tint_cache.clear();
+    s_alpha_inv_tex_cache.clear();
 
 #ifdef HAS_PBR_MODULE
     // Initialise PBR texture discovery BEFORE BSP loading so that
@@ -1089,6 +1119,12 @@ void MoHAARunner::check_world_load() {
         // Enable sound occlusion now that BSP collision data is available
         Godot_SoundOcclusion_SetEnabled(1);
         UtilityFunctions::print("[MoHAA] Sound occlusion enabled.");
+
+        // Orient the shadow DirectionalLight from the new map's sundirection.
+        // Then re-apply entity shadow mode so any cached TIKI materials and
+        // freshly built BSP ShaderMaterials receive the correct shadow darkness.
+        apply_sun_light_direction();
+        apply_player_shadow_mode(cached_entity_shadow_mode);
 
 #ifdef HAS_PBR_MODULE
         // ── Next-gen rendering pipeline (requires PBR) ──
@@ -1272,6 +1308,19 @@ void MoHAARunner::update_pvs_visibility() {
 // ──────────────────────────────────────────────
 //  Static BSP model loading (Phase 10)
 // ──────────────────────────────────────────────
+
+/// Check whether a shader handle uses additive blending.
+/// Used to keep additive entities in the main scene instead of the weapon
+/// SubViewport, where alpha compositing breaks additive transparency
+/// (black pixels that should be invisible become opaque).
+static bool is_shader_additive(int shaderHandle)
+{
+    if (shaderHandle <= 0) return false;
+    const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
+    if (!sn || !sn[0]) return false;
+    const GodotShaderProps *sp = Godot_ShaderProps_Find(sn);
+    return (sp && sp->transparency == SHADER_ADDITIVE);
+}
 
 /// Apply shader transparency / cull properties to a StandardMaterial3D.
 /// Call after setting the albedo texture.  shader_name is the C-string
@@ -1556,7 +1605,7 @@ void MoHAARunner::load_static_models() {
 
                 if (shader_name == "static_Vanity" || shader_name.to_lower() == "static_vanity" || shader_name.to_lower().contains("vanity")) {
                     UtilityFunctions::print(String("[MoHAA][MIRROR-DEBUG-STATIC] Vanity mirror hack triggered for surface ") + String::num_int64(s));
-                    
+
                     MirrorViewport *mv = nullptr;
                     for (auto &m : active_mirrors) {
                         if (m.mesh_instance == nullptr || m.mesh_instance == mi) {
@@ -1585,12 +1634,12 @@ void MoHAARunner::load_static_models() {
 
                     mv->mesh_instance = mi;
                     mv->surface_idx = s;
-                    
-                    mv->normal = Vector3(0, 0, 1); 
+
+                    mv->normal = Vector3(0, 0, 1);
                     mv->center = Vector3(0, 0, 0);
 
                     Ref<ViewportTexture> vtex = mv->viewport->get_texture();
-                    
+
                     Ref<Shader> mshader;
                     mshader.instantiate();
                     mshader->set_code(
@@ -1624,7 +1673,7 @@ void MoHAARunner::load_static_models() {
                     Ref<Texture2D> base_tex = mat->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
                     smat->set_shader_parameter("base_texture", base_tex);
                     smat->set_shader_parameter("mirror_texture", vtex);
-                    
+
                     int cutout_handle = Godot_Renderer_RegisterShader("textures/models/items/vanity_cutout.tga");
                     if (cutout_handle > 0) {
                         Ref<ImageTexture> cutout_tex = get_shader_texture(cutout_handle);
@@ -1632,7 +1681,7 @@ void MoHAARunner::load_static_models() {
                             smat->set_shader_parameter("cutout_texture", cutout_tex);
                         }
                     }
-                    
+
                     mv->override_mat = smat;
                     mi->set_surface_override_material(s, smat);
                     continue;
@@ -2222,7 +2271,7 @@ void MoHAARunner::update_sun_flare() {
         GodotTraceResult trace;
         float trace_start[3];
         Godot_Renderer_GetViewOrigin(trace_start);
-        
+
         float trace_end[3] = {
             trace_start[0] + sun_flare_direction[0] * 10000.0f,
             trace_start[1] + sun_flare_direction[1] * 10000.0f,
@@ -2230,10 +2279,10 @@ void MoHAARunner::update_sun_flare() {
         };
         float mins[3] = {0,0,0};
         float maxs[3] = {0,0,0};
-        
+
         // CONTENTS_SOLID = 1
         Godot_Renderer_CM_BoxTrace(&trace, trace_start, trace_end, mins, maxs, 0, 1, 0);
-        
+
         // The original renderer checks for sky surface flag (4). If it hits sky, it's visible.
         // trace.surfaceFlags & 4 (SURF_SKY)
         if (trace.fraction < 1.0f) {
@@ -2409,6 +2458,8 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
+
+
         // RF_THIRD_PERSON    (0x0001): local player body — not culled here (no mirrors in our renderer)
         // RF_FIRST_PERSON   (0x0002): view weapon — route to weapon SubViewport
         // RF_DEPTHHACK      (0x0004): view weapon depth hack — route to weapon SubViewport
@@ -2536,51 +2587,34 @@ void MoHAARunner::update_entities() {
                 smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
                 smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
 
-                bool shader_props_found = false;
+                // Apply the shader's own blend mode — the engine already
+                // parsed the .shader definition correctly.  tr_sprite.c
+                // does NOT set any blend mode; GL_State(pStage->stateBits)
+                // applies whatever the shader says (additive, alpha, etc.).
                 if (spriteShader > 0) {
                     const char *sn = Godot_Renderer_GetShaderName(spriteShader);
                     if (sn && sn[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sn);
-                        if (sp) {
-                            shader_props_found = true;
-                            apply_shader_props_to_material(smat, sn);
-
-                            // Re-enforce sprite-specific settings that
-                            // apply_shader_props_to_material may override:
-                            // - cull: shader default SHADER_CULL_BACK → CULL_BACK,
-                            //   but billboard sprites must show both sides.
-                            // - billboard: must stay BILLBOARD_ENABLED.
-                            // - depth: sprites should not write depth.
-                            // - shading: sprites are fullbright/unshaded.
-                            smat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
-                            smat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                            smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                            smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
-
-                            // If the shader was classified as OPAQUE (no blendFunc
-                            // on first non-lightmap stage, or stage parse missed it),
-                            // sprites still need transparency.  tr_sprite.c always
-                            // uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA — standard
-                            // alpha blend — so we never use BLEND_MODE_ADD here.
-                            if (sp->transparency == SHADER_OPAQUE) {
-                                Ref<ImageTexture> tex = get_shader_texture(spriteShader);
-                                if (tex.is_valid()) {
-                                    smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                                }
-                            }
-                        }
+                        apply_shader_props_to_material(smat, sn);
                     }
-                }
-
-                // When no .shader definition is found, load the texture.
-                // tr_sprite.c always uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA
-                // for all sprites regardless of alpha channel content, so we
-                // always use standard alpha blend (BLEND_MODE_MIX).
-                if (!shader_props_found && spriteShader > 0) {
+                    // Load texture
                     Ref<ImageTexture> tex = get_shader_texture(spriteShader);
                     if (tex.is_valid()) {
                         smat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
                     }
+                }
+
+                // Re-enforce sprite-specific settings that
+                // apply_shader_props_to_material may have overridden:
+                smat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+                smat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+                smat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+
+                // If the shader was classified OPAQUE but this is a sprite,
+                // we still need transparency enabled (at minimum alpha blend)
+                // so that vertex colour alpha works.
+                if (smat->get_transparency() == BaseMaterial3D::TRANSPARENCY_DISABLED) {
+                    smat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                 }
 
                 static std::unordered_set<int> logged_active_sprites;
@@ -2653,6 +2687,27 @@ void MoHAARunner::update_entities() {
             // Position sprite at entity origin
             Vector3 pos = id_to_godot_position(origin[0], origin[1], origin[2]);
             mi->set_global_transform(Transform3D(Basis(), pos));
+
+            // ── Parent management for sprites ──
+            // Sprites must be in the correct parent (entity_root vs weapon_root)
+            // based on their renderfx flags.  Without this, a MeshInstance that
+            // was previously in weapon_root (from a prior frame's RT_MODEL) stays
+            // there when reused as a sprite, causing SubViewport compositing issues.
+            // ALL first-person sprites must stay in entity_root.  The weapon
+            // SubViewport's alpha compositing breaks both additive and alpha
+            // blending: dark pixels get alpha=1.0, and the TextureRect
+            // compositing treats them as opaque black.  Sprites are always
+            // visual effects and rarely clip into world geometry, so losing
+            // the depth hack is acceptable.
+            if (weapon_root) {
+                Node *target = entity_root;
+                Node *cur = mi->get_parent();
+                if (cur && cur != target) {
+                    cur->remove_child(mi);
+                    target->add_child(mi);
+                }
+            }
+
             mi->set_visible(true);
             continue;
         }
@@ -2793,6 +2848,20 @@ void MoHAARunner::update_entities() {
             }
             // Beam vertices are already in world space — use identity transform
             mi->set_global_transform(Transform3D());
+
+            // ── Parent management for beams ──
+            // ALL first-person beams go to entity_root — same reasoning as
+            // sprites: the SubViewport alpha compositing breaks additive/
+            // alpha blending.  Beams are visual effects that rarely clip.
+            if (weapon_root) {
+                Node *target = entity_root;
+                Node *cur = mi->get_parent();
+                if (cur && cur != target) {
+                    cur->remove_child(mi);
+                    target->add_child(mi);
+                }
+            }
+
             mi->set_visible(true);
             continue;
         }
@@ -2910,10 +2979,14 @@ void MoHAARunner::update_entities() {
                     Ref<StandardMaterial3D> mat;
                     mat.instantiate();
                     mat->set_cull_mode(BaseMaterial3D::CULL_BACK);
-                    /* UNSHADED: OpenMOHAA lights entities via the baked Light Grid,
-                     * which is applied as an albedo color multiplier below.
-                     * No dynamic Godot lights exist, so PER_PIXEL would be black. */
-                    mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+                    /* Shading mode depends on the current rendering mode:
+                     *  r_shadows 0 (UNSHADED): OpenMOHAA lights entities via the baked
+                     *    Light Grid (albedo multiplier). No Godot dynamic lights active.
+                     *  r_shadows 1 (PER_PIXEL): entities receive sun + OmniLight3D
+                     *    (muzzle flashes, explosions) and cast shadows onto BSP floors. */
+                    mat->set_shading_mode(cached_entity_shadow_mode == 1
+                        ? BaseMaterial3D::SHADING_MODE_PER_PIXEL
+                        : BaseMaterial3D::SHADING_MODE_UNSHADED);
 
 #ifdef GODOT_DEBUG_WHITE_ENTITIES
                     // DEBUG: Force all TIKI entity surfaces to opaque white so models
@@ -3274,6 +3347,9 @@ void MoHAARunner::update_entities() {
                     if (tex.is_valid()) {
                         csmat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
                     }
+                    // Apply the shader's real blend mode from the engine data.
+                    // The engine's R_FindShader() already parsed the .shader
+                    // definition; just use that — no custom heuristics needed.
                     const char *csn = Godot_Renderer_GetShaderName(entCustomShader);
                     if (csn && csn[0]) {
                         apply_shader_props_to_material(csmat, csn);
@@ -3370,8 +3446,28 @@ void MoHAARunner::update_entities() {
         // SubViewport with its own depth buffer, composited on top of the main
         // scene).  This prevents the viewmodel from clipping into walls.
         // All other entities stay in entity_root (main scene).
+        // Exception: entities with customShader AND RF_FIRST_PERSON/RF_DEPTHHACK
+        // must render in entity_root.  The weapon SubViewport composites via a
+        // TextureRect with alpha blending; any non-opaque content there (additive
+        // muzzle flashes, alpha-blended effects) produces opaque-black pixels
+        // where the texture is dark, because the alpha channel in the SubViewport
+        // is 1.0 even though RGB adds nothing (dark+additive=dark).  The
+        // TextureRect compositing then treats alpha=1 as fully opaque → black.
+        // Moving customShader entities to entity_root lets them blend directly
+        // against the world, which matches the original engine (no separate
+        // compositing pass for first-person effects).  The depth hack is lost
+        // for these entities, but muzzle flashes are brief and rarely clip.
         if (weapon_root) {
-            Node *target_parent = (is_first_person || is_depthhack) ? weapon_root : entity_root;
+            bool force_main_scene = false;
+            if (is_first_person || is_depthhack) {
+                int cs_check = 0;
+                Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &cs_check);
+                if (cs_check > 0) {
+                    force_main_scene = true;  // ANY customShader → main scene
+                }
+            }
+            Node *target_parent = (!force_main_scene && (is_first_person || is_depthhack))
+                                ? weapon_root : entity_root;
             Node *cur_parent = mi->get_parent();
             if (cur_parent && cur_parent != target_parent) {
                 cur_parent->remove_child(mi);
@@ -3466,6 +3562,14 @@ void MoHAARunner::update_entities() {
                     // because the global props->rgbgen_type doesn't distinguish entity vs oneMinusEntity.
                     // Per-stage enums: STAGE_RGBGEN_ENTITY=4, STAGE_RGBGEN_ONE_MINUS_ENTITY=5
                     //                  STAGE_ALPHAGEN_ENTITY=3, STAGE_ALPHAGEN_ONE_MINUS_ENTITY=4
+                    //
+                    // IMPORTANT: For RT_MODEL entities, "vertex" colour IS the entity's
+                    // shaderRGBA — the engine copies refEntity_t.shaderRGBA into
+                    // tess.svars.colors[] (see RB_CalcDiffuseColor / RB_CalcColorFromEntity).
+                    // So rgbGen vertex (2) and alphaGen vertex (1) must be treated
+                    // identically to rgbGen entity (4) / alphaGen entity (3) here.
+                    // This is critical for effect models like muzflash.tik that use
+                    // "alphagen vertex" + tagspawn alpha 0.30 + fade.
                     bool apply_rgb_entity = false;
                     bool apply_rgb_one_minus_entity = false;
                     bool apply_alpha_entity = false;
@@ -3477,13 +3581,15 @@ void MoHAARunner::update_entities() {
                             if (!sp->stages[st].active) continue;
                             if (sp->stages[st].isLightmap) continue;
                             // MohaaStageRgbGen: IDENTITY=0, IDENTITY_LIGHTING=1, VERTEX=2, WAVE=3, ENTITY=4, ONE_MINUS_ENTITY=5, LIGHTING_DIFFUSE=6, CONST=7
-                            if (sp->stages[st].rgbGen == 4) { // STAGE_RGBGEN_ENTITY
+                            if (sp->stages[st].rgbGen == 4 || sp->stages[st].rgbGen == 2) {
+                                // ENTITY(4) or VERTEX(2) — for entities, vertex == entity
                                 apply_rgb_entity = true;
                             } else if (sp->stages[st].rgbGen == 5) { // STAGE_RGBGEN_ONE_MINUS_ENTITY
                                 apply_rgb_one_minus_entity = true;
                             }
                             // MohaaStageAlphaGen: IDENTITY=0, VERTEX=1, WAVE=2, ENTITY=3, ONE_MINUS_ENTITY=4, PORTAL=5, CONST=6
-                            if (sp->stages[st].alphaGen == 3) { // STAGE_ALPHAGEN_ENTITY
+                            if (sp->stages[st].alphaGen == 3 || sp->stages[st].alphaGen == 1) {
+                                // ENTITY(3) or VERTEX(1) — for entities, vertex == entity
                                 apply_alpha_entity = true;
                             } else if (sp->stages[st].alphaGen == 4) { // STAGE_ALPHAGEN_ONE_MINUS_ENTITY
                                 apply_alpha_one_minus_entity = true;
@@ -3598,6 +3704,18 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
+        // ── Dynamic shadow casting (r_shadows 1) ──
+        // In mode 1, ALL visible non-firstperson entities cast GPU shadows onto
+        // PER_PIXEL BSP floors regardless of RF_SHADOW flag.
+        // (RF_SHADOW is rarely set by cgame; using it as guard means no casters.)
+        {
+            bool wants_shadow = (cached_entity_shadow_mode == 1) &&
+                                 !is_first_person && !is_depthhack;
+            mi->set_cast_shadows_setting(wants_shadow
+                ? GeometryInstance3D::SHADOW_CASTING_SETTING_ON
+                : GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+        }
+
         mi->set_visible(true);
 
         entity_cache_keys[i] = key;
@@ -3643,6 +3761,8 @@ void MoHAARunner::update_dlights() {
         light->set_name(String("DLight_") + String::num_int64((int64_t)dlight_nodes.size()));
         light->set_visible(false);
         light->set_param(Light3D::PARAM_ATTENUATION, 1.5);  // smoother falloff
+        // Inherit current r_dlight_shadows setting for newly pooled lights
+        light->set_shadow(cached_dlight_shadows == 1);
         game_world->add_child(light);
         dlight_nodes.push_back(light);
     }
@@ -3662,6 +3782,8 @@ void MoHAARunner::update_dlights() {
         float range_metres = intensity * MOHAA_UNIT_SCALE;
         light->set_param(Light3D::PARAM_RANGE, range_metres);
         light->set_param(Light3D::PARAM_ENERGY, 2.0);
+        // r_dlight_shadows: each omni shadow = 6 depth cube-map renders/frame
+        light->set_shadow(cached_dlight_shadows == 1);
         light->set_visible(true);
     }
 
@@ -4260,11 +4382,138 @@ void MoHAARunner::update_terrain_marks() {
 }
 
 // ──────────────────────────────────────────────
+//  Dynamic shadow mode switching  (r_shadows / r_dlight_shadows cvars)
+//  r_shadows 0 = classic MOHAA shadow blobs (default)
+//  r_shadows 1 = modern GPU shadows: sun DirectionalLight (from map sundirection)
+//               + optional dlight shadows (r_dlight_shadows 1)
+// ──────────────────────────────────────────────
+
+// Orient entity_shadow_light from the map's worldspawn sundirection/suncolor.
+// Called after every map load (load_sun_flare populates sun_direction/sun_color),
+// and when switching to r_shadows 1.  Safe to call even when mode == 0.
+void MoHAARunner::apply_sun_light_direction() {
+    if (!entity_shadow_light) return;
+
+    // ── Derive Godot-space direction from map sundirection ──
+    // id Tech 3 → Godot coordinate mapping: X=-idY, Y=idZ, Z=-idX
+    // sun_direction[3] points FROM scene TOWARD the sun (set by id_angle_vectors_left).
+    // We place the light AT the sun position and look toward origin.
+    Vector3 sun_dir_godot;
+    if (sun_exists &&
+        (sun_direction[0] != 0.0f || sun_direction[1] != 0.0f || sun_direction[2] != 0.0f)) {
+        sun_dir_godot = Vector3(
+            -sun_direction[1],
+             sun_direction[2],
+            -sun_direction[0]
+        ).normalized();
+    } else {
+        // No sundirection in worldspawn — use a natural-looking fallback angle.
+        // ~65° elevation, from the south-east.
+        sun_dir_godot = Vector3(0.35f, 0.87f, -0.35f).normalized();
+    }
+
+    // ── Orient the DirectionalLight3D ──
+    // look_at_from_position: -Z axis points from p_position toward p_target.
+    // Place light in the "toward sun" direction; look at origin → -Z = rays toward scene.
+    Vector3 light_pos = sun_dir_godot * 500.0f;  // Far enough to be beyond any scene geometry
+    Vector3 look_target = Vector3(0.0f, 0.0f, 0.0f);
+    // Avoid degenerate look_at when sun_dir is parallel to the default up axis.
+    Vector3 up = (Math::abs(sun_dir_godot.dot(Vector3(0.0f, 1.0f, 0.0f))) > 0.99f)
+        ? Vector3(1.0f, 0.0f, 0.0f)
+        : Vector3(0.0f, 1.0f, 0.0f);
+    entity_shadow_light->look_at_from_position(light_pos, look_target, up);
+
+    // ── Sun colour from worldspawn suncolor / sunlight ──
+    if (sun_exists) {
+        entity_shadow_light->set_color(Color(sun_color[0], sun_color[1], sun_color[2]));
+    } else {
+        entity_shadow_light->set_color(Color(1.0f, 0.98f, 0.9f));  // warm white fallback
+    }
+
+    UtilityFunctions::print(
+        String("[MoHAA] Sun light: dir_godot=(") +
+        String::num(sun_dir_godot.x, 2) + "," +
+        String::num(sun_dir_godot.y, 2) + "," +
+        String::num(sun_dir_godot.z, 2) + ")" +
+        (sun_exists ? " (from map)" : " (fallback)"));
+}
+
+// Apply r_shadows mode transition.  Called when the cvar changes and
+// after every map load.
+void MoHAARunner::apply_player_shadow_mode(int mode) {
+    cached_entity_shadow_mode = mode;
+
+    // ── Toggle the dedicated shadow DirectionalLight ──
+    if (entity_shadow_light) {
+        entity_shadow_light->set_visible(mode == 1);
+    }
+
+    // ── Adjust environment ambient energy ──
+    // Shadow contrast requires ambient < 1.0.  With ambient = 1.0, entities are
+    // fully lit by ambient alone; the DirectionalLight's shadow map then blocks
+    // a contribution of 0 (= invisible shadow).
+    //
+    // Both modes use 0.5:
+    //   mode 0 (classic blobs): ambient 0.5 — neutral fill for HUD models etc.
+    //   mode 1 (GPU shadows):   ambient 0.5 — entity in shadow appears at 50 %
+    //     brightness; DirectionalLight (energy 0.5) brings sun-facing geometry
+    //     back up to ≈ 1.0.  That gives ~50 % shadow contrast — clearly visible.
+    if (world_env) {
+        Ref<Environment> env = world_env->get_environment();
+        if (env.is_valid()) {
+            env->set_ambient_light_energy(0.5f);
+        }
+    }
+
+    // ── Switch all cached TIKI entity materials ──
+    // mode 1 → PER_PIXEL: entities receive sun + OmniLight (muzzle flash/explosions)
+    // mode 0 → UNSHADED:  fixed albedo appearance (lightgrid-style, no dynamic lights)
+    int entity_mats_switched = 0;
+    for (auto &kv : tiki_mat_cache) {
+        for (auto &mat : kv.second.mats) {
+            if (mat.is_valid()) {
+                mat->set_shading_mode(mode == 1
+                    ? BaseMaterial3D::SHADING_MODE_PER_PIXEL
+                    : BaseMaterial3D::SHADING_MODE_UNSHADED);
+                entity_mats_switched++;
+            }
+        }
+    }
+
+    // ── Update BSP ShaderMaterial shadow darkness uniform ──
+    // Set bsp_shadow_darkness on every registered ShaderMaterial.  At 0.0
+    // the shader behaves identically to the old render_mode unshaded (no
+    // visible shadow).  At 0.5 the DirectionalLight's ATTENUATION (shadow
+    // factor) is applied: BSP floors in shadow are 50 % of their lightmap
+    // colour, giving clearly visible GPU shadow shapes on the ground.
+#ifdef HAS_SHADER_MATERIAL_MODULE
+    Godot_Shader_SetShadowDarkness(mode == 1 ? 0.5f : 0.0f);
+#endif
+
+    UtilityFunctions::print(
+        String("[MoHAA] r_shadows = ") + String::num_int64(mode) +
+        (mode == 1 ? " (GPU shadows ON)" : " (classic shadow blobs)") +
+        " entity_mats=" + String::num_int64(entity_mats_switched));
+}
+
+// ──────────────────────────────────────────────
 //  Shadow blob projection for RF_SHADOW entities
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_shadow_blobs() {
     if (!game_world) return;
+
+    // In mode 1 (dynamic Godot shadows), RF_SHADOW entities cast real GPU
+    // shadows onto the world.  Skip the shadow blob projection entirely so
+    // blobs don't double-up with the accurate shadows.
+    if (cached_entity_shadow_mode == 1) {
+        // Hide any previously created blobs
+        for (MeshInstance3D *mi : shadow_blob_meshes) {
+            if (mi) mi->set_visible(false);
+        }
+        active_shadow_blob_count = 0;
+        return;
+    }
 
     // RF_ flag constants used for shadow filtering
     static const int RF_DONTDRAW = 0x80;   // (1<<7)
@@ -4714,8 +4963,40 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                 if (out_has_alpha) {
                     *out_has_alpha = (img->detect_alpha() != Image::ALPHA_NONE);
                 }
-                // Diagnostic: log texture format/alpha for levelshot shaders
+                // Diagnostic: log texture format/alpha/orientation for levelshot shaders
                 if (name && (strstr(name, "mohdm") || strstr(name, "levelshot"))) {
+                    String pixel_info;
+                    if (img->get_format() == Image::FORMAT_RGBA8 && img->get_width() > 0 && img->get_height() > 0) {
+                        int w = img->get_width(), h = img->get_height();
+                        Color tl = img->get_pixel(0, 0);
+                        Color bl = img->get_pixel(0, h - 1);
+                        Color cc = img->get_pixel(w / 2, h / 2);
+                        Color q1 = img->get_pixel(w / 4, h / 4);
+                        Color q3 = img->get_pixel(3 * w / 4, 3 * h / 4);
+                        pixel_info = String(" px(0,0)=A") + String::num(tl.a * 255, 0) +
+                            String(" px(0,bot)=A") + String::num(bl.a * 255, 0) +
+                            String(" px(center)=R") + String::num(cc.r * 255, 0) +
+                            String(",G") + String::num(cc.g * 255, 0) +
+                            String(",B") + String::num(cc.b * 255, 0) +
+                            String(",A") + String::num(cc.a * 255, 0) +
+                            String(" px(q1)=A") + String::num(q1.a * 255, 0) +
+                            String(" px(q3)=A") + String::num(q3.a * 255, 0);
+                        // Compute alpha statistics
+                        PackedByteArray imgdata = img->get_data();
+                        const uint8_t *pix = imgdata.ptr();
+                        int pc = w * h;
+                        int a_min = 255, a_max = 0;
+                        long a_sum = 0;
+                        for (int p = 0; p < pc; p++) {
+                            int a = pix[p * 4 + 3];
+                            if (a < a_min) a_min = a;
+                            if (a > a_max) a_max = a;
+                            a_sum += a;
+                        }
+                        pixel_info += String(" alpha_min=") + String::num_int64(a_min) +
+                            String(" alpha_max=") + String::num_int64(a_max) +
+                            String(" alpha_avg=") + String::num(a_sum / (float)pc, 1);
+                    }
                     UtilityFunctions::print(
                         String("[MoHAA][TEX-DIAG] shader='") + String(name) +
                         String("' path='") + String(path) +
@@ -4723,7 +5004,8 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
                         String(" size=") + String::num_int64(img->get_width()) +
                         String("x") + String::num_int64(img->get_height()) +
                         String(" detect_alpha=") + String::num_int64(img->detect_alpha()) +
-                        String(" has_alpha=") + String(*out_has_alpha ? "true" : "false"));
+                        String(" has_alpha=") + String(*out_has_alpha ? "true" : "false") +
+                        pixel_info);
                 }
                 img->generate_mipmaps();
                 Ref<ImageTexture> tex = ImageTexture::create_from_image(img);
@@ -5060,7 +5342,7 @@ void MoHAARunner::update_mirrors() {
             if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_4)) m.normal.x -= step;
             if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_9)) m.normal.z += step;
             if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_7)) m.normal.z -= step;
-            
+
             if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_ADD)) m.center.z += step;
             if (Input::get_singleton()->is_key_pressed(Key::KEY_KP_SUBTRACT)) m.center.z -= step;
 
@@ -5086,7 +5368,7 @@ void MoHAARunner::update_mirrors() {
 
         // Get world space mirror info from the model's transform
         Transform3D model_transform = m.mesh_instance->get_global_transform();
-        
+
         // Let's assume the local normal is looking up +Z for TIKI models typically
         // but it might need tweaking based on vanity.tik's exact orientation.
         // Easiest is to trace or visually debug. Defaulting to +Y local as a plane.
@@ -5107,7 +5389,7 @@ void MoHAARunner::update_mirrors() {
 
         m.camera->set_global_transform(Transform3D(ref_basis, ref_pos));
         m.camera->set_fov(camera->get_fov());
-        
+
         // In a proper implementation we would set up an oblique near-plane frustum.
         // For this fun quick hack, we'll just let the geometry intersect.
 
@@ -5214,16 +5496,31 @@ void MoHAARunner::update_2d_overlay() {
             "shader_type canvas_item;\n"
             "void fragment() {\n"
             "    vec4 tex = texture(TEXTURE, UV);\n"
-            "    // Pre-composite two-stage GL pipeline:\n"
-            "    // Stage 0: $whiteimage (opaque white fill)\n"
-            "    // Stage 1: texture with GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA\n"
-            "    // result = tex.rgb * (1.0 - tex.a) + white * tex.a\n"
-            "    vec3 composited = tex.rgb * (1.0 - tex.a) + vec3(1.0) * tex.a;\n"
-            "    COLOR = vec4(composited * COLOR.rgb, COLOR.a);\n"
+            "    // Fallback ALPHA_INV: for draws NOT pre-composited on CPU.\n"
+            "    // Godot linearises tex.rgb (sRGB decode) but tex.a is raw.\n"
+            "    // Undo the decode, composite in sRGB, then re-linearise.\n"
+            "    vec3 srgb = pow(max(tex.rgb, vec3(0.0)), vec3(1.0 / 2.2));\n"
+            "    vec3 composited = srgb * (1.0 - tex.a) + vec3(1.0) * tex.a;\n"
+            "    COLOR = vec4(pow(composited, vec3(2.2)) * COLOR.rgb, COLOR.a);\n"
             "}\n"
         );
         alpha_inv_material.instantiate();
         alpha_inv_material->set_shader(alpha_inv_shader);
+    }
+    if (mix_material.is_null()) {
+        mix_shader.instantiate();
+        mix_shader->set_code(
+            "shader_type canvas_item;\n"
+            "void fragment() {\n"
+            "    // Explicit texture * vertex-colour multiply.  Godot's default\n"
+            "    // no-material canvas path appears not to apply the per-draw\n"
+            "    // modulate colour correctly, causing white font text despite\n"
+            "    // black SetColor.  This shader forces the multiplication.\n"
+            "    COLOR = texture(TEXTURE, UV) * COLOR;\n"
+            "}\n"
+        );
+        mix_material.instantiate();
+        mix_material->set_shader(mix_shader);
     }
 
     // Clear all existing segments
@@ -5254,7 +5551,7 @@ void MoHAARunner::update_2d_overlay() {
         // Set material for this segment's blend mode
         if (seg.blend_mode != blend) {
             if (blend == BLEND_MIX) {
-                rs->canvas_item_set_material(seg.item, RID());
+                rs->canvas_item_set_material(seg.item, mix_material->get_rid());
             } else if (blend == BLEND_MUL) {
                 rs->canvas_item_set_material(seg.item, mul_canvas_material->get_rid());
             } else if (blend == BLEND_MUL_INV) {
@@ -5500,53 +5797,63 @@ void MoHAARunner::update_2d_overlay() {
                 }
 
                 // ── Apply shader stage rgbGen/alphaGen semantics to draw colour ──
-                // The real GL renderer processes per-stage alphaGen (e.g.
-                // "alphagen constant 0.0") which overrides the vertex alpha
-                // set by SetColor.  Our 2D overlay must replicate this.
+                //
+                // RE_RegisterShaderNoMip uses LIGHTMAP_NONE, so FinishShader
+                // does NOT set CGEN_GLOBAL_COLOR.  Stages keep their parsed
+                // rgbGen — typically IDENTITY_LIGHTING for shaders with no
+                // explicit rgbGen.  In the real renderer, IDENTITY_LIGHTING
+                // produces white vertex colour (texture appears as-is),
+                // regardless of the current SetColor.
+                //
+                // Fonts are special: R_LoadFontShader overrides to
+                // CGEN_GLOBAL_COLOR (use SetColor).  Our accessor resolves
+                // with LIGHTMAP_NONE so fonts report IDENTITY_LIGHTING too.
+                // We detect fonts via path heuristic ("gfx/fonts/") and
+                // treat them as GLOBAL_COLOR.
+                //
+                // Summary:
+                //   IDENTITY / IDENTITY_LIGHTING (non-font) → white
+                //   GLOBAL_COLOR or font                    → SetColor
+                //   CONST                                   → explicit constant
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
                 if (sname && sname[0]) {
                     const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
                     if (sp && sp->stage_count > 0) {
-                        // Find first non-lightmap stage (same as get_shader_texture)
+                        bool is_font = (strstr(sname, "gfx/fonts/") != nullptr);
                         for (int st = 0; st < sp->stage_count; st++) {
                             if (!sp->stages[st].active) continue;
                             if (sp->stages[st].isLightmap) continue;
                             const MohaaShaderStage *stg = &sp->stages[st];
 
-                            // OpenMOHAA's FinishShader sets CGEN_GLOBAL_COLOR for
-                            // LIGHTMAP_2D (implicit) shaders.  But explicit shaders
-                            // with rgbGen identity mean "multiply by white" (show
-                            // texture as-is).  We only reach here if sp != NULL
-                            // (explicit shader), so IDENTITY → white is correct.
-                            //
-                            // Exception: font shaders.  OpenMOHAA's R_LoadFontShader
-                            // overrides them to CGEN_GLOBAL_COLOR at runtime.
-                            bool is_font = (sname && strstr(sname, "gfx/fonts/") != nullptr);
-
-                            // rgbGen handling
-                            if (!is_font && (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                             stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING)) {
-                                draw_col.r = 1.0f;
-                                draw_col.g = 1.0f;
-                                draw_col.b = 1.0f;
-                            } else if (stg->rgbGen == STAGE_RGBGEN_CONST) {
+                            // rgbGen
+                            if (stg->rgbGen == STAGE_RGBGEN_CONST) {
                                 draw_col.r = stg->rgbConst[0];
                                 draw_col.g = stg->rgbConst[1];
                                 draw_col.b = stg->rgbConst[2];
+                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR || is_font) {
+                                // Use SetColor (draw_col = col already)
+                            } else if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                       stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
+                                draw_col.r = 1.0f;
+                                draw_col.g = 1.0f;
+                                draw_col.b = 1.0f;
                             }
 
-                            // alphaGen handling
-                            if (!is_font && stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
-                                draw_col.a = 1.0f;
-                            } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
+                            // alphaGen
+                            if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                 draw_col.a = stg->alphaConst;
+                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA || is_font) {
+                                // Use SetColor alpha (draw_col.a = col.a already)
+                            } else if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                                draw_col.a = 1.0f;
                             }
                             break;  // Only process first non-lightmap stage
                         }
                     }
                 }
+
 
                 if (sname && strstr(sname, "serverback") &&
                     logged_serverback_draw.find(shader) == logged_serverback_draw.end()) {
@@ -5642,7 +5949,12 @@ void MoHAARunner::update_2d_overlay() {
 
                             /* Multi-stage shader: check the actual texture stage
                              * for a custom blendFunc that overrides the opaque
-                             * default (e.g. GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA). */
+                             * default (e.g. GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA).
+                             * Skip internal engine images: the shader accessor
+                             * stores $whiteimage as "*white", $lightmap as
+                             * "*lightmap", etc.  These are first-pass fill stages
+                             * (e.g. mohdm* levelshots write white in stage 0,
+                             * then alpha-blend the screenshot in stage 1). */
                             if (sp2->stage_count > 1) {
                                 for (int st = 0; st < sp2->stage_count; st++) {
                                     if (sp2->stages[st].isLightmap) continue;
@@ -5650,7 +5962,8 @@ void MoHAARunner::update_2d_overlay() {
                                     if (!sm[0]) continue;
                                     if (strcmp(sm, "$lightmap") == 0) continue;
                                     if (strcmp(sm, "$whiteimage") == 0) continue;
-                                    
+                                    if (sm[0] == '*') continue;
+
                                     if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
                                         sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
                                         draw_blend = BLEND_ALPHA_INV;
@@ -5667,6 +5980,58 @@ void MoHAARunner::update_2d_overlay() {
                         }
                     }
                 }
+
+                // ALPHA_INV: pre-composite on CPU in sRGB space to avoid
+                // GPU sRGB decode/encode colour space mismatches.
+                // The two-stage pipeline (white fill + inverse alpha blend)
+                // is baked into an opaque RGB image, then drawn normally.
+                if (draw_blend == BLEND_ALPHA_INV) {
+                    auto it = s_alpha_inv_tex_cache.find(shader);
+                    if (it == s_alpha_inv_tex_cache.end()) {
+                        // Re-load the raw Image from the texture (before GPU upload)
+                        Ref<Image> src_img = tex->get_image();
+                        if (src_img.is_valid() && !src_img->is_empty()) {
+                            src_img = src_img->duplicate();
+                            if (src_img->get_format() != Image::FORMAT_RGBA8) {
+                                src_img->convert(Image::FORMAT_RGBA8);
+                            }
+                            int iw = src_img->get_width();
+                            int ih = src_img->get_height();
+                            // Create pre-composited RGB8 image
+                            Ref<Image> comp_img;
+                            comp_img.instantiate();
+                            PackedByteArray src_data = src_img->get_data();
+                            const uint8_t *sp = src_data.ptr();
+                            PackedByteArray dst_data;
+                            dst_data.resize(iw * ih * 3);
+                            uint8_t *dp = dst_data.ptrw();
+                            for (int px = 0; px < iw * ih; px++) {
+                                uint8_t r = sp[px * 4 + 0];
+                                uint8_t g = sp[px * 4 + 1];
+                                uint8_t b = sp[px * 4 + 2];
+                                uint8_t a = sp[px * 4 + 3];
+                                // result = tex*(1-a/255) + 255*(a/255)
+                                //        = tex*(255-a)/255 + a
+                                dp[px * 3 + 0] = (uint8_t)((r * (255 - a) + 255 * a + 127) / 255);
+                                dp[px * 3 + 1] = (uint8_t)((g * (255 - a) + 255 * a + 127) / 255);
+                                dp[px * 3 + 2] = (uint8_t)((b * (255 - a) + 255 * a + 127) / 255);
+                            }
+                            comp_img = Image::create_from_data(iw, ih, false, Image::FORMAT_RGB8, dst_data);
+                            comp_img->generate_mipmaps();
+                            Ref<ImageTexture> comp_tex = ImageTexture::create_from_image(comp_img);
+                            s_alpha_inv_tex_cache[shader] = comp_tex;
+                            it = s_alpha_inv_tex_cache.find(shader);
+                        }
+                    }
+                    if (it != s_alpha_inv_tex_cache.end() && it->second.is_valid()) {
+                        tex_rid = it->second->get_rid();
+                        tw = (float)it->second->get_width();
+                        th = (float)it->second->get_height();
+                        src = Rect2(s1 * tw, t1 * th, (s2 - s1) * tw, (t2 - t1) * th);
+                    }
+                    draw_blend = BLEND_OPAQUE;
+                }
+
                 RID target_ci = get_segment_ci(draw_blend);
 
                 // Detect tiling: if the source rect extends beyond the
@@ -5770,22 +6135,46 @@ void MoHAARunner::update_2d_overlay() {
                                 String::num(draw_col.g,3) + String(",") + String::num(draw_col.b,3) +
                                 String(",") + String::num(draw_col.a,3) +
                                 String(") blend=") + String::num(draw_blend) +
+                                String("(") +
+                                String(draw_blend == BLEND_OPAQUE ? "OPAQUE" :
+                                       draw_blend == BLEND_MIX ? "MIX" :
+                                       draw_blend == BLEND_ADD ? "ADD" :
+                                       draw_blend == BLEND_MUL ? "MUL" :
+                                       draw_blend == BLEND_ALPHA_INV ? "ALPHA_INV" : "OTHER") +
+                                String(")") +
                                 String(" tex=") + String::num(tw,0) + String("x") + String::num(th,0) +
                                 String(" uv=") + String::num(s1,3) + String(",") + String::num(t1,3) +
                                 String("->") + String::num(s2,3) + String(",") + String::num(t2,3) +
                                 String(" scale=") + String::num(ui_scale_x,4) + String(",") + String::num(ui_scale_y,4));
+                            // Dump all stages for mohdm shader
+                            const GodotShaderProps *mp_sp = Godot_ShaderProps_Find(sname);
+                            if (mp_sp) {
+                                UtilityFunctions::print(String("[MAP-PREVIEW-STAGES] transp=") +
+                                    String::num_int64(mp_sp->transparency) +
+                                    String(" stage_count=") + String::num_int64(mp_sp->stage_count));
+                                for (int mps = 0; mps < mp_sp->stage_count; mps++) {
+                                    UtilityFunctions::print(String("[MAP-PREVIEW-STAGE ") + String::num_int64(mps) +
+                                        String("] map='") + String(mp_sp->stages[mps].map) +
+                                        String("' blendSrc=") + String::num_int64(mp_sp->stages[mps].blendSrc) +
+                                        String(" blendDst=") + String::num_int64(mp_sp->stages[mps].blendDst) +
+                                        String(" hasBlend=") + String::num_int64(mp_sp->stages[mps].hasBlendFunc) +
+                                        String(" rgbGen=") + String::num_int64(mp_sp->stages[mps].rgbGen) +
+                                        String(" alphaGen=") + String::num_int64(mp_sp->stages[mps].alphaGen) +
+                                        String(" alphaConst=") + String::num(mp_sp->stages[mps].alphaConst, 3) +
+                                        String(" isLightmap=") + String::num_int64(mp_sp->stages[mps].isLightmap));
+                                }
+                            }
                         }
                     }
-                    // Flipped UVs (s1>s2 or t1>t2) need explicit UV
-                    // mapping — canvas_item_add_texture_rect_region does
-                    // not flip with negative src dimensions.  Use a
-                    // textured polygon with per-vertex UVs for full control.
-                    bool need_flip = (src.size.x < 0.0f || src.size.y < 0.0f);
-                    if (!need_flip) {
-                        rs->canvas_item_add_texture_rect_region(target_ci, draw_rect, tex_rid, src, draw_col, false, false);
-                    } else {
-                        // Build quad as 2-triangle polygon with explicit UVs.
-                        // The raw s1/t1/s2/t2 already encode the flip direction.
+                    // Use triangle_array with explicit per-vertex colours for
+                    // ALL non-tiled textured 2D draws.  Godot 4.2's
+                    // canvas_item_add_texture_rect_region passes draw_col
+                    // via "modulate" which does not reliably reach the shader
+                    // as COLOR, making font text (white-RGB + alpha mask ×
+                    // black SetColor) appear as white instead of black.
+                    // triangle_array with a PackedColorArray always works
+                    // because the colours are genuine vertex attributes.
+                    {
                         float dx = draw_rect.position.x;
                         float dy = draw_rect.position.y;
                         float dw = draw_rect.size.x;
@@ -5806,10 +6195,25 @@ void MoHAARunner::update_2d_overlay() {
                         pts[2] = Vector2(dx + dw,  dy + dh);
                         pts[3] = Vector2(dx,       dy + dh);
 
-                        fuv[0] = Vector2(s1, t1);
-                        fuv[1] = Vector2(s2, t1);
-                        fuv[2] = Vector2(s2, t2);
-                        fuv[3] = Vector2(s1, t2);
+                        bool need_flip = (src.size.x < 0.0f || src.size.y < 0.0f);
+                        if (need_flip) {
+                            // Raw s1/t1/s2/t2 encode the flip direction
+                            fuv[0] = Vector2(s1, t1);
+                            fuv[1] = Vector2(s2, t1);
+                            fuv[2] = Vector2(s2, t2);
+                            fuv[3] = Vector2(s1, t2);
+                        } else {
+                            // Normal draw: convert scissor-adjusted pixel-space
+                            // src rect to normalised UVs
+                            float fu0 = src.position.x / tw;
+                            float fv0 = src.position.y / th;
+                            float fu1 = (src.position.x + src.size.x) / tw;
+                            float fv1 = (src.position.y + src.size.y) / th;
+                            fuv[0] = Vector2(fu0, fv0);
+                            fuv[1] = Vector2(fu1, fv0);
+                            fuv[2] = Vector2(fu1, fv1);
+                            fuv[3] = Vector2(fu0, fv1);
+                        }
 
                         cols[0] = cols[1] = cols[2] = cols[3] = draw_col;
 
@@ -7174,6 +7578,26 @@ void MoHAARunner::_process(double delta) {
         }
     }
 
+    // r_shadows: 0 = classic MOHAA shadow blobs (default)
+    //            1 = modern GPU shadows: sun DirectionalLight (from map sundirection)
+    //                casts shadows for all RF_SHADOW entities onto BSP surfaces.
+    {
+        int new_shadow_mode = Cvar_VariableIntegerValue("r_shadows");
+        if (new_shadow_mode < 0 || new_shadow_mode > 1) new_shadow_mode = 0;
+        if (new_shadow_mode != cached_entity_shadow_mode) {
+            apply_player_shadow_mode(new_shadow_mode);
+        }
+    }
+
+    // r_dlight_shadows: 0 = dlights illuminate only, no shadow casting (default, fast)
+    //                   1 = dlights cast shadows (expensive: 6 depth passes per light)
+    //                   Takes effect immediately; update_dlights() reads cached_dlight_shadows.
+    {
+        int new_dlight_shadows = Cvar_VariableIntegerValue("r_dlight_shadows");
+        if (new_dlight_shadows < 0 || new_dlight_shadows > 1) new_dlight_shadows = 0;
+        cached_dlight_shadows = new_dlight_shadows;
+    }
+
     // r_fastsky: toggle skybox visibility based on cvar
     if (world_env) {
         Ref<Environment> env = world_env->get_environment();
@@ -7205,6 +7629,7 @@ void MoHAARunner::_process(double delta) {
             s_terrain_mark_mat_cache.clear();
             s_sprite_tint_cache.clear();
             s_beam_tint_cache.clear();
+            s_alpha_inv_tex_cache.clear();
 
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
@@ -7299,7 +7724,7 @@ void MoHAARunner::_process(double delta) {
     update_shadow_blobs();      // Shadow blob projection under RF_SHADOW entities
     update_shader_animations(delta);
     update_sun_flare();         // Sun lens flare 2D overlay
-    
+
     // Update planar reflections early before drawing HUD
     // update_mirrors(); // Vanity mirror hack (Phase FUN) - Commented out as requested.
 

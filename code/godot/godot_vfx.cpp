@@ -552,10 +552,15 @@ void Godot_VFX_Update(float delta)
                     mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
                 }
 
-                /* Apply shader properties: blendFunc, alphaFunc, cull, deform */
+                /* Apply shader properties: blendFunc, alphaFunc, cull, deform.
+                 * Trust the engine's shader data (R_FindShader parsed .shader
+                 * definitions during R_Init).  If the lookup fails, default to
+                 * additive blend — sprites are almost always fire/flash/corona
+                 * effects with black backgrounds that must be invisible. */
                 const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
                 const char *remap = Godot_Renderer_GetShaderRemap(sn);
                 const char *lookup = (remap && remap[0]) ? remap : sn;
+                bool applied_blend = false;
                 if (lookup && lookup[0]) {
                     const GodotShaderProps *sp = Godot_ShaderProps_Find(lookup);
                     if (sp) {
@@ -563,18 +568,22 @@ void Godot_VFX_Update(float delta)
                             case SHADER_ALPHA_TEST:
                                 mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR);
                                 mat->set_alpha_scissor_threshold(sp->alpha_threshold);
+                                applied_blend = true;
                                 break;
                             case SHADER_ALPHA_BLEND:
                                 mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                                applied_blend = true;
                                 break;
                             case SHADER_ADDITIVE:
                                 mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                                 mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                                applied_blend = true;
                                 break;
                             case SHADER_MULTIPLICATIVE:
                             case SHADER_MULTIPLICATIVE_INV:
                                 mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                                 mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
+                                applied_blend = true;
                                 break;
                             default:
                                 /* SHADER_OPAQUE: unusual for a sprite effect.
@@ -582,6 +591,7 @@ void Godot_VFX_Update(float delta)
                                  * sprite quads need transparency to hide edges. */
                                 mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                                 mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                                applied_blend = true;
                                 break;
                         }
                         /* autosprite/autosprite2 deform — only relevant for
@@ -590,13 +600,65 @@ void Godot_VFX_Update(float delta)
                         if (!use_engine_verts && sp->has_deform && sp->deform_type == 4) {
                             mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_FIXED_Y);
                         }
+
+                        /* One-shot diagnostic per shader name */
+                        {
+                            static std::unordered_set<int> vfx_mat_logged;
+                            if (vfx_mat_logged.find(shaderHandle) == vfx_mat_logged.end()) {
+                                vfx_mat_logged.insert(shaderHandle);
+                                UtilityFunctions::print(
+                                    String("[VFX-MAT] shader='") + String(lookup) +
+                                    String("' handle=") + String::num_int64(shaderHandle) +
+                                    String(" transparency=") + String::num_int64(sp->transparency) +
+                                    String(" blend=") + (sp->transparency == SHADER_ADDITIVE ? String("ADD") :
+                                        sp->transparency == SHADER_ALPHA_BLEND ? String("ALPHA") :
+                                        sp->transparency == SHADER_ALPHA_TEST ? String("ATEST") :
+                                        sp->transparency == SHADER_MULTIPLICATIVE ? String("MUL") :
+                                        String("OPAQUE->ADD")));
+                            }
+                        }
+                    } else {
+                        static std::unordered_set<int> vfx_warn_logged;
+                        if (vfx_warn_logged.find(shaderHandle) == vfx_warn_logged.end()) {
+                            vfx_warn_logged.insert(shaderHandle);
+                            UtilityFunctions::print(
+                                String("[VFX-MAT] WARN: sp=NULL for shader='") + String(lookup) +
+                                String("' handle=") + String::num_int64(shaderHandle) +
+                                String(" -> defaulting to additive"));
+                        }
                     }
+                } else {
+                    static std::unordered_set<int> vfx_empty_logged;
+                    if (vfx_empty_logged.find(shaderHandle) == vfx_empty_logged.end()) {
+                        vfx_empty_logged.insert(shaderHandle);
+                        UtilityFunctions::print(
+                            String("[VFX-MAT] WARN: empty shader name for handle=") +
+                            String::num_int64(shaderHandle) +
+                            String(" -> defaulting to additive"));
+                    }
+                }
+
+                /* Safety net: if shader props lookup failed (sp=NULL, empty name,
+                 * or shaderHandle didn't resolve), default to additive blend.
+                 * Sprites are VFX effects — additive hides black backgrounds. */
+                if (!applied_blend) {
+                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                 }
 
                 /* Re-enforce sprite-specific settings: cull mode must stay
                  * CULL_DISABLED for billboard sprites (shader default
                  * SHADER_CULL_BACK would hide back faces). */
                 mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+            } else {
+                /* shaderHandle == 0: no shader at all — default to additive */
+                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                static bool vfx_zero_logged = false;
+                if (!vfx_zero_logged) {
+                    vfx_zero_logged = true;
+                    UtilityFunctions::print(
+                        String("[VFX-MAT] WARN: shaderHandle=0, defaulting to additive"));
+                }
             }
             vfx_mat_cache[mkey] = mat;
         }
