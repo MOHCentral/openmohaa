@@ -223,6 +223,96 @@ int Godot_BSP_LightForPoint(const float point[3], float ambientLight[3],
 }
 
 /* ===================================================================
+ *  Entity lightgrid lighting — exact replica of RB_GetEntityGridLighting
+ *  (tr_light.c).
+ *
+ *  This is the function the real renderer uses to light entities:
+ *    1. R_GetLightingGridValue() for the lightgrid sample (0-255 range)
+ *    2. Accumulate dynamic lights with engine's exact formula
+ *    3. Apply tr.overbrightMult
+ *    4. Normalize (max channel capped to 255)
+ *    5. Clamp each channel to tr.identityLightByte
+ *    6. Return as normalised float RGB [0,1]
+ * ================================================================ */
+
+/* Forward declarations for dlight data in godot_renderer.c */
+extern int Godot_Renderer_GetDlightCount(void);
+extern void Godot_Renderer_GetDlight(int index, float *origin,
+    float *intensity, float *r, float *g, float *b, int *type);
+
+void Godot_EntityGridLighting(const float origin[3],
+                              float *out_r, float *out_g, float *out_b)
+{
+    vec3_t vLight;
+    int    i;
+    float  d;
+
+    /* 1. Sample lightgrid — same as RB_GetEntityGridLighting */
+    if (tr.world && tr.world->lightGridData && tr.world->lightGridOffsets) {
+        R_GetLightingGridValue(origin, vLight);
+    } else {
+        vLight[0] = vLight[1] = vLight[2] = tr.identityLight * 150.0f;
+    }
+
+    /* 2. Accumulate dynamic lights — exact engine formula */
+    {
+        int dlcount = Godot_Renderer_GetDlightCount();
+        for (i = 0; i < dlcount; i++) {
+            float dl_origin[3], intensity, cr, cg, cb;
+            int   type;
+            vec3_t dir;
+            float  power;
+
+            Godot_Renderer_GetDlight(i, dl_origin, &intensity, &cr, &cg, &cb, &type);
+
+            VectorSubtract(dl_origin, origin, dir);
+            d = VectorLengthSquared(dir);
+
+            power = intensity * intensity;   /* dl->radius * dl->radius */
+            if (power >= d) {
+                d = intensity * 7500.0f / d; /* dl->radius * 7500.0 / d */
+                vLight[0] += d * cr;
+                vLight[1] += d * cg;
+                vLight[2] += d * cb;
+            }
+        }
+    }
+
+    /* 3. Apply overbright multiplier */
+    if (tr.overbrightShift) {
+        vLight[0] *= tr.overbrightMult;
+        vLight[1] *= tr.overbrightMult;
+        vLight[2] *= tr.overbrightMult;
+    }
+
+    /* 4. Normalize — cap to 255 preserving hue */
+    if (vLight[0] > 255.0f || vLight[1] > 255.0f || vLight[2] > 255.0f) {
+        float scale = 255.0f / Q_max(vLight[0], Q_max(vLight[1], vLight[2]));
+        VectorScale(vLight, scale, vLight);
+    }
+
+    /* 5. Clamp each channel to identityLightByte */
+    for (i = 0; i < 3; i++) {
+        if (vLight[i] > tr.identityLightByte) {
+            vLight[i] = tr.identityLightByte;
+        }
+        if (vLight[i] < 0.0f) {
+            vLight[i] = 0.0f;
+        }
+    }
+
+    /* 6. Return as normalised float [0,1].
+     *    identityLightByte is the maximum possible value (usually 255 or 127).
+     *    Divide by identityLightByte so that fully-lit pixels map to 1.0. */
+    {
+        float invMax = (tr.identityLightByte > 0) ? (1.0f / tr.identityLightByte) : (1.0f / 255.0f);
+        if (out_r) *out_r = vLight[0] * invMax;
+        if (out_g) *out_g = vLight[1] * invMax;
+        if (out_b) *out_b = vLight[2] * invMax;
+    }
+}
+
+/* ===================================================================
  *  PVS queries — via engine's BSP tree (tr.world->nodes)
  * ================================================================ */
 

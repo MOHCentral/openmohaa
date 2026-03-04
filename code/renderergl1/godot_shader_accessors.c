@@ -712,27 +712,15 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
             if (best < 0) best = fallback_nl;
 
             if (sh->sort <= SS_OPAQUE) {
-                /* Engine sort <= SS_OPAQUE → normally opaque.
-                 * However, some shaders have an explicit 'sort opaque' or
-                 * inherit SS_OPAQUE from FinishShader's default path despite
-                 * having a blendFunc on their stages.  Check the actual blend
-                 * factors and override when the stage says non-opaque.
-                 * Filter (lightmap modulation) with lightmap stays opaque.
-                 * This prevents black borders on effect textures that have
-                 * additive or alpha blending but sort <= opaque. */
+                /* Engine sort <= SS_OPAQUE → opaque surface.
+                 * The engine's FinishShader() already accounts for blend
+                 * factors when determining sort order.  If the engine says
+                 * opaque, trust it unconditionally — do NOT override based
+                 * on stage blendFunc.  Overriding here was the root cause
+                 * of terrain/trees showing through walls and floors: wall
+                 * shaders with blendFunc + explicit 'sort opaque' were
+                 * reclassified as transparent, losing depth writes. */
                 out->transparency = SHADER_OPAQUE;
-                if (best >= 0) {
-                    enum MohaaBlendFactor bs = out->stages[best].blendSrc;
-                    enum MohaaBlendFactor bd = out->stages[best].blendDst;
-                    qboolean is_filter = (bs == BLEND_DST_COLOR && bd == BLEND_ZERO) ||
-                                         (bs == BLEND_ZERO && bd == BLEND_SRC_COLOR);
-                    if (!is_filter) {
-                        enum GodotShaderTransparency actual = classify_blend_factors(bs, bd);
-                        if (actual != SHADER_OPAQUE) {
-                            out->transparency = actual;
-                        }
-                    }
-                }
             } else {
                 /* Transparent sort order — classify blend type */
                 if (best >= 0) {

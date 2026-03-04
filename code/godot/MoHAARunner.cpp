@@ -927,13 +927,16 @@ void MoHAARunner::setup_3d_scene() {
     // ── Dynamic entity shadow light (r_shadows cvar) ──
     // Directional light casting GPU shadows for all RF_SHADOW entities onto PER_PIXEL BSP surfaces.
     // Hidden until r_shadows 1. Direction set per-map from worldspawn sundirection/suncolor.
-    // Energy = 0.5: shadow areas = ambient (baseline), lit areas ~10-40% brighter depending on angle.
+    // Energy = 0.01: just enough to ensure Godot generates the shadow map.
+    // BSP surfaces use a custom light() shader that reads ATTENUATION directly
+    // (ignoring LIGHT_COLOR), and entities stay UNSHADED, so this value does
+    // not affect the visible output — only shadow map generation matters.
     entity_shadow_light = memnew(DirectionalLight3D);
     entity_shadow_light->set_name("EntityShadowLight");
     // Direction is set per-map by apply_sun_light_direction() after BSP entity string is parsed.
     // Fallback: nearly-overhead sun to minimise wall bleed until map loads.
     entity_shadow_light->set_rotation_degrees(Vector3(-75.0f, 45.0f, 0.0f));
-    entity_shadow_light->set_param(Light3D::PARAM_ENERGY, 0.5f);
+    entity_shadow_light->set_param(Light3D::PARAM_ENERGY, 0.01f);
     entity_shadow_light->set_color(Color(1.0f, 1.0f, 1.0f));
     entity_shadow_light->set_shadow(true);
     entity_shadow_light->set_param(Light3D::PARAM_SHADOW_BIAS, 0.02f);
@@ -3749,35 +3752,21 @@ void MoHAARunner::update_entities() {
                 Godot_Renderer_GetEntityLightingOrigin(i, light_pos);
             }
             float lr, lg, lb;
+            // Godot_EntityLight_Combined now calls Godot_EntityGridLighting()
+            // which is an exact replica of RB_GetEntityGridLighting():
+            // R_GetLightingGridValue + dlights + overbright + normalise + clamp.
+            // Returns [0,1] — no further processing needed.
             Godot_EntityLight_Combined(light_pos, 4, &lr, &lg, &lb);
-            // Apply overbrightMult (1 << overbrightShift) = 2.0 on modern systems
-            // See RB_GetEntityGridLighting in tr_light.c
-            lr = lr * 2.0f; lg = lg * 2.0f; lb = lb * 2.0f;
-            // Hue-preserving clamp to 1.0 (mirrors identityLightByte clamp)
-            float maxc = lr; if (lg > maxc) maxc = lg; if (lb > maxc) maxc = lb;
-            if (maxc > 1.0f) { lr /= maxc; lg /= maxc; lb /= maxc; }
             light_mul = Color(lr, lg, lb, 1.0f);
         }
 #else
         {
-            float ambient[3] = {1.0f, 1.0f, 1.0f};
-            float directed[3] = {0.0f, 0.0f, 0.0f};
-            float ldir[3] = {0.0f, 0.0f, 1.0f};
             float point[3] = { origin[0], origin[1], origin[2] };
-            int lit = Godot_BSP_LightForPoint(point, ambient, directed, ldir);
-            if (lit) {
-                // Combine ambient + directed (same as R_GetLightingGridValue)
-                float lr = clamp01(ambient[0] + directed[0] * 0.5f);
-                float lg = clamp01(ambient[1] + directed[1] * 0.5f);
-                float lb = clamp01(ambient[2] + directed[2] * 0.5f);
-                // Apply overbrightMult = 2.0 (overbrightShift=1 on modern systems)
-                // See RB_GetEntityGridLighting in tr_light.c
-                lr *= 2.0f; lg *= 2.0f; lb *= 2.0f;
-                // Hue-preserving clamp to 1.0
-                float maxc = lr; if (lg > maxc) maxc = lg; if (lb > maxc) maxc = lb;
-                if (maxc > 1.0f) { lr /= maxc; lg /= maxc; lb /= maxc; }
-                light_mul = Color(lr, lg, lb, 1.0f);
-            }
+            float lr = 1.0f, lg = 1.0f, lb = 1.0f;
+            extern "C" void Godot_EntityGridLighting(const float origin[3],
+                float *out_r, float *out_g, float *out_b);
+            Godot_EntityGridLighting(point, &lr, &lg, &lb);
+            light_mul = Color(lr, lg, lb, 1.0f);
         }
 #endif
         bool has_light_tint = fabsf(light_mul.r - 1.0f) > 0.02f ||
@@ -4710,51 +4699,35 @@ void MoHAARunner::apply_player_shadow_mode(int mode) {
     }
 
     // ── Adjust environment ambient energy ──
-    // Shadow contrast requires ambient < 1.0.  With ambient = 1.0, entities are
-    // fully lit by ambient alone; the DirectionalLight's shadow map then blocks
-    // a contribution of 0 (= invisible shadow).
-    //
-    // Both modes use 0.5:
-    //   mode 0 (classic blobs): ambient 0.5 — neutral fill for HUD models etc.
-    //   mode 1 (GPU shadows):   ambient 0.5 — entity in shadow appears at 50 %
-    //     brightness; DirectionalLight (energy 0.5) brings sun-facing geometry
-    //     back up to ≈ 1.0.  That gives ~50 % shadow contrast — clearly visible.
-    if (world_env) {
-        Ref<Environment> env = world_env->get_environment();
-        if (env.is_valid()) {
-            env->set_ambient_light_energy(0.5f);
-        }
-    }
+    // Ambient stays at the baseline 0.5 in ALL modes.  The 0.5 value exists
+    // because BSP lightmap textures are baked at 2× overbright — not because
+    // of shadow contrast.  In mode 1 the DirectionalLight only generates a
+    // shadow map; it does not contribute visible illumination (energy 0.01).
+    // Entity materials remain UNSHADED (100 % parity with OpenMoHAA) so
+    // ambient doesn't affect them.  BSP uses a custom ShaderMaterial whose
+    // fragment() emits lightmapped colour directly and is unaffected by
+    // ambient.  Therefore no ambient change is needed for either mode.
+    // (Left as explicit no-op for clarity.)
 
-    // ── Switch all cached TIKI entity materials ──
-    // mode 1 → PER_PIXEL: entities receive sun + OmniLight (muzzle flash/explosions)
-    // mode 0 → UNSHADED:  fixed albedo appearance (lightgrid-style, no dynamic lights)
-    int entity_mats_switched = 0;
-    for (auto &kv : tiki_mat_cache) {
-        for (auto &mat : kv.second.mats) {
-            if (mat.is_valid()) {
-                mat->set_shading_mode(mode == 1
-                    ? BaseMaterial3D::SHADING_MODE_PER_PIXEL
-                    : BaseMaterial3D::SHADING_MODE_UNSHADED);
-                entity_mats_switched++;
-            }
-        }
-    }
+    // ── Entity materials stay UNSHADED in all modes ──
+    // 100 % visual parity with OpenMoHAA: entities use their albedo colour
+    // directly (lightgrid-style).  They still CAST shadows onto BSP surfaces
+    // via MeshInstance3D::cast_shadow, but their own appearance is unchanged.
+    // No material shading mode switch needed.
 
     // ── Update BSP ShaderMaterial shadow darkness uniform ──
     // Set bsp_shadow_darkness on every registered ShaderMaterial.  At 0.0
     // the shader behaves identically to the old render_mode unshaded (no
-    // visible shadow).  At 0.5 the DirectionalLight's ATTENUATION (shadow
-    // factor) is applied: BSP floors in shadow are 50 % of their lightmap
-    // colour, giving clearly visible GPU shadow shapes on the ground.
+    // visible shadow).  At 0.3 the DirectionalLight's ATTENUATION (shadow
+    // factor) is applied: BSP floors in shadow are 70 % of their lightmap
+    // colour, giving subtle shadow shapes matching MOHAA's original look.
 #ifdef HAS_SHADER_MATERIAL_MODULE
-    Godot_Shader_SetShadowDarkness(mode == 1 ? 0.5f : 0.0f);
+    Godot_Shader_SetShadowDarkness(mode == 1 ? 0.3f : 0.0f);
 #endif
 
     UtilityFunctions::print(
         String("[MoHAA] r_shadows = ") + String::num_int64(mode) +
-        (mode == 1 ? " (GPU shadows ON)" : " (classic shadow blobs)") +
-        " entity_mats=" + String::num_int64(entity_mats_switched));
+        (mode == 1 ? " (GPU shadows ON)" : " (classic shadow blobs)"));
 }
 
 // ──────────────────────────────────────────────

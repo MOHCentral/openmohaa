@@ -192,7 +192,7 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	// doesn't cause a recursive drop client
 	if ( client->reliableSequence - client->reliableAcknowledge == MAX_RELIABLE_COMMANDS + 1 ) {
 		if ( client->gamestateMessageNum == -1 )  {
-			// invalid game state message 
+			// invalid game state message
 			// this can occur in SV_DropClient() to avoid calling it more than once
 			return;
 		}
@@ -214,7 +214,7 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 =================
 SV_SendServerCommand
 
-Sends a reliable command string to be interpreted by 
+Sends a reliable command string to be interpreted by
 the client game module: "cp", "print", "chat", etc
 A NULL client will broadcast to all clients
 =================
@@ -228,7 +228,7 @@ void QDECL SV_SendServerCommand(client_t *cl, const char *fmt, ...) {
 	if (!svs.clients) {
 		return;
 	}
-	
+
 	va_start (argptr,fmt);
 	Q_vsnprintf ((char *)message, sizeof(message), fmt,argptr);
 	va_end (argptr);
@@ -399,7 +399,7 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 			} else {
 				bucketHashes[ bucket->hash ] = bucket->next;
 			}
-			
+
 			if ( bucket->next != NULL ) {
 				bucket->next->prev = bucket->prev;
 			}
@@ -542,7 +542,7 @@ void SVC_Status( netadr_t from ) {
 		cl = &svs.clients[i];
 		if ( cl->state >= CS_CONNECTED ) {
 			ps = SV_GameClientNum( i );
-			Com_sprintf (player, sizeof(player), "%i \"%s\"\n", 
+			Com_sprintf (player, sizeof(player), "%i \"%s\"\n",
 			// su44: ps->persistant is not avaible in MoHAA
 			//	ps->persistant[PERS_SCORE], cl->ping, cl->name);
 				cl->ping, cl->name);
@@ -617,7 +617,7 @@ void SVC_Info( netadr_t from ) {
 	Info_SetValueForKey( infostring, "hostname", sv_hostname->string );
 	Info_SetValueForKey( infostring, "mapname", sv_mapname->string );
 	Info_SetValueForKey( infostring, "clients", va("%i", count) );
-	Info_SetValueForKey( infostring, "sv_maxclients", 
+	Info_SetValueForKey( infostring, "sv_maxclients",
 		va("%i", svs.iNumClients - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring, "gametype", va("%i", g_gametype->integer ) );
 	Info_SetValueForKey( infostring, "gametypestring", g_gametypestring->string );
@@ -715,7 +715,7 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		Com_Printf ("Bad rconpassword.\n");
 	} else {
 		remaining[0] = 0;
-		
+
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=543
 		// get the command directly, "rcon <pass> <command>" to avoid quoting issues
 		// extract the command by walking
@@ -728,9 +728,9 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 			cmd_aux++;
 		while(cmd_aux[0]==' ')
 			cmd_aux++;
-		
+
 		Q_strcat( remaining, sizeof(remaining), cmd_aux);
-		
+
 		Cmd_ExecuteString (remaining);
 
 	}
@@ -851,7 +851,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 		}
 		return;
 	}
-	
+
 	// if we received a sequenced packet from an address we don't recognize,
 	// send an out of band disconnect packet to it
 	SV_NET_OutOfBandPrint( &svs.netprofile, from, "disconnect" );
@@ -916,7 +916,7 @@ static void SV_CalcPings( void ) {
 ==================
 SV_CheckTimeouts
 
-If a packet has not been received from a client for timeout->integer 
+If a packet has not been received from a client for timeout->integer
 seconds, drop the conneciton.  Server time is used instead of
 realtime to avoid dropping the local client while debugging.
 
@@ -951,7 +951,7 @@ static void SV_CheckTimeouts( void ) {
 			// wait several frames so a debugger session doesn't
 			// cause a timeout
 			if ( ++cl->timeoutCount > 5 ) {
-				SV_DropClient (cl, "timed out"); 
+				SV_DropClient (cl, "timed out");
 				cl->state = CS_FREE;	// don't bother with zombie state
 			}
 		} else {
@@ -1025,9 +1025,9 @@ int SV_FrameMsec(void)
 	if(sv_fps)
 	{
 		int frameMsec;
-		
+
 		frameMsec = 1000.0f / sv_fps->value;
-		
+
 		if(frameMsec < sv.timeResidual)
 			return 0;
 		else
@@ -1078,7 +1078,7 @@ void SV_Frame( int msec ) {
 	if ( sv_fps->integer < 1 ) {
 		Cvar_Set( "sv_fps", "20" );
 	}
-    
+
 	frameMsec = 1000 / sv_fps->integer;
 	// don't let it scale below 1ms
 	if(frameMsec < 1)
@@ -1309,7 +1309,7 @@ int SV_RateMsec(client_t *client)
 {
 	int rate, rateMsec;
 	int messageSize;
-	
+
 	messageSize = client->netchan.lastSentSize;
 	rate = client->rate;
 
@@ -1333,10 +1333,10 @@ int SV_RateMsec(client_t *client)
 		messageSize += UDPIP6_HEADER_SIZE;
 	else
 		messageSize += UDPIP_HEADER_SIZE;
-		
+
 	rateMsec = messageSize * 1000 / ((int) (rate * com_timescale->value));
 	rate = Sys_Milliseconds() - client->netchan.lastSentTime;
-	
+
 	if(rate > rateMsec)
 		return 0;
 	else
