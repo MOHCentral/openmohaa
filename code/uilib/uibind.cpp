@@ -174,7 +174,16 @@ void UIBindButton::DrawUnpressed(void)
 
     str s = uWinMan.GetKeyStringForCommand(m_bindcommand, m_bindindex, m_alternate, NULL, NULL);
 
+#ifdef GODOT_GDEXTENSION
+    /* Original MOHAA uses m_background_color for bind button font text,
+     * matching UIFakkBindListLabel::Draw(). The convention for this widget
+     * family is: foreground_color modulates the material (button tint),
+     * background_color is the text colour. Without this, font text renders
+     * white (inactivefgcolor 1 1 1 1) instead of dark. */
+    m_font->setColor(m_background_color);
+#else
     m_font->setColor(m_foreground_color);
+#endif
 
     if (str::cmp(s, m_last_keyname)) {
         m_mat = uWinMan.RegisterShader("textures/bind/" + s);

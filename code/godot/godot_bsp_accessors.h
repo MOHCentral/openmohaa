@@ -61,6 +61,18 @@ int Godot_BSP_MarkFragmentsForInlineModel(
 int Godot_BSP_GetStaticModelData(int index, char *model, int modelBufSize,
     float origin[3], float angles[3], float *scale);
 
+/* Get the firstVertexData (byte offset into staticModelData RGBA array)
+ * for a static model instance.  Returns -1 on failure. */
+int Godot_BSP_GetStaticModelFirstVertexData(int index);
+
+/* Get the per-vertex RGBA lighting colours for a static model.
+ * Copies up to maxVerts × 4 bytes into outRGBA.
+ * vertexOffset is the surface vertex offset within this model
+ * (accumulated numVerts across preceding surfaces).
+ * Returns the number of vertices actually copied (≤ maxVerts). */
+int Godot_BSP_GetStaticModelVertexColors(int index, int vertexOffset,
+    int maxVerts, unsigned char *outRGBA);
+
 /* ── Terrain patch accessors ── */
 int Godot_BSP_GetTerrainPatchCount(void);
 int Godot_BSP_GetTerrainPatchData(int index,
@@ -113,6 +125,18 @@ int Godot_BSP_GetSurfaceCluster(int surfaceIndex);
 
 /* Build a complete surface→cluster mapping in one pass (batch API). */
 void Godot_BSP_BuildSurfaceClusterMap(int *surfaceClusterOut, int numSurfaces);
+
+/* Build terrain patch → cluster mapping from leaf ownership data.
+ * Uses LUMP_TERRAININDEXES indirection (visTerraPatches) to map each
+ * terrain patch to the first BSP cluster that references it.  Patches
+ * not referenced by any leaf get cluster -1 (always visible). */
+void Godot_BSP_BuildTerrainClusterMap(int *patchClusterOut, int numPatches);
+
+/* Build static model → cluster mapping from leaf ownership data.
+ * Uses LUMP_STATICMODELINDEXES indirection (visStaticModels) to map
+ * each static model to the first BSP cluster that references it.
+ * Models not referenced by any leaf get cluster -1 (always visible). */
+void Godot_BSP_BuildStaticModelClusterMap(int *modelClusterOut, int numModels);
 
 /* ── Lightmap page data ── */
 int Godot_BSP_GetLightmapPageCount(void);

@@ -79,6 +79,7 @@ typedef enum MohaaStageRgbGen {
     STAGE_RGBGEN_ONE_MINUS_ENTITY,
     STAGE_RGBGEN_LIGHTING_DIFFUSE,
     STAGE_RGBGEN_CONST,
+    STAGE_RGBGEN_GLOBAL_COLOR,  /* CGEN_GLOBAL_COLOR: modulate texture by SetColor() */
 } MohaaStageRgbGen;
 
 /* Per-stage alphaGen type */
@@ -90,6 +91,7 @@ typedef enum MohaaStageAlphaGen {
     STAGE_ALPHAGEN_ONE_MINUS_ENTITY,
     STAGE_ALPHAGEN_PORTAL,
     STAGE_ALPHAGEN_CONST,
+    STAGE_ALPHAGEN_GLOBAL_ALPHA,  /* AGEN_GLOBAL_ALPHA: use alpha from SetColor() */
 } MohaaStageAlphaGen;
 
 /* Per-stage tcGen type */
@@ -312,10 +314,14 @@ const char *Godot_ShaderProps_GetSkyEnv();
  * Returns sky cloud data for the first sky shader found.
  * out_cloud_height is set to the cloud height value.
  * out_cloud_map receives the first non-lightmap stage texture path.
+ * out_scroll_s/out_scroll_t receive tcMod scroll speeds (may be NULL).
+ * out_is_additive receives 1 if blendFunc is additive, 0 otherwise (may be NULL).
  * Returns 1 if cloud data is available, 0 otherwise.
  */
 int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
-                                      char *out_cloud_map, int map_size);
+                                      char *out_cloud_map, int map_size,
+                                      float *out_scroll_s, float *out_scroll_t,
+                                      int *out_is_additive);
 
 /*
  * C-linkage helper: look up a shader's first non-lightmap stage `map`

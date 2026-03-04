@@ -161,6 +161,7 @@ static enum MohaaStageRgbGen convert_stage_rgbgen(colorGen_t cg) {
         case CGEN_LIGHTING_GRID:
         case CGEN_LIGHTING_SPHERICAL: return STAGE_RGBGEN_LIGHTING_DIFFUSE;
         case CGEN_CONSTANT:           return STAGE_RGBGEN_CONST;
+        case CGEN_GLOBAL_COLOR:       return STAGE_RGBGEN_GLOBAL_COLOR;
         default:                      return STAGE_RGBGEN_IDENTITY;
     }
 }
@@ -197,6 +198,7 @@ static enum MohaaStageAlphaGen convert_stage_alphagen(alphaGen_t ag) {
         case AGEN_ONE_MINUS_ENTITY: return STAGE_ALPHAGEN_ENTITY;
         case AGEN_PORTAL:        return STAGE_ALPHAGEN_PORTAL;
         case AGEN_CONSTANT:      return STAGE_ALPHAGEN_CONST;
+        case AGEN_GLOBAL_ALPHA:  return STAGE_ALPHAGEN_GLOBAL_ALPHA;
         default:                 return STAGE_ALPHAGEN_IDENTITY;
     }
 }
@@ -681,46 +683,72 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
         }
 
         if (!hasAlphaTest && out->stage_count > 0) {
-            /* Engine sort <= SS_OPAQUE → opaque surface */
-            if (sh->sort <= SS_OPAQUE) {
-                out->transparency = SHADER_OPAQUE;
-            } else {
-                /* Transparent sort order — classify blend type */
-                /* Detect lightmap presence */
-                qboolean has_lightmap = qfalse;
-                for (int s = 0; s < out->stage_count; s++) {
-                    if (!out->stages[s].active) continue;
-                    if (out->stages[s].isLightmap || out->stages[s].hasNextBundleLightmap) {
-                        has_lightmap = qtrue;
-                        break;
-                    }
-                }
-
-                /* Find first non-lightmap, non-env stage with blendFunc */
-                int best = -1;
-                int fallback_nl = -1;
-                for (int s = 0; s < out->stage_count; s++) {
-                    if (!out->stages[s].active) continue;
-                    if (out->stages[s].isLightmap) continue;
-                    if (!out->stages[s].hasBlendFunc) {
-                        if (out->stages[s].tcGen != STAGE_TCGEN_ENVIRONMENT)
-                            break; /* opaque */
-                        continue;
-                    }
-                    if (fallback_nl < 0) fallback_nl = s;
-                    if (out->stages[s].tcGen == STAGE_TCGEN_ENVIRONMENT) continue;
-                    best = s;
+            /* Detect lightmap presence */
+            qboolean has_lightmap = qfalse;
+            for (int s = 0; s < out->stage_count; s++) {
+                if (!out->stages[s].active) continue;
+                if (out->stages[s].isLightmap || out->stages[s].hasNextBundleLightmap) {
+                    has_lightmap = qtrue;
                     break;
                 }
-                if (best < 0) best = fallback_nl;
+            }
 
+            /* Find first non-lightmap, non-env stage with blendFunc */
+            int best = -1;
+            int fallback_nl = -1;
+            for (int s = 0; s < out->stage_count; s++) {
+                if (!out->stages[s].active) continue;
+                if (out->stages[s].isLightmap) continue;
+                if (!out->stages[s].hasBlendFunc) {
+                    if (out->stages[s].tcGen != STAGE_TCGEN_ENVIRONMENT)
+                        break; /* opaque */
+                    continue;
+                }
+                if (fallback_nl < 0) fallback_nl = s;
+                if (out->stages[s].tcGen == STAGE_TCGEN_ENVIRONMENT) continue;
+                best = s;
+                break;
+            }
+            if (best < 0) best = fallback_nl;
+
+            if (sh->sort <= SS_OPAQUE) {
+                /* Engine sort <= SS_OPAQUE → normally opaque.
+                 * However, some shaders have an explicit 'sort opaque' or
+                 * inherit SS_OPAQUE from FinishShader's default path despite
+                 * having a blendFunc on their stages.  Check the actual blend
+                 * factors and override when the stage says non-opaque.
+                 * Filter (lightmap modulation) with lightmap stays opaque.
+                 * This prevents black borders on effect textures that have
+                 * additive or alpha blending but sort <= opaque. */
+                out->transparency = SHADER_OPAQUE;
                 if (best >= 0) {
                     enum MohaaBlendFactor bs = out->stages[best].blendSrc;
                     enum MohaaBlendFactor bd = out->stages[best].blendDst;
                     qboolean is_filter = (bs == BLEND_DST_COLOR && bd == BLEND_ZERO) ||
                                          (bs == BLEND_ZERO && bd == BLEND_SRC_COLOR);
-                    if (has_lightmap && is_filter) {
-                        /* Multi-pass lightmap modulation → stays opaque */
+                    if (!is_filter) {
+                        enum GodotShaderTransparency actual = classify_blend_factors(bs, bd);
+                        if (actual != SHADER_OPAQUE) {
+                            out->transparency = actual;
+                        }
+                    }
+                }
+            } else {
+                /* Transparent sort order — classify blend type */
+                if (best >= 0) {
+                    enum MohaaBlendFactor bs = out->stages[best].blendSrc;
+                    enum MohaaBlendFactor bd = out->stages[best].blendDst;
+                    qboolean is_filter = (bs == BLEND_DST_COLOR && bd == BLEND_ZERO) ||
+                                         (bs == BLEND_ZERO && bd == BLEND_SRC_COLOR);
+                    if (is_filter) {
+                        /* blendFunc filter (GL_DST_COLOR * GL_ZERO) is a
+                         * darken/modulate operation that never produces
+                         * actual transparency.  In id Tech 3 it is used
+                         * exclusively for lightmap modulation on opaque
+                         * surfaces.  Always treat it as opaque regardless
+                         * of whether the shader definition has an explicit
+                         * $lightmap stage — terrain shaders often omit it
+                         * because the engine applies lightmap implicitly. */
                     } else {
                         out->transparency = classify_blend_factors(bs, bd);
                     }
@@ -1046,35 +1074,66 @@ int Godot_Sprite_GetEngineSize(const char *shader_name,
 }
 
 int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
-                                      char *out_cloud_map, int map_size) {
+                                      char *out_cloud_map, int map_size,
+                                      float *out_scroll_s, float *out_scroll_t,
+                                      int *out_is_additive) {
     int i;
-    shader_cache_entry_t *e;
-    
+
     if (!out_cloud_height || !out_cloud_map || map_size <= 0) return 0;
 
-    for (i = 0; i < SHADER_CACHE_SIZE; i++) {
-        for (e = s_shaderCache[i]; e; e = e->next) {
-            GodotShaderProps *props = &e->props;
-            int s;
-            
-            if (!props->is_sky || !props->sky_env[0]) continue;
-            if (props->sky_cloud_height <= 0.0f) continue;
+    /* Initialise optional outputs */
+    if (out_scroll_s) *out_scroll_s = 0.0f;
+    if (out_scroll_t) *out_scroll_t = 0.0f;
+    if (out_is_additive) *out_is_additive = 0;
 
-            *out_cloud_height = props->sky_cloud_height;
+    /* Scan tr.shaders[] directly — the sky shader may not be in the
+     * cache yet when load_skybox() calls this early in map load. */
+    for (i = 0; i < tr.numShaders; i++) {
+        shader_t *sh = tr.shaders[i];
+        int s;
 
-            for (s = 0; s < props->stage_count; s++) {
-                struct MohaaShaderStage *stg = &props->stages[s];
-                if (!stg->active) continue;
-                if (stg->isLightmap) continue;
-                if (!stg->map[0]) continue;
-                if (!Q_stricmp(stg->map, "$lightmap")) continue;
-                Q_strncpyz(out_cloud_map, stg->map, map_size);
-                return 1;
+        if (!sh || !sh->isSky) continue;
+
+        if (sh->sky.cloudHeight <= 0.0f) continue;
+
+        *out_cloud_height = sh->sky.cloudHeight;
+
+        /* Find first non-lightmap stage for the cloud texture */
+        for (s = 0; s < MAX_SHADER_STAGES; s++) {
+            shaderStage_t *st = sh->unfoggedStages[s];
+            if (!st || !st->active) continue;
+            if (st->bundle[0].isLightmap) continue;
+            if (!st->bundle[0].image[0]) continue;
+            if (!st->bundle[0].image[0]->imgName[0]) continue;
+
+            Q_strncpyz(out_cloud_map, st->bundle[0].image[0]->imgName, map_size);
+
+            /* Extract tcMod scroll speed */
+            if (out_scroll_s && out_scroll_t &&
+                st->bundle[0].texMods && st->bundle[0].numTexMods > 0) {
+                int m;
+                for (m = 0; m < st->bundle[0].numTexMods; m++) {
+                    if (st->bundle[0].texMods[m].type == TMOD_SCROLL) {
+                        *out_scroll_s = st->bundle[0].texMods[m].scroll[0];
+                        *out_scroll_t = st->bundle[0].texMods[m].scroll[1];
+                    }
+                }
             }
 
-            *out_cloud_height = 0.0f;
-            return 0;
+            /* Detect additive blend mode (GL_ONE, GL_ONE) */
+            if (out_is_additive) {
+                unsigned sb = st->stateBits;
+                unsigned src = sb & GLS_SRCBLEND_BITS;
+                unsigned dst = sb & GLS_DSTBLEND_BITS;
+                *out_is_additive = (src == GLS_SRCBLEND_ONE && dst == GLS_DSTBLEND_ONE) ? 1 : 0;
+            }
+
+            return 1;
         }
+
+        /* No stage texture found but cloudHeight exists */
+        *out_cloud_height = 0.0f;
+        return 0;
     }
     return 0;
 }

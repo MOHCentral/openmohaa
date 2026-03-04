@@ -980,6 +980,14 @@ qboolean SV_CheckPaused( void ) {
 		return qfalse;
 	}
 
+#ifdef GODOT_GDEXTENSION
+	/* Never pause in multiplayer, even when hosting alone. */
+	if( deathmatch->integer || (g_gametype && g_gametype->integer != GT_SINGLE_PLAYER) ) {
+		Com_Unpause();
+		return qfalse;
+	}
+#endif
+
 	// only pause if there is just a single client connected
 	count = 0;
 	for (i=0,cl=svs.clients ; i < svs.iNumClients ; i++,cl++) {
@@ -1227,6 +1235,15 @@ Com_FakePause
 */
 void Com_FakePause()
 {
+#ifdef GODOT_GDEXTENSION
+	/* Never fake-pause in multiplayer — menus open but the game keeps running. */
+	if( deathmatch->integer ) {
+		return;
+	}
+	if( g_gametype && g_gametype->integer != GT_SINGLE_PLAYER ) {
+		return;
+	}
+#endif
 	if( !paused->integer ) {
 		Cvar_Set( "paused", "2" );
 	}

@@ -216,6 +216,19 @@ private:
     DirectionalLight3D *sun_light = nullptr;  // Basic directional light
     WorldEnvironment *world_env = nullptr;    // Ambient/fog environment
 
+    // Sky cloud animation state
+    Ref<ShaderMaterial> sky_cloud_material;   // Sky ShaderMaterial for cloud scroll animation
+    float sky_cloud_scroll_s = 0.0f;         // Cloud tcMod scroll speed S
+    float sky_cloud_scroll_t = 0.0f;         // Cloud tcMod scroll speed T
+    double sky_cloud_time = 0.0;             // Accumulated time for cloud scroll
+
+    // Dynamic shadows (r_shadows cvar)
+    // Mode 0 = classic MOHAA shadow blobs
+    // Mode 1 = modern GPU shadows: DirectionalLight from map sundirection + optional dlight shadows
+    DirectionalLight3D *entity_shadow_light = nullptr;  // Shadow DirectionalLight oriented from map sundirection
+    int cached_entity_shadow_mode = -1;                 // Last applied r_shadows value (detects cvar changes)
+    int cached_dlight_shadows = -1;                     // Last applied r_dlight_shadows value
+
     // BSP world geometry (Phase 7b)
     Node3D *bsp_map_node = nullptr;          // Currently loaded BSP mesh tree
     String loaded_bsp_name;                  // Path of the currently loaded BSP
@@ -228,6 +241,11 @@ private:
 
     // Static BSP models (Phase 10)
     Node3D *static_model_root = nullptr;     // Container for TIKI static models from BSP
+    struct StaticModelPVS {
+        MeshInstance3D *mesh = nullptr;
+        int cluster = -1;  // PVS cluster from leaf ownership (-1 = always visible)
+    };
+    std::vector<StaticModelPVS> static_model_pvs;  // Per-model PVS data
 
     // Weapon SubViewport (Phase 62) — renders FPS weapon in a separate
     // depth buffer so they never clip into world geometry.
@@ -285,7 +303,7 @@ private:
         Ref<StandardMaterial3D> override_mat;
     };
     std::vector<MirrorViewport> active_mirrors;
-    
+
     void update_mirrors(); // Update mirror camera positions
 
 
@@ -370,6 +388,8 @@ private:
     Ref<CanvasItemMaterial> add_canvas_material;
     Ref<Shader> alpha_inv_shader;
     Ref<ShaderMaterial> alpha_inv_material;
+    Ref<Shader> mix_shader;
+    Ref<ShaderMaterial> mix_material;
 
     // Full-screen gamma overlay — replicates GLimp_SetGamma hardware gamma ramp.
     // Applied at CanvasLayer 200 (above HUD at 100) so it affects both 3D and 2D.
@@ -448,6 +468,8 @@ private:
     void update_swipe_effects(); // Render swipe trails (Phase 24)
     void update_terrain_marks(); // Render terrain mark decals (Phase 25)
     void update_shadow_blobs();  // Project shadow blobs under RF_SHADOW entities
+    void apply_player_shadow_mode(int mode);            // Apply r_shadows mode (0=blobs, 1=dynamic)
+    void apply_sun_light_direction();                    // Orient entity_shadow_light from map sundirection/suncolor
     void update_shader_animations(double delta); // Animate tcMod scrolling (Phase 36)
     void update_2d_overlay(); // Read 2D draw commands and queue redraw
     void update_hud_models(); // Render HUD model previews (Phase 148)
@@ -497,6 +519,9 @@ public:
     bool is_engine_initialized() const;
     String get_basepath() const;
     void set_basepath(const String &p_path);
+
+    // Godot-side cache clearing after Com_GameRestart (switchgame command)
+    void clear_godot_caches_for_game_switch(int target_game);
 
     // Input control (Phase 6)
     void set_mouse_captured(bool p_captured);

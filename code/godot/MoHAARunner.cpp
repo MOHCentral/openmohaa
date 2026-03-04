@@ -387,6 +387,10 @@ extern "C" {
 
     // BSP entity string accessor — from godot_bsp_mesh.cpp
     const char *Godot_BSP_GetEntityString(void);
+
+    // Game switch completed flag — from common.c (GODOT_GDEXTENSION)
+    int  Godot_GetGameSwitchCompleted(void);
+    void Godot_ClearGameSwitchCompleted(void);
 }
 
 // ──────────────────────────────────────────────
@@ -761,6 +765,118 @@ godot::String MoHAARunner::get_startup_args() const {
 }
 
 // ──────────────────────────────────────────────
+//  Godot-side cache clearing after game switch (AA/SH/BT)
+//  Called after Com_GameRestart() has already restarted the engine
+//  (SV_Shutdown, CL_Shutdown, FS_Restart, Cvar_Restart, CL_Init).
+//  We just need to invalidate Godot caches so assets reload from
+//  the new pk3s.
+// ──────────────────────────────────────────────
+void MoHAARunner::clear_godot_caches_for_game_switch(int target_game) {
+    UtilityFunctions::print(String("[MoHAA] === GAME SWITCH: clearing Godot caches for game ") +
+        String::num_int64(target_game) + String(" ==="));
+
+    // BSP world — force full reload
+    if (bsp_map_node) {
+        bsp_map_node->queue_free();
+        bsp_map_node = nullptr;
+        static_model_root = nullptr;
+    }
+    loaded_bsp_name = "";
+
+    // Model/mesh/material caches — all stale after FS_Restart
+    GodotSkelModelCache::get().clear();
+    skel_mesh_cache.clear();
+    tinted_mat_cache.clear();
+    tiki_mat_cache.clear();
+    shader_textures.clear();
+    s_shader_texture_loaded_names.clear();
+    animmap_info.clear();
+    animmap_frames.clear();
+    s_surf_anim_cache.clear();
+    s_sprite_mat_cache.clear();
+    s_beam_mat_cache.clear();
+    s_poly_mat_cache.clear();
+    s_terrain_mark_mat_cache.clear();
+    s_sprite_tint_cache.clear();
+    s_beam_tint_cache.clear();
+    s_alpha_inv_tex_cache.clear();
+
+#ifdef HAS_MESH_CACHE_MODULE
+    Godot_MeshCache::get().clear();
+    Godot_MaterialCache::get().clear();
+#endif
+#ifdef HAS_SHADER_MATERIAL_MODULE
+    Godot_Shader_ClearCache();
+    Godot_Shader_ClearMaterialRegistry();
+#endif
+
+    // Entity pool — free all MeshInstance3D nodes
+    for (auto *inst : entity_meshes) {
+        if (inst && inst->is_inside_tree()) {
+            inst->queue_free();
+        }
+    }
+    entity_meshes.clear();
+
+    // Dynamic lights
+    for (auto *light : dlight_nodes) {
+        if (light && light->is_inside_tree()) {
+            light->queue_free();
+        }
+    }
+    dlight_nodes.clear();
+
+    // Skybox state
+    sky_cloud_material.unref();
+    sky_cloud_scroll_s = 0.0f;
+    sky_cloud_scroll_t = 0.0f;
+    sky_cloud_time = 0.0;
+
+    // Sun flare
+    sun_flare_initialized = false;
+    if (sun_flare_canvas) {
+        sun_flare_canvas->queue_free();
+        sun_flare_canvas = nullptr;
+        sun_flare_control = nullptr;
+    }
+    sun_flare_sprites.clear();
+
+    // Audio — stop all players (new game may have different sounds)
+    for (auto *p : sfx_players_3d) {
+        if (p && p->is_playing()) p->stop();
+    }
+    for (auto *p : sfx_players_2d) {
+        if (p && p->is_playing()) p->stop();
+    }
+    if (music_player && music_player->is_playing()) {
+        music_player->stop();
+    }
+
+    // PVS state
+    pvs_current_cluster = -1;
+    pvs_log_count = 0;
+
+    // Cinematic
+    if (cin_texture.is_valid()) cin_texture.unref();
+    cin_was_active = false;
+
+    // Scoreboard
+    scoreboard_visible = false;
+
+    // Reset state tracking so check_world_load() detects the new map
+    last_server_state = 0;
+    last_map_name = "";
+    game_flow_state = GameFlowState::BOOT;
+
+    // Rebuild shader props cache from the newly parsed tr.shaders[]
+    // (R_Init was re-called during GR_BeginRegistration)
+    Godot_ShaderProps_Load();
+
+    UtilityFunctions::print(String("[MoHAA] === Godot caches cleared for game ") +
+        String::num_int64(target_game) + String(" ==="));
+}
+
+// ──────────────────────────────────────────────
 //  3D scene setup (Phase 7a)
 // ──────────────────────────────────────────────
 
@@ -1038,6 +1154,10 @@ void MoHAARunner::check_world_load() {
             Godot_SoundOcclusion_SetEnabled(0);   // Disable occlusion when BSP unloaded
             pvs_current_cluster = -1;             // Reset PVS state
             pvs_log_count = 0;
+            sky_cloud_material.unref();           // Reset sky cloud animation state
+            sky_cloud_scroll_s = 0.0f;
+            sky_cloud_scroll_t = 0.0f;
+            sky_cloud_time = 0.0;
             Godot_VFX_Clear();  // Flush VFX caches — shader handles are invalidated by BeginRegistration
             UtilityFunctions::print("[MoHAA] BSP world unloaded.");
         }
@@ -1248,9 +1368,12 @@ void MoHAARunner::update_pvs_visibility() {
     Vector3 cam_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
 
     // Distance threshold: always show clusters within this radius of the camera
-    // regardless of PVS, to compensate for incomplete BSP vis data and cluster
-    // boundary edge cases.  1024 id units ~ 26 metres ~ a couple of rooms.
-    static constexpr float PVS_FORCE_VISIBLE_DISTANCE = 1024.0f * MOHAA_UNIT_SCALE;
+    // regardless of PVS, to compensate for cluster boundary edge cases where
+    // the camera is right on a portal plane and PVS misses immediate neighbours.
+    // Keep this small (64 id units ~ 1.6 m) so outdoor clusters are NOT
+    // force-shown through building walls.  The original engine relies on
+    // correct PVS and does not need this override at all.
+    static constexpr float PVS_FORCE_VISIBLE_DISTANCE = 64.0f * MOHAA_UNIT_SCALE;
     static constexpr float PVS_FORCE_VISIBLE_DIST_SQ = PVS_FORCE_VISIBLE_DISTANCE * PVS_FORCE_VISIBLE_DISTANCE;
 
     // If camera is outside the world (cluster -1), show everything
@@ -1547,8 +1670,70 @@ void MoHAARunner::load_static_models() {
         // Create MeshInstance3D
         MeshInstance3D *mi = memnew(MeshInstance3D);
         mi->set_name(String("SM_") + String::num_int64(i));
-        mi->set_mesh(cached->lod_meshes[0]);
         mi->set_extra_cull_margin(4.0f);
+
+        // ── Build per-instance mesh with baked vertex colours ──
+        // The BSP stores per-vertex RGBA lighting data for each static
+        // model instance (LUMP_STATICMODELDATA, overbright-processed by
+        // R_InitStaticModels).  We duplicate the cached mesh's surface
+        // arrays and inject the per-vertex colours so that each instance
+        // gets its own baked lighting, matching OpenMoHAA exactly.
+        int firstVtxData = Godot_BSP_GetStaticModelFirstVertexData(i);
+        Ref<ArrayMesh> cachedMesh = cached->lod_meshes[0];
+        int surfCount = cachedMesh->get_surface_count();
+        bool has_vtx_colors = (firstVtxData >= 0);
+
+        Ref<ArrayMesh> instanceMesh;
+        if (has_vtx_colors) {
+            instanceMesh.instantiate();
+            int vtxOffset = 0;  // accumulated vertex offset within this model
+
+            for (int s = 0; s < surfCount; s++) {
+                Array arrays = cachedMesh->surface_get_arrays(s);
+                if (arrays.size() < Mesh::ARRAY_MAX) {
+                    vtxOffset += ((PackedVector3Array)arrays[Mesh::ARRAY_VERTEX]).size();
+                    continue;
+                }
+
+                PackedVector3Array verts = arrays[Mesh::ARRAY_VERTEX];
+                int numVerts = verts.size();
+
+                // Read per-vertex RGBA from the engine's staticModelData
+                PackedColorArray colors;
+                colors.resize(numVerts);
+
+                if (numVerts > 0) {
+                    unsigned char *rgba = (unsigned char *)malloc(numVerts * 4);
+                    if (rgba) {
+                        int got = Godot_BSP_GetStaticModelVertexColors(
+                            i, vtxOffset, numVerts, rgba);
+                        for (int v = 0; v < numVerts; v++) {
+                            if (v < got) {
+                                colors.set(v, Color(
+                                    rgba[v * 4 + 0] / 255.0f,
+                                    rgba[v * 4 + 1] / 255.0f,
+                                    rgba[v * 4 + 2] / 255.0f,
+                                    rgba[v * 4 + 3] / 255.0f));
+                            } else {
+                                colors.set(v, Color(1, 1, 1, 1));
+                            }
+                        }
+                        std::free(rgba);
+                    } else {
+                        for (int v = 0; v < numVerts; v++)
+                            colors.set(v, Color(1, 1, 1, 1));
+                    }
+                }
+
+                arrays[Mesh::ARRAY_COLOR] = colors;
+                instanceMesh->add_surface_from_arrays(
+                    Mesh::PRIMITIVE_TRIANGLES, arrays);
+                vtxOffset += numVerts;
+            }
+            mi->set_mesh(instanceMesh);
+        } else {
+            mi->set_mesh(cachedMesh);
+        }
 
         // Apply shader textures to each surface.
         // Mirrors R_InitStaticModels: register each surface shader via
@@ -1562,13 +1747,15 @@ void MoHAARunner::load_static_models() {
             // only if the shader says "cull none".
             mat->set_cull_mode(BaseMaterial3D::CULL_BACK);
 
-            /* Static models: PER_PIXEL so they cast and receive dynamic
-             * shadows from the directional light.  The sun's low energy
-             * prevents double-lighting while ambient=1.0 preserves the
-             * original brightness. */
             mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
             mat->set_specular(0.2f);
             mat->set_roughness(0.9f);
+
+            // Enable vertex colour modulation so baked static lighting
+            // from the BSP's LUMP_STATICMODELDATA is applied.
+            if (has_vtx_colors) {
+                mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+            }
 
             const String &shader_name = cached->surfaces[s].shader_name;
             bool found_tex = false;
@@ -1764,11 +1951,24 @@ void MoHAARunner::load_skybox() {
 
     UtilityFunctions::print(String("[MoHAA] Loading skybox: ") + sky_env);
 
-    // id Tech 3 / OpenGL cubemap face suffixes in Godot cubemap layer order:
-    //   Layer 0 = +X (right),  Layer 1 = -X (left),
-    //   Layer 2 = +Y (up),     Layer 3 = -Y (down),
-    //   Layer 4 = +Z (back),   Layer 5 = -Z (front)
-    static const char *suffixes[6] = { "_rt", "_lf", "_up", "_dn", "_bk", "_ft" };
+    // id Tech 3 sky uses manual quads (MakeSkyVec in tr_sky.c), NOT GL cubemaps.
+    // The face images must be mapped to Godot cubemap layers accounting for both
+    // the id Tech 3 → Godot coordinate transform AND the difference between
+    // id Tech 3's quad UV layout and OpenGL cubemap conventions.
+    //
+    // Coordinate mapping: id Tech 3 (X=fwd, Y=left, Z=up) → Godot (X=right, Y=up, -Z=fwd)
+    //   Godot +X (right)  = id Tech 3 -Y → face suffix "_ft" via sky_texorder
+    //   Godot -X (left)   = id Tech 3 +Y → "_bk"
+    //   Godot +Y (up)     = id Tech 3 +Z → "_up"
+    //   Godot -Y (down)   = id Tech 3 -Z → "_dn"
+    //   Godot +Z (back)   = id Tech 3 -X → "_lf"
+    //   Godot -Z (front)  = id Tech 3 +X → "_rt"
+    //
+    // Per-face orientation fix (MakeSkyVec UV vs OpenGL cubemap sc/tc):
+    //   Layers 0,1 (+X,-X): horizontal flip
+    //   Layers 2,3 (+Y,-Y): vertical flip
+    //   Layers 4,5 (+Z,-Z): no transform
+    static const char *suffixes[6] = { "_ft", "_bk", "_up", "_dn", "_lf", "_rt" };
     static const char *extensions[] = { ".jpg", ".tga", nullptr };
 
     TypedArray<Image> face_images;
@@ -1818,26 +2018,56 @@ void MoHAARunner::load_skybox() {
             img->convert(Image::FORMAT_RGBA8);
         }
 
+        // Fix orientation: id Tech 3 sky quads (MakeSkyVec st_to_vec) have
+        // different UV layout than OpenGL cubemap face conventions (sc/tc).
+        // Derived by tracing each Q3 axis through st_to_vec → Q3 coords →
+        // Godot coords (Gx=-Qy, Gy=Qz, Gz=-Qx) → OpenGL cubemap (sc,tc):
+        //   Layers 0,1,4,5 (+X,-X,+Z,-Z): horizontal flip
+        //   Layers 2,3 (+Y,-Y): vertical flip
+        if (i == 2 || i == 3) {
+            img->flip_y();
+        } else {
+            img->flip_x();
+        }
+
         face_images[i] = img;
         loaded++;
     }
 
     if (loaded != 6) return;
 
+    // Find the largest face dimension — all faces must match for Cubemap::create_from_images
+    int max_size = 0;
+    for (int i = 0; i < 6; i++) {
+        Ref<Image> face = face_images[i];
+        if (face->get_width() > max_size) max_size = face->get_width();
+        if (face->get_height() > max_size) max_size = face->get_height();
+    }
+    // Resize any mismatched faces to the largest dimension
+    for (int i = 0; i < 6; i++) {
+        Ref<Image> face = face_images[i];
+        if (face->get_width() != max_size || face->get_height() != max_size) {
+            face->resize(max_size, max_size);
+        }
+    }
+
     // Create Cubemap from the 6 face images
     Ref<Cubemap> cubemap;
     cubemap.instantiate();
     Error err = cubemap->create_from_images(face_images);
     if (err != OK) {
-        UtilityFunctions::printerr("[MoHAA] Failed to create sky cubemap.");
+        UtilityFunctions::printerr(String("[MoHAA] Failed to create sky cubemap, error=") + String::num_int64((int)err));
         return;
     }
 
     // ── Check for cloud layer ──
     float cloud_height = 0.0f;
     char cloud_map_path[256] = {0};
+    float cloud_scroll_s = 0.0f, cloud_scroll_t = 0.0f;
+    int cloud_is_additive = 0;
     bool has_clouds = (Godot_ShaderProps_GetSkyCloudData(
-        &cloud_height, cloud_map_path, sizeof(cloud_map_path)) != 0);
+        &cloud_height, cloud_map_path, sizeof(cloud_map_path),
+        &cloud_scroll_s, &cloud_scroll_t, &cloud_is_additive) != 0);
 
     Ref<ImageTexture> cloud_tex;
     if (has_clouds && cloud_map_path[0]) {
@@ -1874,7 +2104,9 @@ void MoHAARunner::load_skybox() {
                 cloud_tex = ImageTexture::create_from_image(cloud_img);
                 UtilityFunctions::print(
                     String("[MoHAA] Sky cloud texture loaded: ") + full_path +
-                    " (cloudHeight=" + String::num(cloud_height, 0) + ")");
+                    " (cloudHeight=" + String::num(cloud_height, 0) +
+                    ", scroll=" + String::num(cloud_scroll_s, 4) + "/" + String::num(cloud_scroll_t, 4) +
+                    ", additive=" + String::num(cloud_is_additive) + ")");
                 break;
             }
         }
@@ -1891,56 +2123,66 @@ void MoHAARunner::load_skybox() {
     sky_shader.instantiate();
 
     if (has_clouds && cloud_tex.is_valid()) {
-        // Sky shader with cubemap + cloud layer overlay.
-        // Cloud UV uses spherical projection matching id Tech 3's
-        // R_InitSkyTexCoords: the cloud is projected onto a dome at
-        // cloudHeight above a sphere of radius 4096 units.
+        // Sky shader with cubemap + cloud dome overlay.
+        // Cloud UV uses spherical projection matching id Tech 3's R_InitSkyTexCoords:
+        // the cloud is projected onto a dome at cloudHeight above a sphere of
+        // radius 4096 units.  UV coords use acos() of the normalised intersection
+        // point's horizontal components, matching the engine's sRad/tRad.
+        //
+        // Coordinate mapping: Engine (X=forward, Y=left, Z=up) → Godot (X=right, Y=up, -Z=forward).
+        // Engine v[0] (forward) = Godot -v.z;  engine v[1] (left) = Godot -v.x.
+        //
+        // Blend mode: additive (blendFunc add) or alpha (blendFunc blend).
+        // tcMod scroll: cloud UVs scroll over time.
         sky_shader->set_code(
             "shader_type sky;\n"
             "uniform samplerCube sky_cubemap : source_color;\n"
             "uniform sampler2D cloud_texture : source_color, filter_linear, repeat_enable;\n"
             "uniform float cloud_height = 512.0;\n"
-            "uniform float time_scale = 0.0;\n"
+            "uniform float cloud_time = 0.0;\n"
+            "uniform float scroll_s = 0.0;\n"
+            "uniform float scroll_t = 0.0;\n"
+            "uniform bool is_additive = true;\n"
             "\n"
             "void sky() {\n"
             "    vec3 sky_color = texture(sky_cubemap, EYEDIR).rgb;\n"
             "\n"
-            "    // Spherical cloud projection (matches id Tech 3 R_InitSkyTexCoords)\n"
+            "    // Spherical cloud projection (R_InitSkyTexCoords)\n"
             "    vec3 dir = normalize(EYEDIR);\n"
-            "    float radius_world = 4096.0;\n"
-            "    \n"
-            "    // Only process clouds above horizon to avoid divide by zero\n"
+            "    float R = 4096.0;\n"
+            "    float H = cloud_height;\n"
+            "\n"
+            "    // Only render clouds above the horizon\n"
             "    if (dir.y > 0.01) {\n"
-            "        // Compute parametric intersection with cloud dome\n"
-            "        float dot_dir = dot(dir, dir);\n"
-            "        float p = (1.0 / (2.0 * dot_dir)) *\n"
-            "            (-2.0 * dir.y * radius_world +\n"
-            "             2.0 * sqrt(dir.y * dir.y * radius_world * radius_world +\n"
-            "                        2.0 * dir.x * dir.x * radius_world * cloud_height +\n"
-            "                        dir.x * dir.x * cloud_height * cloud_height +\n"
-            "                        2.0 * dir.z * dir.z * radius_world * cloud_height +\n"
-            "                        dir.z * dir.z * cloud_height * cloud_height +\n"
-            "                        2.0 * dir.y * dir.y * radius_world * cloud_height +\n"
-            "                        dir.y * dir.y * cloud_height * cloud_height));\n"
-            "        \n"
+            "        // Parametric dome intersection — simplified for |dir|=1\n"
+            "        float p = -dir.y * R + sqrt(dir.y * dir.y * R * R + 2.0 * R * H + H * H);\n"
+            "\n"
             "        vec3 v = dir * p;\n"
-            "        v.y += radius_world;\n"
+            "        v.y += R;\n"
             "        v = normalize(v);\n"
-            "        \n"
-            "        float s_coord = acos(v.x);\n"
-            "        float t_coord = acos(v.z);\n"
-            "        \n"
+            "\n"
+            "        // Engine: sRad = acos(v[0]), tRad = acos(v[1])\n"
+            "        // Engine X (forward) = Godot -Z,  Engine Y (left) = Godot -X\n"
+            "        float s_coord = acos(clamp(-v.z, -1.0, 1.0));\n"
+            "        float t_coord = acos(clamp(-v.x, -1.0, 1.0));\n"
+            "\n"
+            "        // Apply tcMod scroll animation\n"
+            "        s_coord += scroll_s * cloud_time;\n"
+            "        t_coord += scroll_t * cloud_time;\n"
+            "\n"
             "        vec4 cloud_sample = texture(cloud_texture, vec2(s_coord, t_coord));\n"
-            "        \n"
-            "        // Fade out near horizon\n"
-            "        float horizon_mask = smoothstep(0.01, 0.1, dir.y);\n"
-            "        \n"
-            "        // OpenMOHAA shaders typically use an additive/blend mode for the cloud stage.\n"
-            "        // We'll apply the cloud sample rgb over the sky_color using its alpha, boosted slightly.\n"
-            "        float cloud_alpha = clamp(cloud_sample.a, 0.0, 1.0) * horizon_mask;\n"
-            "        COLOR = mix(sky_color, cloud_sample.rgb, cloud_alpha);\n"
-            "        // Optional: additive blend fallback if texture has no alpha\n"
-            "        // COLOR = sky_color + cloud_sample.rgb * cloud_sample.rgb * horizon_mask;\n"
+            "\n"
+            "        // Fade out near horizon to avoid seam\n"
+            "        float horizon_mask = smoothstep(0.01, 0.15, dir.y);\n"
+            "\n"
+            "        if (is_additive) {\n"
+            "            // blendFunc add: GL_ONE GL_ONE — additive blend\n"
+            "            COLOR = sky_color + cloud_sample.rgb * horizon_mask;\n"
+            "        } else {\n"
+            "            // blendFunc blend: GL_SRC_ALPHA GL_ONE_MINUS_SRC_ALPHA\n"
+            "            float cloud_alpha = clamp(cloud_sample.a, 0.0, 1.0) * horizon_mask;\n"
+            "            COLOR = mix(sky_color, cloud_sample.rgb, cloud_alpha);\n"
+            "        }\n"
             "    } else {\n"
             "        COLOR = sky_color;\n"
             "    }\n"
@@ -1966,6 +2208,21 @@ void MoHAARunner::load_skybox() {
     if (has_clouds && cloud_tex.is_valid()) {
         sky_mat->set_shader_parameter("cloud_texture", cloud_tex);
         sky_mat->set_shader_parameter("cloud_height", cloud_height);
+        sky_mat->set_shader_parameter("scroll_s", cloud_scroll_s);
+        sky_mat->set_shader_parameter("scroll_t", cloud_scroll_t);
+        sky_mat->set_shader_parameter("is_additive", (bool)cloud_is_additive);
+        sky_mat->set_shader_parameter("cloud_time", 0.0f);
+
+        // Store for per-frame animation
+        sky_cloud_material = sky_mat;
+        sky_cloud_scroll_s = cloud_scroll_s;
+        sky_cloud_scroll_t = cloud_scroll_t;
+        sky_cloud_time = 0.0;
+    } else {
+        sky_cloud_material.unref();
+        sky_cloud_scroll_s = 0.0f;
+        sky_cloud_scroll_t = 0.0f;
+        sky_cloud_time = 0.0;
     }
 
     // Create Sky resource
@@ -1973,6 +2230,10 @@ void MoHAARunner::load_skybox() {
     sky.instantiate();
     sky->set_material(sky_mat);
     sky->set_radiance_size(Sky::RADIANCE_SIZE_256);
+    // Process mode: always re-render the sky when cloud_time changes
+    if (has_clouds && cloud_tex.is_valid()) {
+        sky->set_process_mode(Sky::PROCESS_MODE_REALTIME);
+    }
 
     // Update environment to use the skybox
     Ref<Environment> env = world_env->get_environment();
@@ -7416,9 +7677,10 @@ void MoHAARunner::_process(double delta) {
 #ifdef __EMSCRIPTEN__
     {
         Godot_Client_SyncGuiMouseToOverlayState();
-        bool pre_overlay = Godot_Client_IsAnyOverlayActive() != 0;
-        // Also include in_guimouse in case it was set by a non-keycatcher path
-        if (!pre_overlay) pre_overlay = (Godot_Client_GetGuiMouse() != 0);
+        bool engine_wants_gui_pre = Godot_Client_GetGuiMouse() != 0;
+        bool menu_up_pre = Godot_Client_IsMenuUp() != 0;
+        // Only treat as overlay (absolute mouse) when a menu is actually visible.
+        bool pre_overlay = engine_wants_gui_pre && menu_up_pre;
         // Fall back to prev-frame value for the very first overlay frame
         if (!pre_overlay) pre_overlay = overlay_prev_frame;
         poll_mouse_input_web(pre_overlay);
@@ -7427,6 +7689,19 @@ void MoHAARunner::_process(double delta) {
 
     Com_Frame();
     godot_jmpbuf_valid = false;
+
+    // ── Check if a game switch just completed (switchgame console command) ──
+    // Com_SwitchGame_f runs Com_GameRestart() inline during Com_Frame().
+    // After it completes, the engine is fully restarted (new FS, renderer,
+    // client).  We just need to clear Godot-side caches so assets reload.
+    {
+        int switched = Godot_GetGameSwitchCompleted();
+        if (switched >= 0) {
+            Godot_ClearGameSwitchCompleted();
+            clear_godot_caches_for_game_switch(switched);
+            return;  // Skip rest of this frame; new state takes effect next frame
+        }
+    }
 
     bool overlay_active_now = false;
 
@@ -7445,7 +7720,12 @@ void MoHAARunner::_process(double delta) {
         overlay_active_now = overlay_active;
         overlay_prev_frame = overlay_active;  // save for next frame's pre-frame poll
         bool engine_wants_gui = Godot_Client_GetGuiMouse() != 0;
-        bool should_capture = !(overlay_active || engine_wants_gui);
+        // Only show the OS cursor when a menu is actually visible on screen.
+        // During multiplayer spawn, KEYCATCH_UI / in_guimouse can be set before
+        // any menu has rendered — guard against that with UI_MenuUp().
+        bool menu_actually_up = Godot_Client_IsMenuUp() != 0;
+        bool should_capture = !(engine_wants_gui && menu_actually_up);
+        overlay_active_now = engine_wants_gui && menu_actually_up;
 
         static int last_catchers = -1;
         int cur_catchers = Godot_Client_GetKeyCatchers();
@@ -7453,6 +7733,7 @@ void MoHAARunner::_process(double delta) {
             UtilityFunctions::print(String("[MoHAA] Mouse State Change: catchers=0x") + String::num_int64(cur_catchers, 16) +
                 String(" overlay=") + String::num_int64(overlay_active) +
                 String(" guimouse=") + String::num_int64(engine_wants_gui) +
+                String(" menu_up=") + String::num_int64(menu_actually_up) +
                 String(" should_capture=") + String::num_int64(should_capture));
             last_catchers = cur_catchers;
         }
@@ -7723,6 +8004,13 @@ void MoHAARunner::_process(double delta) {
     update_terrain_marks();     // Phase 25: terrain mark decals
     update_shadow_blobs();      // Shadow blob projection under RF_SHADOW entities
     update_shader_animations(delta);
+
+    // ── Animate sky clouds (tcMod scroll) ──
+    if (sky_cloud_material.is_valid() && (sky_cloud_scroll_s != 0.0f || sky_cloud_scroll_t != 0.0f)) {
+        sky_cloud_time += delta;
+        sky_cloud_material->set_shader_parameter("cloud_time", (float)sky_cloud_time);
+    }
+
     update_sun_flare();         // Sun lens flare 2D overlay
 
     // Update planar reflections early before drawing HUD
@@ -8041,10 +8329,11 @@ void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
         mouse_poll_initialised = true;
     }
 
-    // ALWAYS update position when in_guimouse is true (reliable check
-    // that bypasses any stale overlay_active parameter).
+    // ALWAYS update position when in_guimouse is true AND a menu is actually up
+    // (reliable check that bypasses any stale overlay_active parameter).
     int gui_mouse_active = Godot_Client_GetGuiMouse();
-    bool should_poll = overlay_active || (gui_mouse_active != 0);
+    int menu_up = Godot_Client_IsMenuUp();
+    bool should_poll = overlay_active || (gui_mouse_active != 0 && menu_up != 0);
 
     if (should_poll) {
         update_ui_transform();

@@ -285,7 +285,7 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			newtime = localtime( &aclock );
 
 			logfile = FS_FOpenFileWrite_HomeData( "qconsole.log" );
-			
+
             // Remove recursive count as it won't be able to print relevant info
             recursive_count--;
 			if(logfile)
@@ -688,7 +688,7 @@ void Com_StartupVariable( const char *match ) {
 		}
 
 		s = Cmd_Argv(1);
-		
+
 		if(!match || !strcmp(s, match))
 		{
 			if(Cvar_Flags(s) == CVAR_NONEXISTENT)
@@ -1448,13 +1448,13 @@ void Com_Setenv_f(void)
 	if(argc > 2)
 	{
 		char *arg2 = Cmd_ArgsFrom(2);
-		
+
 		Sys_SetEnv(arg1, arg2);
 	}
 	else if(argc == 2)
 	{
 		char *env = getenv(arg1);
-		
+
 		if(env)
 			Com_Printf("%s=%s\n", arg1, env);
 		else
@@ -1509,12 +1509,12 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 		{
 			if(disconnect)
 				CL_Disconnect();
-				
+
 			CL_Shutdown("Game directory changed", disconnect, qfalse);
 		}
 
 		FS_Restart(checksumFeed);
-	
+
 		// Clean out any user and VM created cvars
 		Cvar_Restart(qtrue);
 		Com_ExecuteCfg();
@@ -1532,7 +1532,7 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 			CL_Init();
 			CL_StartHunkUsers(qfalse);
 		}
-		
+
 		com_gameRestarting = qfalse;
 		com_gameClientRestarting = qfalse;
 	}
@@ -1552,6 +1552,104 @@ void Com_GameRestart_f(void)
 
 	Com_GameRestart(0, qtrue);
 }
+
+#ifdef GODOT_GDEXTENSION
+/* Forward declaration — defined later in this file. */
+void Com_InitTargetGameWithType(target_game_e target_game, qboolean bIsDemo);
+
+/*
+ * Game-switch-completed flag — set by Com_SwitchGame_f after
+ * Com_GameRestart finishes.  MoHAARunner checks this after
+ * Com_Frame() to clear Godot-side caches and reload shaders.
+ * -1 = no switch happened.
+ */
+static volatile int godot_game_switch_completed = -1;
+
+int Godot_GetGameSwitchCompleted(void)
+{
+	return godot_game_switch_completed;
+}
+
+void Godot_ClearGameSwitchCompleted(void)
+{
+	godot_game_switch_completed = -1;
+}
+
+/*
+==================
+Com_SwitchGame_f
+
+Switch between Allied Assault (aa/0), Spearhead (sh/1), and Breakthrough (bt/2).
+Uses Com_GameRestart() for a proper engine-level restart: SV_Shutdown,
+CL_Shutdown (renderer, TIKI, sound), FS_Restart, Cvar_Restart, CL_Init.
+==================
+*/
+static void Com_SwitchGame_f(void)
+{
+	const char *arg;
+	int target;
+	char val[4];
+
+	if (Cmd_Argc() < 2) {
+		Com_Printf("Usage: switchgame <aa|sh|bt>\n");
+		Com_Printf("  aa (or 0) — Allied Assault  (main/)\n");
+		Com_Printf("  sh (or 1) — Spearhead       (mainta/)\n");
+		Com_Printf("  bt (or 2) — Breakthrough     (maintt/)\n");
+		Com_Printf("Current: %s (%d)\n",
+			com_target_game->integer == TG_MOH   ? "Allied Assault" :
+			com_target_game->integer == TG_MOHTA ? "Spearhead" :
+			com_target_game->integer == TG_MOHTT ? "Breakthrough" : "unknown",
+			com_target_game->integer);
+		return;
+	}
+
+	arg = Cmd_Argv(1);
+
+	if (!Q_stricmp(arg, "aa") || !Q_stricmp(arg, "0")) {
+		target = TG_MOH;
+	} else if (!Q_stricmp(arg, "sh") || !Q_stricmp(arg, "1")) {
+		target = TG_MOHTA;
+	} else if (!Q_stricmp(arg, "bt") || !Q_stricmp(arg, "2")) {
+		target = TG_MOHTT;
+	} else {
+		Com_Printf("Unknown game '%s'. Use aa, sh, or bt.\n", arg);
+		return;
+	}
+
+	if (target == com_target_game->integer) {
+		Com_Printf("Already running %s.\n",
+			target == TG_MOH   ? "Allied Assault" :
+			target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+		return;
+	}
+
+	Com_Printf("Switching to %s — engine restart via Com_GameRestart...\n",
+		target == TG_MOH   ? "Allied Assault" :
+		target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+
+	/* 1. Force-set com_target_game (overrides CVAR_INIT|CVAR_PROTECTED) */
+	Com_sprintf(val, sizeof(val), "%d", target);
+	Cvar_Set2("com_target_game", val, qtrue);
+
+	/* 2. Reconfigure protocols, version string, fs_basegame for the target game */
+	Com_InitTargetGameWithType((target_game_e)target, com_target_demo->integer);
+
+	/* 3. Perform a proper engine restart:
+	 *    SV_Shutdown → CL_Disconnect → CL_Shutdown (renderer, sound, TIKI)
+	 *    → FS_Restart (remount pk3s for new game dir)
+	 *    → Cvar_Restart → Com_ExecuteCfg
+	 *    → CL_Init (renderer re-init → BeginRegistration → R_Init)
+	 *    → CL_StartHunkUsers */
+	Com_GameRestart(0, qtrue);
+
+	/* 4. Signal the Godot side to clear its caches next frame */
+	godot_game_switch_completed = target;
+
+	Com_Printf("Game switch to %s complete.\n",
+		target == TG_MOH   ? "Allied Assault" :
+		target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+}
+#endif /* GODOT_GDEXTENSION */
 
 #ifndef STANDALONE
 
@@ -1888,6 +1986,9 @@ void Com_Init( char *commandLine ) {
 	Cmd_SetCommandCompletionFunc( "writeconfig", Cmd_CompleteCfgName );
 	Cmd_AddCommand("pause", Com_Pause_f);
 	Cmd_AddCommand("game_restart", Com_GameRestart_f);
+#ifdef GODOT_GDEXTENSION
+	Cmd_AddCommand("switchgame", Com_SwitchGame_f);
+#endif
 
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
@@ -2253,13 +2354,13 @@ void Com_Frame( void ) {
 	int		msec, minMsec;
 	int		timeVal, timeValSV;
 	static int	lastTime = 0, bias = 0;
- 
+
 	int		timeBeforeFirstEvents;
 	int		timeBeforeServer;
 	int		timeBeforeEvents;
 	int		timeBeforeClient;
 	int		timeAfter;
-  
+
 
 	if ( setjmp (abortframe) ) {
 		return;			// an ERR_DROP was thrown
@@ -2982,12 +3083,12 @@ qboolean Com_IsVoipTarget(uint8_t *voipTargets, int voipTargetsSize, int clientN
 			if(voipTargets[index])
 				return qtrue;
 		}
-		
+
 		return qfalse;
 	}
 
 	index = clientNum >> 3;
-	
+
 	if(index < voipTargetsSize)
 		return (voipTargets[index] & (1 << (clientNum & 0x07)));
 
@@ -3023,7 +3124,7 @@ static qboolean Field_CompletePlayerNameFinal( qboolean whitespace )
 	return qfalse;
 }
 
-static void Name_PlayerNameCompletion( const char **names, int nameCount, void(*callback)(const char *s) ) 
+static void Name_PlayerNameCompletion( const char **names, int nameCount, void(*callback)(const char *s) )
 {
 	int i;
 
@@ -3100,7 +3201,7 @@ qboolean Com_PlayerNameToFieldString( char *str, int length, const char *name )
 			i += 4;
 		} else {
 			str[i] = *p;
-		}		
+		}
 	}
 	str[i] = '\0';
 
@@ -3127,13 +3228,13 @@ void Field_CompletePlayerName( const char **names, int nameCount )
 	//allow to tab player names
 	//if full player name switch to next player name
 	if( completionString[0] != '\0'
-		&& Q_stricmp( shortestMatch, completionString ) == 0 
-		&& nameCount > 1 ) 
+		&& Q_stricmp( shortestMatch, completionString ) == 0
+		&& nameCount > 1 )
 	{
 		int i;
 
 		for( i = 0; i < nameCount; i++ ) {
-			if( Q_stricmp( names[ i ], completionString ) == 0 ) 
+			if( Q_stricmp( names[ i ], completionString ) == 0 )
 			{
 				i++;
 				if( i >= nameCount )
@@ -3150,7 +3251,7 @@ void Field_CompletePlayerName( const char **names, int nameCount )
 	if( matchCount > 1 )
 	{
 		Com_Printf( "]%s\n", completionField->buffer );
-		
+
 		Name_PlayerNameCompletion( names, nameCount, PrintMatches );
 	}
 

@@ -397,6 +397,56 @@ int Godot_BSP_GetStaticModelData(int index, char *model, int modelBufSize,
     return 1;
 }
 
+/* Get the firstVertexData byte offset into staticModelData for a
+ * static model instance.  Returns -1 on invalid index. */
+int Godot_BSP_GetStaticModelFirstVertexData(int index)
+{
+    if (!tr.world || index < 0 || index >= tr.world->numStaticModels)
+        return -1;
+    return tr.world->staticModels[index].firstVertexData;
+}
+
+/* Copy per-vertex RGBA lighting colours for a single surface of a
+ * static model.  vertexOffset = accumulated numVerts of preceding
+ * surfaces within this model.  Returns number of verts copied. */
+int Godot_BSP_GetStaticModelVertexColors(int index, int vertexOffset,
+    int maxVerts, unsigned char *outRGBA)
+{
+    cStaticModelUnpacked_t *sm;
+    int byteOffset;
+    int available;
+    int count;
+    const unsigned char *src;
+
+    if (!tr.world || !tr.world->staticModelData || !outRGBA)
+        return 0;
+    if (index < 0 || index >= tr.world->numStaticModels)
+        return 0;
+    if (maxVerts <= 0)
+        return 0;
+
+    sm = &tr.world->staticModels[index];
+
+    /* firstVertexData is a byte offset into the RGBA staticModelData array.
+     * vertexOffset is a vertex count offset within this model. */
+    byteOffset = sm->firstVertexData + vertexOffset * 4;
+    if (byteOffset < 0)
+        return 0;
+
+    /* Bounds check against the total array size */
+    available = tr.world->numStaticModelData - (byteOffset / 4);
+    if (available <= 0)
+        return 0;
+
+    count = maxVerts;
+    if (count > available)
+        count = available;
+
+    src = &tr.world->staticModelData[byteOffset];
+    memcpy(outRGBA, src, count * 4);
+    return count;
+}
+
 /* ===================================================================
  *  Terrain patch accessors — from tr.world->terraPatches[]
  * ================================================================ */
@@ -924,4 +974,106 @@ int Godot_BSP_GetShaderContentFlags(int shaderIndex)
     if (!tr.world || shaderIndex < 0 || shaderIndex >= tr.world->numShaders)
         return 0;
     return tr.world->shaders[shaderIndex].contentFlags;
+}
+
+/* ===================================================================
+ *  Leaf-based terrain patch → cluster mapping
+ *
+ *  The original engine (R_RecursiveWorldNode in tr_world.c) walks PVS-
+ *  visible leaves and marks their owned terrain patches via the
+ *  visTerraPatches[] indirection table (built from LUMP_TERRAININDEXES).
+ *  This function replicates that ownership: for each leaf, iterate its
+ *  firstTerraPatch..firstTerraPatch+numTerraPatches range through the
+ *  indirection table to find the actual terrain patch index, then
+ *  assign that patch to the leaf's cluster.
+ * ================================================================ */
+
+void Godot_BSP_BuildTerrainClusterMap(int *patchClusterOut, int numPatches)
+{
+    int i, j;
+    int assigned = 0;
+
+    for (i = 0; i < numPatches; i++)
+        patchClusterOut[i] = -1;
+
+    if (!tr.world) {
+        ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: tr.world is NULL!\n");
+        return;
+    }
+    if (!tr.world->visTerraPatches) {
+        ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: visTerraPatches is NULL! numVisTerraPatches=%d, numTerraPatches=%d\n",
+            tr.world->numVisTerraPatches, tr.world->numTerraPatches);
+        return;
+    }
+    if (!tr.world->terraPatches) {
+        ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: terraPatches is NULL!\n");
+        return;
+    }
+
+    ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: numPatches=%d, numVisTerraPatches=%d, numTerraPatches=%d, numnodes=%d, numDecisionNodes=%d\n",
+        numPatches, tr.world->numVisTerraPatches, tr.world->numTerraPatches,
+        tr.world->numnodes, tr.world->numDecisionNodes);
+
+    /* Walk all leaves (nodes[numDecisionNodes..numnodes-1]) */
+    for (i = tr.world->numDecisionNodes; i < tr.world->numnodes; i++) {
+        mnode_t *leaf = &tr.world->nodes[i];
+        if (leaf->cluster < 0) continue;
+
+        for (j = 0; j < leaf->numTerraPatches; j++) {
+            int visIdx = leaf->firstTerraPatch + j;
+            if (visIdx < 0 || visIdx >= tr.world->numVisTerraPatches) continue;
+
+            cTerraPatchUnpacked_t *patch = tr.world->visTerraPatches[visIdx];
+            if (!patch) continue;
+
+            int patchIdx = (int)(patch - tr.world->terraPatches);
+            if (patchIdx >= 0 && patchIdx < numPatches &&
+                patchClusterOut[patchIdx] < 0) {
+                patchClusterOut[patchIdx] = leaf->cluster;
+                assigned++;
+            }
+        }
+    }
+
+    ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: assigned %d of %d patches to clusters\n",
+        assigned, numPatches);
+}
+
+/* ===================================================================
+ *  Leaf-based static model → cluster mapping
+ *
+ *  Same pattern as terrain: leaves own static models via the
+ *  visStaticModels[] indirection table (LUMP_STATICMODELINDEXES).
+ *  Assigns each static model to the first cluster that references it.
+ * ================================================================ */
+
+void Godot_BSP_BuildStaticModelClusterMap(int *modelClusterOut, int numModels)
+{
+    int i, j;
+
+    for (i = 0; i < numModels; i++)
+        modelClusterOut[i] = -1;
+
+    if (!tr.world || !tr.world->visStaticModels || !tr.world->staticModels)
+        return;
+
+    /* Walk all leaves */
+    for (i = tr.world->numDecisionNodes; i < tr.world->numnodes; i++) {
+        mnode_t *leaf = &tr.world->nodes[i];
+        if (leaf->cluster < 0) continue;
+
+        for (j = 0; j < leaf->numStaticModels; j++) {
+            int visIdx = leaf->firstStaticModel + j;
+            if (visIdx < 0 || visIdx >= tr.world->numVisStaticModels) continue;
+
+            cStaticModelUnpacked_t *model = tr.world->visStaticModels[visIdx];
+            if (!model) continue;
+
+            int modelIdx = (int)(model - tr.world->staticModels);
+            if (modelIdx >= 0 && modelIdx < numModels &&
+                modelClusterOut[modelIdx] < 0) {
+                modelClusterOut[modelIdx] = leaf->cluster;
+            }
+        }
+    }
 }

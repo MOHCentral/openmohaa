@@ -546,9 +546,35 @@ static float gr_2dShaderStartTime = 0.0f;
  *  Renderer function stubs — lifecycle
  * ---------------------------------------------------------------- */
 
+/* Defined in tr_init.c — bootstraps the real renderer's shader parser,
+ * image system, model tables, font loader, and function tables.
+ * GL calls inside R_Init are guarded with #ifndef GODOT_GDEXTENSION.
+ * Sky/marks init are no-ops via -z muldefs stub priority. */
+extern void R_Init( void );
+
+/* Real renderer shutdown — defined in tr_init.c.  Cleans up shader/image/
+ * model/font/terrain state so R_Init() can safely be called again. */
+extern void RE_Shutdown( qboolean destroyWindow );
+
+static int gr_realRendererInited = 0;
+
+/* Accessor so Godot-side C++ code can tell whether R_Init() has been called yet */
+int GR_IsRealRendererInited( void ) { return gr_realRendererInited; }
+
 static void GR_Shutdown( qboolean destroyWindow )
 {
     ri.Printf( PRINT_ALL, "[GodotRenderer] Shutdown\n" );
+
+    /* Shut down the real renderer subsystems (shaders, images, models,
+     * fonts, terrain).  This must happen before gr_realRendererInited is
+     * reset so that R_Init() can be called cleanly from the next
+     * GR_BeginRegistration().  RE_Shutdown removes renderer commands
+     * (modellist, shaderlist, etc.) and sets tr.registered = qfalse. */
+    if ( gr_realRendererInited ) {
+        RE_Shutdown( destroyWindow );
+        gr_realRendererInited = 0;
+    }
+
     GR_ModelInit();
     next_shader_handle = 1;
     next_skin_handle   = 1;
@@ -558,7 +584,7 @@ static void GR_Shutdown( qboolean destroyWindow )
     gr_worldMapLoaded  = qfalse;
     gr_numEntities     = 0;
     gr_numDlights      = 0;
-    gr_numPolys        = 0;
+    gr_numPolys         = 0;
     gr_numPolyVerts    = 0;
     gr_numShaderRemaps = 0;
     gr_numTerrainMarks = 0;
@@ -567,17 +593,6 @@ static void GR_Shutdown( qboolean destroyWindow )
     gr_bgActive        = 0;
     gr_frameNumber     = 0;
 }
-
-/* Defined in tr_init.c — bootstraps the real renderer's shader parser,
- * image system, model tables, font loader, and function tables.
- * GL calls inside R_Init are guarded with #ifndef GODOT_GDEXTENSION.
- * Sky/marks init are no-ops via -z muldefs stub priority. */
-extern void R_Init( void );
-
-static int gr_realRendererInited = 0;
-
-/* Accessor so Godot-side C++ code can tell whether R_Init() has been called yet */
-int GR_IsRealRendererInited( void ) { return gr_realRendererInited; }
 
 static void GR_BeginRegistration( glconfig_t *config )
 {
@@ -648,6 +663,24 @@ static void GR_BeginRegistration( glconfig_t *config )
         /* Register r_gamma so the config value is loaded and accessible
          * from the Godot side for full-screen gamma correction. */
         ri.Cvar_Get( "r_gamma", "1", CVAR_ARCHIVE );
+
+        /* Register r_shadows:
+         *  0 = classic MOHAA shadow blobs (default)
+         *  1 = modern Godot GPU shadows: sun DirectionalLight (from map sundirection)
+         *      casts shadows for all RF_SHADOW entities onto PER_PIXEL BSP surfaces.
+         *      Use r_dlight_shadows to also cast shadows from muzzle/explosion lights. */
+        ri.Cvar_Get( "r_shadows", "0", CVAR_ARCHIVE );
+
+        /* Register r_dlight_shadows:
+         *  0 = dynamic point lights illuminate but do NOT cast shadows (default, fast)
+         *  1 = dynamic point lights cast shadows (expensive: 6 depth passes per light).
+         *      Requires r_shadows 1. */
+        ri.Cvar_Get( "r_dlight_shadows", "0", CVAR_ARCHIVE );
+
+        /* Register r_godot_rain:
+         *  0 = use original MOHAA rain (line streaks from cgame)
+         *  1 = use Godot physics rain with collision (default) */
+        ri.Cvar_Get( "r_godot_rain", "1", CVAR_ARCHIVE );
 
         int mode = r_mode_cv ? r_mode_cv->integer : -2;
         int fs   = r_fullscreen_cv ? r_fullscreen_cv->integer : 0;
@@ -739,28 +772,15 @@ static qhandle_t GR_RegisterShaderNoMip( const char *name )
     /* Match OpenMOHAA RE_RegisterShaderNoMip: if the image doesn't exist
      * and there's no .shader definition, return 0 (defaultShader).
      * This is critical for UIBindButton which checks GetMaterial() to
-     * decide whether to show a texture image or fall back to text. */
-    {
-        qboolean found = qfalse;
-
-        /* Check for .shader definition */
-        if ( Godot_ShaderProps_Find( name ) ) {
-            found = qtrue;
-        }
-
-        /* Check for image file in VFS */
-        if ( !found ) {
-            if ( ri.FS_FileExists( name ) ||
-                 ri.FS_FileExists( va( "%s.tga", name ) ) ||
-                 ri.FS_FileExists( va( "%s.jpg", name ) ) ||
-                 ri.FS_FileExists( va( "%s.png", name ) ) ) {
-                found = qtrue;
-            }
-        }
-
-        if ( !found ) {
-            return 0;
-        }
+     * decide whether to show a texture image or fall back to text.
+     *
+     * Godot_ShaderProps_Find() calls resolve_shader() → R_FindShader()
+     * which searches the full VFS (pk3 + loose files) for both .shader
+     * definitions AND raw images (.tga/.jpg/.png).  If R_FindShader()
+     * cannot find the shader or image, it returns defaultShader, and
+     * Godot_ShaderProps_Find() returns NULL. */
+    if ( !Godot_ShaderProps_Find( name ) ) {
+        return 0;
     }
 
     i = gr_numShaders++;
@@ -2242,11 +2262,19 @@ qboolean GR_ImageExists( const char *name )
         }
     }
 
-    /* Check VFS for actual image file existence */
-    if ( ri.FS_FileExists( name ) ) return qtrue;
-    if ( ri.FS_FileExists( va( "%s.tga", name ) ) ) return qtrue;
-    if ( ri.FS_FileExists( va( "%s.jpg", name ) ) ) return qtrue;
-    if ( ri.FS_FileExists( va( "%s.png", name ) ) ) return qtrue;
+    /* Check VFS for actual image file existence (full search path incl. pk3).
+     * Use local buffers instead of va() to avoid re-entrance corruption
+     * (va() has only 2 rotating slots and FS_ReadFile may call va() internally). */
+    if ( ri.FS_ReadFile( name, NULL ) >= 0 ) return qtrue;
+    {
+        char path[MAX_QPATH];
+        Com_sprintf( path, sizeof( path ), "%s.tga", name );
+        if ( ri.FS_ReadFile( path, NULL ) >= 0 ) return qtrue;
+        Com_sprintf( path, sizeof( path ), "%s.jpg", name );
+        if ( ri.FS_ReadFile( path, NULL ) >= 0 ) return qtrue;
+        Com_sprintf( path, sizeof( path ), "%s.png", name );
+        if ( ri.FS_ReadFile( path, NULL ) >= 0 ) return qtrue;
+    }
     return qfalse;
 }
 

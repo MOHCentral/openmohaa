@@ -53,6 +53,13 @@ static bool needs_gamma_to_linear_conversion() {
 static std::unordered_map<std::string, Ref<Shader>> s_shader_cache;
 
 /* ===================================================================
+ *  Material registry — tracks all built ShaderMaterials so
+ *  bsp_shadow_darkness can be updated at runtime without rebuilding.
+ * ================================================================ */
+#include <vector>
+static std::vector<Ref<ShaderMaterial>> s_mat_registry;
+
+/* ===================================================================
  *  Helper: float → string with minimal decimal places
  * ================================================================ */
 static std::string ftos(float v) {
@@ -342,7 +349,7 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                  * OpenMOHAA parity: turbulence uses vertex position for spatial offset.
                  * Formula: uv += amp * sin((pos.xz + pos.y) * scale + (phase + time*freq) * 2PI)
                  * In idTech3 coordinates: S maps to X+Z, T maps to Y
-                 * In Godot coordinates: Quake X is -Z, Quake Z is Y, Quake Y is -X 
+                 * In Godot coordinates: Quake X is -Z, Quake Z is Y, Quake Y is -X
                  * And Godot local pos is scaled down by 39.37 relative to Quake space. */
                 std::string now_expr = "(" + ftos(tm->params[2]) + " + TIME * " + ftos(tm->params[3]) + ") * 6.283185";
                 code += "    uv" + si + " += " + ftos(tm->params[1]) + " * sin(vec2(-v_pos.z + v_pos.y, -v_pos.x) * (39.37 * 6.283185 / 1024.0) + vec2(" + now_expr + "));\n";
@@ -381,7 +388,7 @@ static std::string gen_uv_code(int stage_idx, const MohaaShaderStage *s) {
                 break;
             }
             case TCMOD_BULGE:
-                /* OpenMOHAA parity: tr_shade_calc.c RB_CalcBulgeTexCoords calculates 
+                /* OpenMOHAA parity: tr_shade_calc.c RB_CalcBulgeTexCoords calculates
                  * an offset but never applies it to 'st'. Bulge is a no-op for tex mapping. */
                 break;
             case TCMOD_TRANSFORM:
@@ -599,9 +606,14 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
     code += "shader_type spatial;\n";
 
     /* Build render_mode */
+    /* ambient_light_disabled replaces the old render_mode unshaded.  The
+     * custom light() function below reproduces unshaded behaviour at
+     * bsp_shadow_darkness = 0.0 (DIFFUSE_LIGHT += 1.0 regardless of
+     * ATTENUATION), and enables real shadow reception at darkness > 0.
+     * Using ambient_light_disabled prevents the scene ambient from
+     * double-lighting the lightmap-composited ALBEDO. */
     std::string render_mode;
-    if (!needs_diffuse_lighting(props))
-        render_mode += "unshaded";
+    render_mode += "ambient_light_disabled";
 
     switch (props->transparency) {
         case SHADER_ADDITIVE:
@@ -614,9 +626,15 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
             render_mode += "blend_mul";
             break;
         case SHADER_ALPHA_BLEND:
-        case SHADER_ALPHA_TEST:
             if (!render_mode.empty()) render_mode += ", ";
             render_mode += "blend_mix";
+            break;
+        case SHADER_ALPHA_TEST:
+            /* Alpha-test: opaque pass with per-stage discard() in fragment shader.
+             * Do NOT use blend_mix here — that puts the surface in the transparent
+             * pass which skips depth writes.  MOHAA's original GL renderer runs
+             * alpha-test geometry as opaque (GLS_ATEST_*) with depth writes ON.
+             * The per-stage 'discard' calls generated below handle the cutout. */
             break;
         default:
             break;
@@ -676,6 +694,10 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
 
     if (needs_entity_color(props))
         code += "uniform vec4 entity_color = vec4(1.0, 1.0, 1.0, 1.0);\n";
+
+    /* Shadow reception uniform.  Default 0.0 = same result as render_mode unshaded.
+     * Set to 0.5 from MoHAARunner when r_shadows >= 1 to darken BSP floors in shadow. */
+    code += "uniform float bsp_shadow_darkness = 0.0;\n";
 
     if (needs_tcmod(props)) {
         code += "uniform vec2 entity_tcmod_scroll = vec2(0.0, 0.0);\n";
@@ -798,18 +820,45 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         code += "    result.rgb = pow(max(result.rgb, vec3(0.0)), vec3(2.2));\n";
     }
 
+    /* EMISSION carries the always-visible lightmap contribution.  This ensures
+     * the BSP looks identical to render_mode unshaded when bsp_shadow_darkness = 0.0
+     * (i.e. r_shadows 0) regardless of whether any Godot lights are active.
+     *
+     * With ambient_light_disabled the output formula is:
+     *   color = EMISSION + ALBEDO * DIFFUSE_LIGHT
+     *         = result * (1-dark) + result * (dark * ATTENUATION)
+     * In full light  (atten=1): (1-d) + d = 1.0  → no change
+     * In full shadow (atten=0): (1-d) + 0 = 1-d  → darkened
+     * With no active light (mode 0, dark=0): 1.0 + 0    = 1.0  → unshaded */
+    code += "    EMISSION = result.rgb * (1.0 - bsp_shadow_darkness);\n";
     code += "    ALBEDO = result.rgb;\n";
+    code += "    METALLIC = 0.0;\n";
+    code += "    ROUGHNESS = 1.0;\n";
 
     if (props->transparency == SHADER_ALPHA_BLEND ||
-        props->transparency == SHADER_ADDITIVE ||
-        props->transparency == SHADER_ALPHA_TEST) {
+        props->transparency == SHADER_ADDITIVE) {
         code += "    ALPHA = result.a;\n";
     }
+    /* SHADER_ALPHA_TEST: do not set ALPHA — the per-stage discard() calls
+     * already cut out transparent pixels in the opaque pass.  Setting ALPHA
+     * here would be meaningless without blend_mix and could confuse the
+     * renderer's depth pre-pass.  No ALPHA_SCISSOR_THRESHOLD needed either
+     * since we rely on explicit GLSL discard. */
 
-    if (props->transparency == SHADER_ALPHA_TEST) {
-        code += "    ALPHA_SCISSOR_THRESHOLD = " + ftos(props->alpha_threshold) + ";\n";
-    }
+    code += "}\n";
 
+    /* Shadow reception light() function.
+     * DIFFUSE_LIGHT += dark * ATTENUATION
+     *   ATTENUATION = 1.0 in full light, 0.0 in full shadow.
+     * Combined with EMISSION = result * (1-dark) in fragment():
+     *   total = result*(1-dark) + result*(dark*ATTENUATION)
+     * → no change in full light; darkens proportionally in shadow.
+     * OmniLights (muzzle flashes, explosions) are intentionally ignored —
+     * BSP uses baked lightmaps and should not be affected by dynamic lights. */
+    code += "\nvoid light() {\n";
+    code += "    if (LIGHT_IS_DIRECTIONAL) {\n";
+    code += "        DIFFUSE_LIGHT += bsp_shadow_darkness * ATTENUATION;\n";
+    code += "    }\n";
     code += "}\n";
 
     return String(code.c_str());
@@ -846,9 +895,32 @@ Ref<ShaderMaterial> Godot_Shader_BuildMaterial(const GodotShaderProps *props) {
     mat.instantiate();
     mat->set_shader(shader);
 
+    /* Register for runtime bsp_shadow_darkness updates */
+    s_mat_registry.push_back(mat);
+
     return mat;
 }
 
 void Godot_Shader_ClearCache() {
     s_shader_cache.clear();
+}
+
+/* Clear the material registry.  Call at the start of every map load
+ * to drop stale references from the previous map. */
+void Godot_Shader_ClearMaterialRegistry() {
+    s_mat_registry.clear();
+}
+
+/* Set the shadow darkness on every registered ShaderMaterial.
+ * darkness = 0.0 → identical to the old render_mode unshaded (no shadow).
+ * darkness = 0.5 → fully-shadowed fragments are rendered at 50 % of their
+ *                  lightmap colour; fully-lit fragments are at 100 %.
+ * Called from MoHAARunner::apply_player_shadow_mode() whenever r_shadows changes
+ * and once after each BSP load to synchronise freshly-built materials. */
+void Godot_Shader_SetShadowDarkness(float darkness) {
+    for (auto &mat : s_mat_registry) {
+        if (mat.is_valid()) {
+            mat->set_shader_parameter("bsp_shadow_darkness", darkness);
+        }
+    }
 }

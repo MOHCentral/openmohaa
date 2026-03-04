@@ -64,4 +64,19 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props);
  */
 void Godot_Shader_ClearCache();
 
+/*
+ * Clear the material registry.  Call at the start of every map load
+ * to release stale references from the previous map.
+ */
+void Godot_Shader_ClearMaterialRegistry();
+
+/*
+ * Set the shadow darkness uniform on every registered ShaderMaterial.
+ *   0.0 → no shadow effect (identical to old render_mode unshaded)
+ *   0.5 → in full shadow BSP surface is rendered at 50 % lightmap colour
+ * Call from apply_player_shadow_mode() whenever r_shadows changes and
+ * once after each BSP load.
+ */
+void Godot_Shader_SetShadowDarkness(float darkness);
+
 #endif /* GODOT_SHADER_MATERIAL_H */

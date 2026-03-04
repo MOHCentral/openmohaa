@@ -264,6 +264,7 @@ static_assert(sizeof(bsp_leaf_t_v17) == 56, "dleaf_t_ver17 must be 56 bytes");
 
 /* ── Parsed static model and brush model caches ── */
 static std::vector<BSPStaticModelDef> s_static_models;
+static std::vector<int>               s_static_model_clusters;  /* per-model PVS cluster */
 static std::vector<Ref<ArrayMesh>>    s_brush_models;  /* 1-based: s_brush_models[0] = submodel *1 */
 
 /* ── Phase 78: Fog volume cache ── */
@@ -1445,11 +1446,29 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
         const uint8_t *terrain_data = data + l_terrain->fileofs;
         int num_patches = l_terrain->filelen / (int)sizeof(bsp_terrain_patch_t);
 
+        // Build terrain patch → cluster mapping from BSP leaf ownership.
+        // This uses the engine's visTerraPatches[] indirection table
+        // (LUMP_TERRAININDEXES) and leaf firstTerraPatch/numTerraPatches
+        // to assign each patch to its owning PVS cluster — matching the
+        // original engine's R_RecursiveWorldNode terrain visibility.
+        std::vector<int> terrain_cluster_map(num_patches, -1);
+        Godot_BSP_BuildTerrainClusterMap(terrain_cluster_map.data(), num_patches);
+
+        // Count how many patches were assigned to a valid cluster
+        int terrain_assigned = 0, terrain_unassigned = 0;
+        for (int i = 0; i < num_patches; i++) {
+            if (terrain_cluster_map[i] >= 0) terrain_assigned++;
+            else terrain_unassigned++;
+        }
+
         UtilityFunctions::print(String("[BSP] Terrain lump: ") +
                                 String::num_int64(l_terrain->filelen) +
                                 " bytes, " + String::num_int64(num_patches) +
                                 " patches (" + String::num_int64((int64_t)sizeof(bsp_terrain_patch_t)) +
-                                " bytes each)");
+                                " bytes each). Clustered: " +
+                                String::num_int64(terrain_assigned) +
+                                ", unassigned (hidden): " +
+                                String::num_int64(terrain_unassigned));
 
         for (int p = 0; p < num_patches; p++) {
             const bsp_terrain_patch_t *patch =
@@ -1473,12 +1492,17 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             float y0 = (float)((int)patch->y << 6);
             float z0 = (float)patch->iBaseHeight;
 
-            // Terrain patches span large 512x512 areas and frequently cross
-            // cluster boundaries. A single centre-point cluster assignment can
-            // cull visible ground incorrectly (notably in training). Keep
-            // terrain in the always-visible group (-1) until per-leaf terrain
-            // ownership is implemented.
-            int terrain_cluster = -1;
+            // Use the pre-built leaf-based cluster mapping.  This mirrors
+            // R_RecursiveWorldNode which walks PVS-visible leaves and
+            // marks their owned terrain patches via visTerraPatches[].
+            int terrain_cluster = terrain_cluster_map[p];
+
+            // Skip terrain patches not referenced by any BSP leaf.
+            // In the original engine, R_MarkTerrainPatch only marks patches
+            // reachable through PVS-visible leaves.  Unreferenced patches
+            // (cluster -1) are never drawn — they're typically under
+            // buildings or inside solid geometry.
+            if (terrain_cluster < 0) continue;
 
             // Get or create shader batch for this cluster — keyed by
             // (shaderNum, lightmapNum) to avoid lightmap tile mismatches.
@@ -1669,6 +1693,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
     // their definitions here; MoHAARunner instantiates them after the
     // BSP is added to the scene.
     s_static_models.clear();
+    s_static_model_clusters.clear();
 
     const bsp_lump_t *l_staticdefs = get_lump(hdr, LUMP_STATICMODELDEF);
     if (lump_ok(l_staticdefs) && l_staticdefs->filelen >= (int)sizeof(bsp_static_model_t)) {
@@ -1695,9 +1720,22 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             s_static_models.push_back(def);
         }
 
+        // Build leaf-based cluster mapping for static model PVS culling.
+        // Uses LUMP_STATICMODELINDEXES indirection, matching the engine's
+        // R_RecursiveWorldNode which marks visStaticModels per-leaf.
+        s_static_model_clusters.resize(num_static, -1);
+        Godot_BSP_BuildStaticModelClusterMap(s_static_model_clusters.data(), num_static);
+
+        int sm_assigned = 0;
+        for (int i = 0; i < num_static; i++) {
+            if (s_static_model_clusters[i] >= 0) sm_assigned++;
+        }
+
         UtilityFunctions::print(String("[BSP] Parsed ") +
                                 String::num_int64(num_static) +
-                                " static model definitions.");
+                                " static model definitions (" +
+                                String::num_int64(sm_assigned) +
+                                " assigned to PVS clusters).");
     }
 
     // ── 7. Create scene tree with per-cluster MeshInstance3D nodes ──
@@ -1765,6 +1803,7 @@ void Godot_BSP_Unload() {
     s_texture_cache.clear();
     s_lightmaps.clear();
     s_static_models.clear();
+    s_static_model_clusters.clear();
     s_brush_models.clear();
     s_fog_volumes.clear();
     s_flares.clear();
@@ -1784,6 +1823,11 @@ int Godot_BSP_GetStaticModelCount() {
 const BSPStaticModelDef *Godot_BSP_GetStaticModelDef(int index) {
     if (index < 0 || index >= (int)s_static_models.size()) return nullptr;
     return &s_static_models[index];
+}
+
+int Godot_BSP_GetStaticModelCluster(int index) {
+    if (index < 0 || index >= (int)s_static_model_clusters.size()) return -1;
+    return s_static_model_clusters[index];
 }
 
 /* ===================================================================

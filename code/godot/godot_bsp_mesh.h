@@ -52,6 +52,10 @@ int Godot_BSP_GetStaticModelCount();
 /// Returns nullptr if index is out of range.
 const BSPStaticModelDef *Godot_BSP_GetStaticModelDef(int index);
 
+/// Get the PVS cluster assignment for a static model by index.
+/// Returns -1 if unassigned (always visible) or index out of range.
+int Godot_BSP_GetStaticModelCluster(int index);
+
 /// Get the number of brush sub-models (excluding model 0, the world).
 int Godot_BSP_GetBrushModelCount();
 
