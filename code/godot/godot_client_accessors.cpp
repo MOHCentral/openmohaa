@@ -215,4 +215,24 @@ int Godot_Client_GetPlayerZoom(void) {
     return cl.snap.ps.stats[8]; /* STAT_INZOOM = 8 in bg_public.h enum */
 }
 
+/* Sync cls.glconfig.vidWidth/vidHeight with the actual Godot viewport.
+ * Under Godot there is no physical display-mode switch — the viewport
+ * is always at the window's real resolution.  This keeps the engine's
+ * UI framework (uid.vidWidth/vidHeight, SCR_AdjustFrom640, widget
+ * Realign) in sync with the real viewport dimensions. */
+void Godot_Client_SyncGlConfigVidSize(int w, int h) {
+    if (w > 0 && h > 0) {
+        cls.glconfig.vidWidth     = w;
+        cls.glconfig.vidHeight    = h;
+        cls.glconfig.windowAspect = (float)w / (float)h;
+    }
+}
+
+/* Refresh uid.vidWidth/vidHeight from cls.glconfig.
+ * Must be called after syncing cls.glconfig so that the UI widget
+ * framework (SetVirtualScale, Realign) sees the correct dimensions. */
+void Godot_Client_RefreshUIDef(void) {
+    CL_FillUIDef();
+}
+
 } /* extern "C" */

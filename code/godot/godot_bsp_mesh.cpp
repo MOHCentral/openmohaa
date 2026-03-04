@@ -47,6 +47,7 @@
 #include <cmath>
 #include <vector>
 #include <unordered_map>
+#include <set>
 #include <string>
 
 using namespace godot;
@@ -288,6 +289,16 @@ static std::vector<BSPFlare> s_flares;
 static std::vector<godot::MeshInstance3D *> s_cluster_meshes;  /* indexed by cluster */
 static int s_pvs_num_clusters = 0;
 
+/* ── Terrain patch mesh tracking ──
+ * Each terrain patch gets its own MeshInstance3D so it can be individually
+ * PVS-culled and frustum-culled.  A patch is visible if ANY of its owning
+ * clusters is PVS-visible from the camera. */
+struct TerrainPatchMesh {
+    godot::MeshInstance3D *mesh = nullptr;
+    std::vector<int> clusters;  /* all PVS clusters that own this patch */
+};
+static std::vector<TerrainPatchMesh> s_terrain_patches;
+
 
 /* ===================================================================
  *  Coordinate conversion
@@ -336,6 +347,7 @@ struct ShaderBatch {
     int                  lightmap_num  = -1;
     bool                 nolightmap    = false;
     int32_t              surface_flags = 0;
+    bool                 force_opaque  = false;  // terrain: always opaque regardless of shader classification
 };
 
 /// Encode (shaderNum, lightmapNum) into a single int64_t batch key.
@@ -836,7 +848,7 @@ static Ref<ArrayMesh> batches_to_array_mesh(
         bool skip_shader_for_lm = (sp && sp->stage_count > 0 &&
                                    batch_has_lm && !shader_has_lm);
 
-        if (sp && sp->stage_count > 0 && !skip_shader_for_lm) {
+        if (sp && sp->stage_count > 0 && !skip_shader_for_lm && !batch.force_opaque) {
             /* ── ShaderMaterial path (multi-stage .shader) ── */
             Ref<ShaderMaterial> smat = Godot_Shader_BuildMaterial(sp);
             if (smat.is_valid()) {
@@ -988,7 +1000,7 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                     if (!has_texture) tex_bad++;
                 }
 
-                if (sp) {
+                if (sp && !batch.force_opaque) {
                     switch (sp->transparency) {
                         case SHADER_ALPHA_TEST:
                             mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR);
@@ -1340,16 +1352,22 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
         }
     }
 
-    // ── 5. Build surface-to-cluster mapping from leaf data ──
+    // ── 5. Build surface↔cluster pairs from leaf ownership ──
     //
-    // Walk all BSP leaves and build a mapping from surface index to the
-    // PVS cluster that "owns" it. A surface may be referenced by multiple
-    // leaves; we assign it to the first cluster encountered. Surfaces with
-    // no cluster assignment (cluster -1 or not referenced) go into a
-    // special "always-visible" group (cluster -1).
-    std::vector<int> surface_cluster(num_surfaces, -1);  // -1 = unassigned
+    // Use full (surfaceIdx, cluster) pairs so surfaces that span multiple
+    // clusters are duplicated into each owning cluster batch instead of
+    // being forced into an always-visible fallback bucket.
+    int max_surface_pairs = num_surfaces * 32;
+    std::vector<int> surface_pairs_buf(max_surface_pairs * 2);
+    int num_surface_pairs = Godot_BSP_BuildSurfaceClusterPairs(
+        surface_pairs_buf.data(), max_surface_pairs, num_surfaces);
 
-    Godot_BSP_BuildSurfaceClusterMap(surface_cluster.data(), num_surfaces);
+    std::unordered_map<int, std::vector<int>> surface_clusters;
+    for (int i = 0; i < num_surface_pairs; i++) {
+        int sidx = surface_pairs_buf[i * 2];
+        int clust = surface_pairs_buf[i * 2 + 1];
+        surface_clusters[sidx].push_back(clust);
+    }
     // ── 5b. Accumulate world surfaces into per-cluster, per-shader batches ──
     // Key: cluster → {(shaderNum,lightmapNum) → ShaderBatch}
     // Cluster -1 is the "always visible" fallback group.
@@ -1419,10 +1437,32 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             }
         }
 
-        if (process_surface(surf, s, verts, num_verts, indices, num_indices,
-                            shaders, num_shaders,
-                            cluster_batches[surface_cluster[s]],
-                            skipped_nodraw, skipped_sky)) {
+        auto sc_it = surface_clusters.find(s);
+        if (sc_it == surface_clusters.end()) {
+            // Not referenced by any leaf; keep old behaviour for safety.
+            if (process_surface(surf, s, verts, num_verts, indices, num_indices,
+                                shaders, num_shaders,
+                                cluster_batches[-1],
+                                skipped_nodraw, skipped_sky)) {
+                if (surf->surfaceType == MST_PATCH) processed_patches++;
+                processed++;
+            }
+            continue;
+        }
+
+        bool processed_any = false;
+        const std::vector<int> &clusters_for_surface = sc_it->second;
+        for (int ci = 0; ci < (int)clusters_for_surface.size(); ci++) {
+            int batch_cluster = clusters_for_surface[ci];
+            if (process_surface(surf, s, verts, num_verts, indices, num_indices,
+                                shaders, num_shaders,
+                                cluster_batches[batch_cluster],
+                                skipped_nodraw, skipped_sky)) {
+                processed_any = true;
+            }
+        }
+
+        if (processed_any) {
             if (surf->surfaceType == MST_PATCH) processed_patches++;
             processed++;
         }
@@ -1446,29 +1486,43 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
         const uint8_t *terrain_data = data + l_terrain->fileofs;
         int num_patches = l_terrain->filelen / (int)sizeof(bsp_terrain_patch_t);
 
-        // Build terrain patch → cluster mapping from BSP leaf ownership.
-        // This uses the engine's visTerraPatches[] indirection table
-        // (LUMP_TERRAININDEXES) and leaf firstTerraPatch/numTerraPatches
-        // to assign each patch to its owning PVS cluster — matching the
-        // original engine's R_RecursiveWorldNode terrain visibility.
-        std::vector<int> terrain_cluster_map(num_patches, -1);
-        Godot_BSP_BuildTerrainClusterMap(terrain_cluster_map.data(), num_patches);
+        // Build terrain patch → cluster pairs from BSP leaf ownership.
+        // Uses the full (patchIdx, cluster) pair API so multi-cluster
+        // terrain patches get duplicated into each owning cluster's
+        // mesh.  PVS then correctly hides terrain behind buildings.
+        int max_pairs = num_patches * 32;  // generous upper bound
+        std::vector<int> pairs_buf(max_pairs * 2);
+        int num_pairs = Godot_BSP_BuildTerrainClusterPairs(
+            pairs_buf.data(), max_pairs, num_patches);
 
-        // Count how many patches were assigned to a valid cluster
-        int terrain_assigned = 0, terrain_unassigned = 0;
+        // Build per-patch cluster list
+        std::unordered_map<int, std::vector<int>> patch_clusters;
+        for (int i = 0; i < num_pairs; i++) {
+            int pidx = pairs_buf[i * 2];
+            int clust = pairs_buf[i * 2 + 1];
+            patch_clusters[pidx].push_back(clust);
+        }
+
+        // Count for diagnostics
+        int terrain_single = 0, terrain_multi = 0, terrain_unassigned = 0;
         for (int i = 0; i < num_patches; i++) {
-            if (terrain_cluster_map[i] >= 0) terrain_assigned++;
-            else terrain_unassigned++;
+            auto it = patch_clusters.find(i);
+            if (it == patch_clusters.end()) terrain_unassigned++;
+            else if (it->second.size() == 1) terrain_single++;
+            else terrain_multi++;
         }
 
         UtilityFunctions::print(String("[BSP] Terrain lump: ") +
                                 String::num_int64(l_terrain->filelen) +
                                 " bytes, " + String::num_int64(num_patches) +
                                 " patches (" + String::num_int64((int64_t)sizeof(bsp_terrain_patch_t)) +
-                                " bytes each). Clustered: " +
-                                String::num_int64(terrain_assigned) +
+                                " bytes each). Single-cluster: " +
+                                String::num_int64(terrain_single) +
+                                ", multi-cluster (duplicated): " +
+                                String::num_int64(terrain_multi) +
                                 ", unassigned (hidden): " +
-                                String::num_int64(terrain_unassigned));
+                                String::num_int64(terrain_unassigned) +
+                                ", pairs: " + String::num_int64(num_pairs));
 
         for (int p = 0; p < num_patches; p++) {
             const bsp_terrain_patch_t *patch =
@@ -1492,48 +1546,24 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             float y0 = (float)((int)patch->y << 6);
             float z0 = (float)patch->iBaseHeight;
 
-            // Use the pre-built leaf-based cluster mapping.  This mirrors
-            // R_RecursiveWorldNode which walks PVS-visible leaves and
-            // marks their owned terrain patches via visTerraPatches[].
-            int terrain_cluster = terrain_cluster_map[p];
+            // Look up all clusters that own this terrain patch.
+            auto pc_it = patch_clusters.find(p);
+            if (pc_it == patch_clusters.end()) continue;  // not in any leaf
 
-            // Skip terrain patches not referenced by any BSP leaf.
-            // In the original engine, R_MarkTerrainPatch only marks patches
-            // reachable through PVS-visible leaves.  Unreferenced patches
-            // (cluster -1) are never drawn — they're typically under
-            // buildings or inside solid geometry.
-            if (terrain_cluster < 0) continue;
+            const std::vector<int> &clusters_for_patch = pc_it->second;
 
-            // Get or create shader batch for this cluster — keyed by
-            // (shaderNum, lightmapNum) to avoid lightmap tile mismatches.
+            // Pre-compute per-patch data
             int terrain_lm = (int)patch->iLightMap;
-            int64_t tkey = make_batch_key(patch->iShader, terrain_lm);
-            ShaderBatch &batch = cluster_batches[terrain_cluster][tkey];
-            if (!batch.shader_name) {
-                batch.shader_name = sh->shader;
-            }
-            batch.lightmap_num = terrain_lm;
+
             // Corner diffuse texture coordinates
-            //   [0][0] = SW (col=0,row=0)
-            //   [0][1] = NW (col=0,row=8)
-            //   [1][0] = SE (col=8,row=0)
-            //   [1][1] = NE (col=8,row=8)
-            //
-            // The original engine (tr_terrain.c) normalises these by
-            // subtracting floor(min(corners)) so values start near zero.
-            // This prevents floating-point precision loss at large UV
-            // offsets.  texture repeat handles the integer wrap.
             float raw_s00 = patch->texCoord[0][0][0], raw_t00 = patch->texCoord[0][0][1];
             float raw_s01 = patch->texCoord[0][1][0], raw_t01 = patch->texCoord[0][1][1];
             float raw_s10 = patch->texCoord[1][0][0], raw_t10 = patch->texCoord[1][0][1];
             float raw_s11 = patch->texCoord[1][1][0], raw_t11 = patch->texCoord[1][1][1];
 
-            // Compute sMin: floor of minimum S across all four corners
             float sMin_a = (raw_s00 < raw_s01) ? raw_s00 : raw_s01;
             float sMin_b = (raw_s10 < raw_s11) ? raw_s10 : raw_s11;
             float sMin = floorf((sMin_a < sMin_b) ? sMin_a : sMin_b);
-
-            // Compute tMin: floor of minimum T across all four corners
             float tMin_a = (raw_t00 < raw_t01) ? raw_t00 : raw_t01;
             float tMin_b = (raw_t10 < raw_t11) ? raw_t10 : raw_t11;
             float tMin = floorf((tMin_a < tMin_b) ? tMin_a : tMin_b);
@@ -1543,49 +1573,68 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             float s10 = raw_s10 - sMin, t10 = raw_t10 - tMin;
             float s11 = raw_s11 - sMin, t11 = raw_t11 - tMin;
 
-            // Lightmap UV parameters
             float lm_s_norm = ((float)patch->lm_s + 0.5f) / 128.0f;
             float lm_t_norm = ((float)patch->lm_t + 0.5f) / 128.0f;
             int lmapSize = patch->lmapScale * 8 + 1;
             float lm_ext = (float)(lmapSize - 1) / 128.0f;
 
-            int base = batch.vertex_offset;
+            // Build a single ShaderBatch for this patch (NOT added to
+            // cluster_batches — terrain patches get their own MeshInstance3D
+            // nodes for individual PVS + frustum culling).
+            ShaderBatch tbatch;
+            tbatch.shader_name = sh->shader;
+            tbatch.force_opaque = true;
+            tbatch.lightmap_num = terrain_lm;
 
-            // Generate 9×9 = 81 vertices
+            int base = 0;
+            int solid_verts = 0;
+
+            // Generate 9x9 = 81 vertices.
+            // For each vertex, check if it's inside solid BSP space
+            // (inside a wall/floor brush).  In the original engine,
+            // indoor BSP leaves don't reference terrain patches, so
+            // terrain is never drawn indoors.  Since we render full
+            // patches, clamp vertices in solid space to a very low Z
+            // so the Z-buffer rejects them behind any floor surface.
             for (int row = 0; row < 9; row++) {
                 for (int col = 0; col < 9; col++) {
-                    // World-space position
                     float vx = x0 + col * 64.0f;
                     float vy = y0 + row * 64.0f;
                     float vz = z0 + patch->heightmap[row * 9 + col] * 2.0f;
 
-                    float engine_pos[3] = {vx, vy, vz};
-                    batch.positions.push_back(id_to_godot_pos(engine_pos));
+                    // Check if this vertex is in solid BSP space.
+                    // Also check a point slightly above (+16 units) to
+                    // catch vertices that sit exactly on a floor plane.
+                    float test_pt[3] = {vx, vy, vz + 16.0f};
+                    int vtx_cluster = Godot_BSP_PointCluster(test_pt);
+                    if (vtx_cluster < 0) {
+                        // Vertex is inside solid geometry — push it
+                        // far below so it can't appear above any floor.
+                        vz -= 512.0f;
+                        solid_verts++;
+                    }
 
-                    // Smooth normal from heightmap
-                    batch.normals.push_back(
+                    float engine_pos[3] = {vx, vy, vz};
+                    tbatch.positions.push_back(id_to_godot_pos(engine_pos));
+                    tbatch.normals.push_back(
                         compute_terrain_normal(patch->heightmap, col, row));
 
-                    // Bilinear interpolation of diffuse UVs from corners
                     float u_frac = col / 8.0f;
                     float v_frac = row / 8.0f;
                     float u = lerpf(lerpf(s00, s10, u_frac),
                                     lerpf(s01, s11, u_frac), v_frac);
                     float v = lerpf(lerpf(t00, t10, u_frac),
                                     lerpf(t01, t11, u_frac), v_frac);
-                    batch.uvs.push_back(Vector2(u, v));
+                    tbatch.uvs.push_back(Vector2(u, v));
 
-                    // Lightmap UVs — linear mapping within the page region
                     float lmu = lm_s_norm + u_frac * lm_ext;
                     float lmv = lm_t_norm + v_frac * lm_ext;
-                    batch.lm_uvs.push_back(Vector2(lmu, lmv));
-
-                    // Vertex colour (terrain uses white)
-                    batch.colors.push_back(Color(1.0f, 1.0f, 1.0f, 1.0f));
+                    tbatch.lm_uvs.push_back(Vector2(lmu, lmv));
+                    tbatch.colors.push_back(Color(1.0f, 1.0f, 1.0f, 1.0f));
                 }
             }
 
-            // Generate 8×8 quads = 128 triangles (256 index entries)
+            // Generate 8x8 quads = 128 triangles
             for (int row = 0; row < 8; row++) {
                 for (int col = 0; col < 8; col++) {
                     int i0 = base + row * 9 + col;
@@ -1593,19 +1642,72 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
                     int i2 = i0 + 9;
                     int i3 = i2 + 1;
 
-                    // Two triangles per quad (CCW winding for Godot)
-                    batch.indices.push_back(i0);
-                    batch.indices.push_back(i2);
-                    batch.indices.push_back(i1);
-
-                    batch.indices.push_back(i1);
-                    batch.indices.push_back(i2);
-                    batch.indices.push_back(i3);
+                    tbatch.indices.push_back(i0);
+                    tbatch.indices.push_back(i2);
+                    tbatch.indices.push_back(i1);
+                    tbatch.indices.push_back(i1);
+                    tbatch.indices.push_back(i2);
+                    tbatch.indices.push_back(i3);
                 }
             }
 
-            batch.vertex_offset += 81;
+            tbatch.vertex_offset = 81;
+
+            // Build ArrayMesh via the standard batches_to_array_mesh path
+            // (single-batch map keyed by the terrain shader+lightmap).
+            int64_t tkey = make_batch_key(patch->iShader, terrain_lm);
+            std::unordered_map<int64_t, ShaderBatch> single_batch;
+            single_batch[tkey] = std::move(tbatch);
+
+            int tl = 0, tf = 0;
+            Ref<ArrayMesh> tmesh = batches_to_array_mesh(single_batch, &tl, &tf);
+
+            if (tmesh.is_valid() && tmesh->get_surface_count() > 0) {
+                TerrainPatchMesh tpm;
+                tpm.clusters = clusters_for_patch;
+
+                MeshInstance3D *tmi = memnew(MeshInstance3D);
+                tmi->set_name(String("Terrain_") + String::num_int64(p));
+                tmi->set_mesh(tmesh);
+                tpm.mesh = tmi;
+
+                s_terrain_patches.push_back(std::move(tpm));
+
+                if (solid_verts > 0) {
+                    UtilityFunctions::print(
+                        String("[BSP] Terrain patch ") + String::num_int64(p) +
+                        ": " + String::num_int64(solid_verts) +
+                        "/81 vertices in solid BSP space, lowered");
+                }
+            }
+
             terrain_processed++;
+        }
+    }
+
+    // One-shot diagnostic: log the shader transparency classification
+    // for the first few unique terrain shader names.
+    {
+        std::set<std::string> terrain_shaders_logged;
+        for (auto &cp : cluster_batches) {
+            for (auto &bp : cp.second) {
+                const ShaderBatch &b = bp.second;
+                if (!b.force_opaque || !b.shader_name) continue;
+                std::string sn(b.shader_name);
+                if (terrain_shaders_logged.count(sn)) continue;
+                terrain_shaders_logged.insert(sn);
+                const GodotShaderProps *tsp = Godot_ShaderProps_Find(b.shader_name);
+                printf("[TERRAIN-DIAG] shader='%s' sp=%s transparency=%d sort_key=%d stages=%d force_opaque=%d cluster=%d\n",
+                       b.shader_name,
+                       tsp ? "OK" : "NULL",
+                       tsp ? (int)tsp->transparency : -1,
+                       tsp ? tsp->sort_key : -1,
+                       tsp ? tsp->stage_count : 0,
+                       (int)b.force_opaque,
+                       cp.first);
+                if (terrain_shaders_logged.size() >= 10) break;
+            }
+            if (terrain_shaders_logged.size() >= 10) break;
         }
     }
 
@@ -1627,6 +1729,21 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
                             String::num_int64((int64_t)cluster_batches.size()) +
                             " clusters, " +
                             String::num_int64(total_shader_batches) + " shader batches.");
+
+    // Diagnostic: count surfaces in the always-visible group (cluster -1)
+    {
+        auto it_av = cluster_batches.find(-1);
+        int av_batches = 0, av_verts = 0;
+        if (it_av != cluster_batches.end()) {
+            av_batches = (int)it_av->second.size();
+            for (auto &bp : it_av->second) {
+                av_verts += (int)bp.second.positions.size();
+            }
+        }
+        UtilityFunctions::print(String("[BSP-PVS] Always-visible (cluster -1): ") +
+                                String::num_int64(av_batches) + " batches, " +
+                                String::num_int64(av_verts) + " vertices.");
+    }
 
     if (cluster_batches.empty()) {
         UtilityFunctions::printerr("[BSP] No renderable surfaces found.");
@@ -1786,6 +1903,20 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
         clusters_with_geometry++;
     }
 
+    // Terrain patch nodes (individual MeshInstance3D per patch for PVS +
+    // frustum culling at patch granularity — ~13 m AABB vs hundreds for clusters)
+    if (!s_terrain_patches.empty()) {
+        Node3D *terrain_root = memnew(Node3D);
+        terrain_root->set_name("TerrainPatches");
+        root->add_child(terrain_root);
+        for (auto &tp : s_terrain_patches) {
+            terrain_root->add_child(tp.mesh);
+        }
+        UtilityFunctions::print(String("[BSP] Created ") +
+                                String::num_int64((int64_t)s_terrain_patches.size()) +
+                                " terrain patch nodes.");
+    }
+
     UtilityFunctions::print(String("[BSP] Created ") +
                             String::num_int64(clusters_with_geometry) +
                             " cluster mesh nodes. " +
@@ -1808,6 +1939,7 @@ void Godot_BSP_Unload() {
     s_fog_volumes.clear();
     s_flares.clear();
     s_cluster_meshes.clear();  // PVS cluster references (nodes owned by scene tree)
+    s_terrain_patches.clear(); // Terrain patch references (nodes owned by scene tree)
     s_pvs_num_clusters = 0;
     Godot_ShaderProps_Unload();
 }
@@ -1886,5 +2018,28 @@ godot::MeshInstance3D *Godot_BSP_GetClusterMesh(int cluster) {
     if (cluster < 0 || cluster >= (int)s_cluster_meshes.size()) return nullptr;
     return s_cluster_meshes[cluster];
 }
+
+/* ── Terrain patch accessors ── */
+
+int Godot_BSP_GetTerrainPatchCount() {
+    return (int)s_terrain_patches.size();
+}
+
+godot::MeshInstance3D *Godot_BSP_GetTerrainPatchMesh(int index) {
+    if (index < 0 || index >= (int)s_terrain_patches.size()) return nullptr;
+    return s_terrain_patches[index].mesh;
+}
+
+int Godot_BSP_GetTerrainPatchClusterCount(int index) {
+    if (index < 0 || index >= (int)s_terrain_patches.size()) return 0;
+    return (int)s_terrain_patches[index].clusters.size();
+}
+
+int Godot_BSP_GetTerrainPatchCluster(int index, int ci) {
+    if (index < 0 || index >= (int)s_terrain_patches.size()) return -1;
+    if (ci < 0 || ci >= (int)s_terrain_patches[index].clusters.size()) return -1;
+    return s_terrain_patches[index].clusters[ci];
+}
+
 /* C API functions and mark fragment implementation moved to
  * renderergl1/godot_bsp_accessors.c which reads from tr.world directly. */

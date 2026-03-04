@@ -21,6 +21,7 @@
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 
@@ -163,7 +164,7 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
 
             for (int surf = 0; surf < surfCount; surf++) {
                 int lodVertLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, mesh, surf, lod);
-                
+
                 int numVerts = 0, numTris = 0;
                 char surfName[64]   = {0};
                 char shaderName[64] = {0};
@@ -220,6 +221,16 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
                     }
                 }
 
+                /* Skip surfaces that collapsed to nothing at this LOD */
+                if (outNumVerts <= 0 || outNumTris <= 0) {
+                    free(positions);
+                    free(normals);
+                    free(texcoords);
+                    if (outIndices != indices) free(outIndices);
+                    free(indices);
+                    continue;
+                }
+
                 /* Build Godot PackedArrays with coordinate conversion */
                 PackedVector3Array godotPositions;
                 PackedVector3Array godotNormals;
@@ -262,10 +273,55 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
                  * has det = +1 (proper rotation), so winding is preserved.
                  * Q3/MOHAA model triangles are already CCW from the visible
                  * side, matching Godot's default front-face convention. */
+                bool bad_indices = false;
                 for (int t = 0; t < outNumTris; t++) {
-                    godotIndices.set(t * 3 + 0, outIndices[t * 3 + 0]);
-                    godotIndices.set(t * 3 + 1, outIndices[t * 3 + 1]);
-                    godotIndices.set(t * 3 + 2, outIndices[t * 3 + 2]);
+                    int i0 = outIndices[t * 3 + 0];
+                    int i1 = outIndices[t * 3 + 1];
+                    int i2 = outIndices[t * 3 + 2];
+                    if (i0 < 0 || i0 >= outNumVerts ||
+                        i1 < 0 || i1 >= outNumVerts ||
+                        i2 < 0 || i2 >= outNumVerts) {
+                        bad_indices = true;
+                        break;
+                    }
+                    godotIndices.set(t * 3 + 0, i0);
+                    godotIndices.set(t * 3 + 1, i1);
+                    godotIndices.set(t * 3 + 2, i2);
+                }
+
+                if (bad_indices) {
+                    free(positions); free(normals); free(texcoords);
+                    if (outIndices != indices) free(outIndices);
+                    free(indices);
+                    continue;
+                }
+
+                /* Validate arrays before passing to Godot — skip degenerate surfaces
+                 * that slipped through the earlier numVerts/numTris checks. */
+                if (godotPositions.size() <= 0 || godotIndices.size() < 3) {
+                    free(positions); free(normals); free(texcoords);
+                    if (outIndices != indices) free(outIndices);
+                    free(indices);
+                    continue;
+                }
+
+                /* Check for NaN/Inf in vertex positions — corrupt bone data
+                 * or degenerate weights can produce these, which Godot will
+                 * reject or render as garbage. */
+                bool has_bad_float = false;
+                for (int v = 0; v < godotPositions.size(); v++) {
+                    Vector3 p = godotPositions[v];
+                    if (std::isnan(p.x) || std::isnan(p.y) || std::isnan(p.z) ||
+                        std::isinf(p.x) || std::isinf(p.y) || std::isinf(p.z)) {
+                        has_bad_float = true;
+                        break;
+                    }
+                }
+                if (has_bad_float) {
+                    free(positions); free(normals); free(texcoords);
+                    if (outIndices != indices) free(outIndices);
+                    free(indices);
+                    continue;
                 }
 
                 /* Build ArrayMesh surface */
@@ -276,16 +332,32 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
                 arrays[Mesh::ARRAY_TEX_UV] = godotUVs;
                 arrays[Mesh::ARRAY_INDEX]  = godotIndices;
 
+                /* Track surface count to detect if Godot rejects the data.
+                 * add_surface_from_arrays returns void — we must compare
+                 * the surface count before/after to know if it succeeded. */
+                int scBefore = arrayMesh->get_surface_count();
                 arrayMesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
 
-                /* Track surface shader info (only needed once, from LOD 0) */
-                if (lod == 0) {
-                    SurfaceInfo sinfo;
-                    sinfo.shader_name = String(shaderName);
-                    model.surfaces.push_back(sinfo);
+                if (arrayMesh->get_surface_count() > scBefore) {
+                    /* Surface was accepted — track shader info (LOD 0 only). */
+                    if (lod == 0) {
+                        SurfaceInfo sinfo;
+                        sinfo.shader_name = String(shaderName);
+                        model.surfaces.push_back(sinfo);
 
-                    totalVerts += numVerts;
-                    totalTris  += numTris;
+                        totalVerts += numVerts;
+                        totalTris  += numTris;
+                    }
+                } else {
+                    /* Godot rejected the surface — log diagnostics. */
+                    const char *tikiName = Godot_Skel_GetName(tikiPtr);
+                    UtilityFunctions::print(
+                        String("[SKEL] Surface rejected: ") + String(tikiName ? tikiName : "?") +
+                        " mesh=" + String::num_int64(mesh) + " surf=" + String::num_int64(surf) +
+                        " verts=" + String::num_int64(godotPositions.size()) +
+                        " idx=" + String::num_int64(godotIndices.size()) +
+                        " numV=" + String::num_int64(outNumVerts) +
+                        " numT=" + String::num_int64(outNumTris));
                 }
 
                 free(positions);
@@ -389,7 +461,7 @@ int Godot_Skel_GetLodVertexLimit(void *tikiPtr, int meshIndex, int surfIndex, in
     if (lod_cutoff <= 0) {
         return -1; // No restriction
     }
-    
+
     // Evaluate against pCollapseIndex to find the actual vertex limit
     int numVerts = 0, numTris = 0;
     if (!Godot_Skel_GetSurfaceInfo(tikiPtr, meshIndex, surfIndex, &numVerts, &numTris, nullptr, 0, nullptr, 0)) {

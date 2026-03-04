@@ -126,11 +126,23 @@ int Godot_BSP_GetSurfaceCluster(int surfaceIndex);
 /* Build a complete surface→cluster mapping in one pass (batch API). */
 void Godot_BSP_BuildSurfaceClusterMap(int *surfaceClusterOut, int numSurfaces);
 
+/* Build flat array of (surfaceIdx, cluster) pairs for ALL surface
+ * ↔ cluster relationships. Multi-cluster surfaces produce multiple
+ * entries. Returns the number of pairs written.
+ * Each pair is two consecutive ints: [surfaceIdx, cluster]. */
+int Godot_BSP_BuildSurfaceClusterPairs(int *pairsOut, int maxPairs, int numSurfaces);
+
 /* Build terrain patch → cluster mapping from leaf ownership data.
  * Uses LUMP_TERRAININDEXES indirection (visTerraPatches) to map each
  * terrain patch to the first BSP cluster that references it.  Patches
  * not referenced by any leaf get cluster -1 (always visible). */
 void Godot_BSP_BuildTerrainClusterMap(int *patchClusterOut, int numPatches);
+
+/* Build flat array of (patchIdx, cluster) pairs for ALL terrain patch
+ * ↔ cluster relationships.  Multi-cluster patches produce multiple
+ * entries.  Returns the number of pairs written.  Each pair is two
+ * consecutive ints: [patchIdx, cluster].  maxPairs is the capacity. */
+int Godot_BSP_BuildTerrainClusterPairs(int *pairsOut, int maxPairs, int numPatches);
 
 /* Build static model → cluster mapping from leaf ownership data.
  * Uses LUMP_STATICMODELINDEXES indirection (visStaticModels) to map

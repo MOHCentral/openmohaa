@@ -102,6 +102,13 @@ const BSPFlare *Godot_BSP_GetFlare(int index);
 namespace godot { class MeshInstance3D; }
 int Godot_BSP_GetPVSNumClusters();
 godot::MeshInstance3D *Godot_BSP_GetClusterMesh(int cluster);
+
+/* Terrain patch accessors — individual MeshInstance3D per patch for
+ * fine-grained PVS + frustum culling. */
+int Godot_BSP_GetTerrainPatchCount();
+godot::MeshInstance3D *Godot_BSP_GetTerrainPatchMesh(int index);
+int Godot_BSP_GetTerrainPatchClusterCount(int index);
+int Godot_BSP_GetTerrainPatchCluster(int index, int ci);
 #endif
 
 #endif // GODOT_BSP_MESH_H

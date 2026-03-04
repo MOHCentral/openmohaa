@@ -501,6 +501,9 @@ private:
     float sun_flare_blend_alpha = 0.0f;  // Current fullscreen blend alpha
     double sun_flare_last_visible_time = 0.0; // Time when flare was last visible
 
+    // Last applied r_fullscreen value (detects immediate console changes)
+    int cached_r_fullscreen = -1;
+
 protected:
     static void _bind_methods();
 

@@ -296,26 +296,35 @@ static int gr_vidRestart_fullscreen = 0;    /* r_fullscreen value at restart tim
 static int gr_vidRestart_width  = 0;        /* resolved window width */
 static int gr_vidRestart_height = 0;        /* resolved window height */
 
-/* Phase 149: Video mode table matching the original renderer (tr_init.c) */
+/* Video mode table — expanded with widescreen and ultrawide resolutions.
+ * Modes 0-11 match the original renderer (tr_init.c) for backwards
+ * compatibility with saved r_mode values.  Modes 12+ add common
+ * modern resolutions including 16:9, 16:10, and 21:9 aspect ratios. */
 typedef struct {
     int width, height;
 } gr_vidmode_t;
 
 static const gr_vidmode_t gr_vidModes[] = {
-    {  320,  240 },  /* Mode  0 */
-    {  400,  300 },  /* Mode  1 */
-    {  512,  384 },  /* Mode  2 */
-    {  640,  480 },  /* Mode  3 */
-    {  800,  600 },  /* Mode  4 */
-    {  960,  720 },  /* Mode  5 */
-    { 1024,  768 },  /* Mode  6 */
-    { 1152,  864 },  /* Mode  7 */
-    { 1280, 1024 },  /* Mode  8 */
-    { 1600, 1200 },  /* Mode  9 */
-    { 2048, 1536 },  /* Mode 10 */
-    {  856,  480 },  /* Mode 11 (wide) */
+    /* Original modes 0-11 (unchanged for saved-config compat) */
+    {  320,  240 },  /* Mode  0: 4:3   */
+    {  400,  300 },  /* Mode  1: 4:3   */
+    {  512,  384 },  /* Mode  2: 4:3   */
+    {  640,  480 },  /* Mode  3: 4:3   */
+    {  800,  600 },  /* Mode  4: 4:3   */
+    {  960,  720 },  /* Mode  5: 4:3   */
+    { 1024,  768 },  /* Mode  6: 4:3   */
+    { 1152,  864 },  /* Mode  7: 4:3   */
+    { 1280, 1024 },  /* Mode  8: 5:4   */
+    { 1600, 1200 },  /* Mode  9: 4:3   */
+    { 2048, 1536 },  /* Mode 10: 4:3   */
+    {  856,  480 },  /* Mode 11: ~16:9 (legacy wide) */
 };
 static const int gr_numVidModes = (int)( sizeof(gr_vidModes) / sizeof(gr_vidModes[0]) );
+
+/* Desktop resolution — set by MoHAARunner before Com_Init so
+ * GR_BeginRegistration can resolve r_mode -2 correctly. */
+static int gr_desktopWidth  = 1920;
+static int gr_desktopHeight = 1080;
 
 /* -------------------------------------------------------------------
  *  Camera bridge — captured refdef_t data (Phase 7a)
@@ -639,9 +648,6 @@ static void GR_BeginRegistration( glconfig_t *config )
 
     memset( config, 0, sizeof( *config ) );
 
-    config->vidWidth          = 640;
-    config->vidHeight         = 480;
-    config->windowAspect      = 640.0f / 480.0f;
     config->colorBits         = 32;
     config->depthBits         = 24;
     config->stencilBits       = 8;
@@ -651,9 +657,12 @@ static void GR_BeginRegistration( glconfig_t *config )
     config->textureEnvAddAvailable = qtrue;
     config->maxTextureSize    = 4096;
 
-    /* Phase 149: Read video cvars and signal vid_restart to MoHAARunner.
-     * The UI virtual resolution stays 640×480, but we resolve the desired
-     * window resolution + fullscreen state for the Godot window. */
+    /* Read video cvars and resolve actual resolution for glConfig.
+     * This sets config->vidWidth/vidHeight to the REAL window resolution
+     * (matching OPM/ioquake3 behaviour).  The UI framework reads
+     * cls.glconfig.vidWidth/vidHeight via CL_FillUIDef() and positions
+     * all widgets in that coordinate space.  SCR_AdjustFrom640() scales
+     * HUD elements from 640×480 virtual space to this real resolution. */
     {
         cvar_t *r_mode_cv       = ri.Cvar_Get( "r_mode",         "-2", 0 );
         cvar_t *r_fullscreen_cv = ri.Cvar_Get( "r_fullscreen",   "0",  0 );
@@ -684,19 +693,26 @@ static void GR_BeginRegistration( glconfig_t *config )
 
         int mode = r_mode_cv ? r_mode_cv->integer : -2;
         int fs   = r_fullscreen_cv ? r_fullscreen_cv->integer : 0;
-        int w = 0, h = 0;
+        int w = 640, h = 480;  /* fallback */
 
-        if ( mode >= 0 && mode < gr_numVidModes ) {
-            w = gr_vidModes[mode].width;
-            h = gr_vidModes[mode].height;
-        } else if ( mode == -1 ) {
-            /* Custom mode */
-            w = r_customw_cv ? r_customw_cv->integer : 1280;
-            h = r_customh_cv ? r_customh_cv->integer : 720;
-        }
-        /* mode -2 = "use desktop resolution" — leave w/h = 0 to signal no resize */
+        /* Under Godot there is no physical display-mode switch.
+         * The viewport is always at the window's real resolution.
+         * gr_desktopWidth/Height is kept in sync with the actual Godot
+         * viewport each frame (before Com_Frame), so glConfig always
+         * matches the real viewport.  r_mode is irrelevant under Godot;
+         * resolution selection in MOHAA's UI becomes a no-op. */
+        (void)mode;
+        (void)fs;
+        w = gr_desktopWidth;
+        h = gr_desktopHeight;
 
-        config->isFullscreen      = (qboolean)( fs != 0 );
+        /* Set glConfig to match the actual Godot viewport resolution.
+         * The engine UI framework, SCR_AdjustFrom640(), and all draw
+         * code use these values for coordinate scaling and widget layout. */
+        config->vidWidth     = w;
+        config->vidHeight    = h;
+        config->windowAspect = (float)w / (float)h;
+        config->isFullscreen = (qboolean)( fs != 0 );
 
         gr_vidRestart_fullscreen = fs;
         gr_vidRestart_width      = w;
@@ -3232,6 +3248,18 @@ void Godot_Renderer_GetVidSize( int *w, int *h )
     if ( h ) *h = stored_glconfig.vidHeight;
 }
 
+/* Sync stored_glconfig resolution with the actual Godot viewport.
+ * Called by MoHAARunner each frame so that GR_Transform2D's Y-flip
+ * and update_ui_transform's scaling always match the real viewport. */
+void Godot_Renderer_SyncVidSize( int w, int h )
+{
+    if ( w > 0 && h > 0 ) {
+        stored_glconfig.vidWidth  = w;
+        stored_glconfig.vidHeight = h;
+        stored_glconfig.windowAspect = (float)w / (float)h;
+    }
+}
+
 void Godot_Renderer_Get2DWindow( float *left, float *right,
                                   float *top, float *bottom,
                                   int *vp_x, int *vp_y,
@@ -3501,6 +3529,21 @@ int Godot_Renderer_ConsumeVidRestart( int *out_fullscreen, int *out_width, int *
     if ( out_height )     *out_height     = gr_vidRestart_height;
     return 1;
 }
+
+/* Set desktop resolution from Godot (called by MoHAARunner before Com_Init
+ * and before vid_restart so r_mode -2 resolves correctly). */
+void Godot_Renderer_SetDesktopResolution( int w, int h )
+{
+    if ( w > 0 && h > 0 ) {
+        gr_desktopWidth  = w;
+        gr_desktopHeight = h;
+    }
+}
+
+/* Mode table query — REMOVED.
+ * Under Godot, r_mode is irrelevant (viewport resolution is fixed
+ * to the Godot window).  The extended gr_vidModes[] table is kept
+ * for historical reference only. */
 
 /* Return animation data for a HUD model entity */
 int Godot_Renderer_GetHudModelAnim( int index,

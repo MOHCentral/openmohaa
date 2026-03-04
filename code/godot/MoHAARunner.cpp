@@ -86,6 +86,12 @@ extern "C" {
                                    int *out_kills, int *out_deaths,
                                    int *out_ping);
 
+    // Engine image loader — from renderergl1/tr_image.c
+    // Uses R_LoadImage internally: tries JPG before TGA, handles RLE,
+    // correct BGRA→RGBA conversion, all MOHAA TGA variants.
+    int  R_LoadRawImage(const char *name, unsigned char **pic, int *width, int *height);
+    void R_FreeRawImage(unsigned char *pic);
+
     // VFS accessors (Task 4.1) — from godot_vfs_accessors.c
     long Godot_VFS_ReadFile(const char *qpath, void **out_buffer);
     long Godot_VFS_FileOpenRead(const char *qpath, int *out_handle);
@@ -313,6 +319,15 @@ extern "C" {
 
     // Phase 149: Vid_restart detection + settings accessors
     int   Godot_Renderer_ConsumeVidRestart(int *out_fullscreen, int *out_width, int *out_height);
+    void  Godot_Renderer_SetDesktopResolution(int w, int h);
+    void  Godot_Renderer_SyncVidSize(int w, int h);
+
+    // Client accessor: sync cls.glconfig with actual Godot viewport
+    void  Godot_Client_SyncGlConfigVidSize(int w, int h);
+    void  Godot_Client_RefreshUIDef(void);
+
+    // Cvar event bridge (event-driven fullscreen updates)
+    int   Godot_ConsumeFullscreenCvarChanged(int *out_fullscreen);
 
     // Phase 26: Shader remap query — from godot_renderer.c
     const char *Godot_Renderer_GetShaderRemap(const char *shaderName);
@@ -781,6 +796,7 @@ void MoHAARunner::clear_godot_caches_for_game_switch(int target_game) {
         bsp_map_node = nullptr;
         static_model_root = nullptr;
     }
+    static_model_pvs.clear();
     loaded_bsp_name = "";
 
     // Model/mesh/material caches — all stale after FS_Restart
@@ -1123,6 +1139,7 @@ void MoHAARunner::check_world_load() {
             bsp_map_node->queue_free();
             bsp_map_node = nullptr;
             static_model_root = nullptr;  // child of bsp_map_node, freed with it
+            static_model_pvs.clear();
             loaded_bsp_name = "";
             GodotSkelModelCache::get().clear();  // Invalidate model cache
             skel_mesh_cache.clear();              // Phase 60: Clear skinned mesh cache
@@ -1367,23 +1384,19 @@ void MoHAARunner::update_pvs_visibility() {
     if (new_cluster == pvs_current_cluster) return;
     pvs_current_cluster = new_cluster;
 
-    // Camera position in Godot coordinates for distance checks
-    Vector3 cam_pos = id_to_godot_position(origin[0], origin[1], origin[2]);
-
-    // Distance threshold: always show clusters within this radius of the camera
-    // regardless of PVS, to compensate for cluster boundary edge cases where
-    // the camera is right on a portal plane and PVS misses immediate neighbours.
-    // Keep this small (64 id units ~ 1.6 m) so outdoor clusters are NOT
-    // force-shown through building walls.  The original engine relies on
-    // correct PVS and does not need this override at all.
-    static constexpr float PVS_FORCE_VISIBLE_DISTANCE = 64.0f * MOHAA_UNIT_SCALE;
-    static constexpr float PVS_FORCE_VISIBLE_DIST_SQ = PVS_FORCE_VISIBLE_DISTANCE * PVS_FORCE_VISIBLE_DISTANCE;
-
     // If camera is outside the world (cluster -1), show everything
     if (new_cluster < 0) {
         for (int c = 0; c < num_clusters; c++) {
             MeshInstance3D *mi = Godot_BSP_GetClusterMesh(c);
             if (mi) mi->set_visible(true);
+        }
+        for (const auto &sm : static_model_pvs) {
+            if (sm.mesh) sm.mesh->set_visible(true);
+        }
+        int tp_count = Godot_BSP_GetTerrainPatchCount();
+        for (int i = 0; i < tp_count; i++) {
+            MeshInstance3D *tmi = Godot_BSP_GetTerrainPatchMesh(i);
+            if (tmi) tmi->set_visible(true);
         }
         return;
     }
@@ -1391,42 +1404,62 @@ void MoHAARunner::update_pvs_visibility() {
     // Toggle per-cluster visibility based on PVS + distance override
     int visible_count = 0;
     int hidden_count = 0;
-    int forced_count = 0;
     for (int c = 0; c < num_clusters; c++) {
         MeshInstance3D *mi = Godot_BSP_GetClusterMesh(c);
         if (!mi) continue;
 
         bool vis = (Godot_BSP_ClusterVisible(new_cluster, c) != 0);
 
-        // Distance override: force-show clusters whose AABB is near the camera.
-        // This prevents blue gaps from incomplete PVS data at cluster boundaries.
-        if (!vis) {
-            AABB aabb = mi->get_global_transform().xform(mi->get_aabb());
-            // Closest point on AABB to camera
-            Vector3 closest;
-            closest.x = CLAMP(cam_pos.x, aabb.position.x, aabb.position.x + aabb.size.x);
-            closest.y = CLAMP(cam_pos.y, aabb.position.y, aabb.position.y + aabb.size.y);
-            closest.z = CLAMP(cam_pos.z, aabb.position.z, aabb.position.z + aabb.size.z);
-            float dist_sq = (cam_pos - closest).length_squared();
-            if (dist_sq < PVS_FORCE_VISIBLE_DIST_SQ) {
-                vis = true;
-                forced_count++;
-            }
-        }
-
         mi->set_visible(vis);
         if (vis) visible_count++;
         else     hidden_count++;
+    }
+
+    // Toggle static model visibility based on their PVS cluster
+    int sm_visible = 0, sm_hidden = 0;
+    for (const auto &sm : static_model_pvs) {
+        if (!sm.mesh) continue;
+        if (sm.cluster < 0) {
+            sm.mesh->set_visible(true);  // no cluster = always visible
+            sm_visible++;
+        } else {
+            bool vis = (Godot_BSP_ClusterVisible(new_cluster, sm.cluster) != 0);
+            sm.mesh->set_visible(vis);
+            if (vis) sm_visible++;
+            else     sm_hidden++;
+        }
+    }
+
+    // Toggle terrain patch visibility — visible if ANY owning cluster is PVS-visible
+    int tp_count = Godot_BSP_GetTerrainPatchCount();
+    int tp_visible = 0, tp_hidden = 0;
+    for (int i = 0; i < tp_count; i++) {
+        MeshInstance3D *tmi = Godot_BSP_GetTerrainPatchMesh(i);
+        if (!tmi) continue;
+        int nc = Godot_BSP_GetTerrainPatchClusterCount(i);
+        bool vis = false;
+        for (int ci = 0; ci < nc; ci++) {
+            int tc = Godot_BSP_GetTerrainPatchCluster(i, ci);
+            if (tc >= 0 && Godot_BSP_ClusterVisible(new_cluster, tc) != 0) {
+                vis = true;
+                break;
+            }
+        }
+        tmi->set_visible(vis);
+        if (vis) tp_visible++;
+        else     tp_hidden++;
     }
 
     if (pvs_log_count < 5) {
         UtilityFunctions::print(String("[PVS] Cluster ") +
                                 String::num_int64(new_cluster) +
                                 ": " + String::num_int64(visible_count) +
-                                " visible (" + String::num_int64(forced_count) +
-                                " forced), " + String::num_int64(hidden_count) +
+                                " visible, " + String::num_int64(hidden_count) +
                                 " hidden of " + String::num_int64(num_clusters) +
-                                " total.");
+                                " total. Static models: " +
+                                String::num_int64(sm_visible) +
+                                " visible, " + String::num_int64(sm_hidden) +
+                                " hidden.");
         pvs_log_count++;
     }
 }
@@ -1621,6 +1654,7 @@ void MoHAARunner::load_static_models() {
         static_model_root->queue_free();
         static_model_root = nullptr;
     }
+    static_model_pvs.clear();
 
     static_model_root = memnew(Node3D);
     static_model_root->set_name("StaticModels");
@@ -1729,6 +1763,14 @@ void MoHAARunner::load_static_models() {
                 }
 
                 arrays[Mesh::ARRAY_COLOR] = colors;
+
+                // Validate arrays before passing to Godot
+                PackedInt32Array idx = arrays[Mesh::ARRAY_INDEX];
+                if (numVerts <= 0 || idx.size() < 3) {
+                    vtxOffset += numVerts;
+                    continue;
+                }
+
                 instanceMesh->add_surface_from_arrays(
                     Mesh::PRIMITIVE_TRIANGLES, arrays);
                 vtxOffset += numVerts;
@@ -1742,7 +1784,11 @@ void MoHAARunner::load_static_models() {
         // Mirrors R_InitStaticModels: register each surface shader via
         // RegisterShader, then use the returned handle for texture lookup
         // through the standard get_shader_texture pipeline.
-        for (int s = 0; s < (int)cached->surfaces.size(); s++) {
+        Ref<Mesh> meshRef = mi->get_mesh();
+        int matCount = meshRef.is_valid() ? meshRef->get_surface_count() : 0;
+        if (matCount > (int)cached->surfaces.size())
+            matCount = (int)cached->surfaces.size();
+        for (int s = 0; s < matCount; s++) {
             Ref<StandardMaterial3D> mat;
             mat.instantiate();
             // MOHAA default is CT_FRONT_SIDED (back-face cull).
@@ -1931,12 +1977,24 @@ void MoHAARunner::load_static_models() {
         mi->set_global_transform(Transform3D(basis, pos));
 
         static_model_root->add_child(mi);
+
+        // Record PVS cluster for this static model
+        StaticModelPVS pvs_entry;
+        pvs_entry.mesh = mi;
+        pvs_entry.cluster = Godot_BSP_GetStaticModelCluster(i);
+        static_model_pvs.push_back(pvs_entry);
+
         placed++;
     }
 
+    int sm_pvs_assigned = 0;
+    for (const auto &sm : static_model_pvs) {
+        if (sm.cluster >= 0) sm_pvs_assigned++;
+    }
     UtilityFunctions::print(String("[MoHAA] Static models: ") +
                             String::num_int64(placed) + " placed, " +
-                            String::num_int64(failed) + " failed.");
+                            String::num_int64(failed) + " failed, " +
+                            String::num_int64(sm_pvs_assigned) + " PVS-culled.");
 }
 
 // ──────────────────────────────────────────────
@@ -2465,6 +2523,14 @@ void MoHAARunner::load_sun_flare() {
         sun_flare_control = memnew(Control);
         sun_flare_control->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
         sun_flare_control->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+        // Flare sprites use additive blend (GL_ONE GL_ONE) in the original
+        // renderer — without this, the rectangular texture edges become
+        // visible as hard lines against the sky.
+        if (add_canvas_material.is_null()) {
+            add_canvas_material.instantiate();
+            add_canvas_material->set_blend_mode(CanvasItemMaterial::BLEND_MODE_ADD);
+        }
+        sun_flare_control->set_material(add_canvas_material);
         sun_flare_canvas->add_child(sun_flare_control);
     }
 }
@@ -3436,6 +3502,16 @@ void MoHAARunner::update_entities() {
                                     }
                                 }
 
+                                // Skip surfaces that collapsed to nothing at this LOD
+                                if (outNumVerts <= 0 || outNumTris <= 0) {
+                                    ::free(positions);
+                                    ::free(normals);
+                                    ::free(texcoords);
+                                    if (outIndices != indices) ::free(outIndices);
+                                    ::free(indices);
+                                    continue;
+                                }
+
                                 // Build Godot arrays with coord conversion
                                 PackedVector3Array gPos, gNrm;
                                 PackedVector2Array gUVs;
@@ -3478,8 +3554,11 @@ void MoHAARunner::update_entities() {
                                 arrays[Mesh::ARRAY_NORMAL] = gNrm;
                                 arrays[Mesh::ARRAY_TEX_UV] = gUVs;
                                 arrays[Mesh::ARRAY_INDEX]  = gIdx;
-                                skinned_mesh->add_surface_from_arrays(
-                                    Mesh::PRIMITIVE_TRIANGLES, arrays);
+
+                                if (gPos.size() > 0 && gIdx.size() >= 3) {
+                                    skinned_mesh->add_surface_from_arrays(
+                                        Mesh::PRIMITIVE_TRIANGLES, arrays);
+                                }
 
                                 ::free(positions);
                                 ::free(normals);
@@ -4155,7 +4234,9 @@ void MoHAARunner::update_polys() {
             mesh.instantiate();
             mi->set_mesh(mesh);
         }
-        mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+        if (gPos.size() > 0 && gIdx.size() >= 3) {
+            mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+        }
 
         // Material: cached per (shader_handle, blend_type) — avoids per-frame
         // instantiation, property resets, and shader/texture lookups.
@@ -4402,7 +4483,9 @@ void MoHAARunner::update_swipe_effects() {
         swipe_mesh->set_mesh(smesh);
     }
     smesh->clear_surfaces();
-    smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+    if (gPos.size() > 0 && gIdx.size() >= 3) {
+        smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+    }
 
     // Material: alpha-blended, unshaded, double-sided
     Ref<StandardMaterial3D> mat;
@@ -4533,7 +4616,9 @@ void MoHAARunner::update_terrain_marks() {
 
         Ref<ArrayMesh> tmesh;
         tmesh.instantiate();
-        tmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+        if (gPos.size() > 0 && gIdx.size() >= 3) {
+            tmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+        }
         mi->set_mesh(tmesh);
 
         // Material: cached per (shader_handle, blend_type) — avoids per-frame
@@ -5098,7 +5183,6 @@ void MoHAARunner::update_shader_animations(double delta) {
 Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
     static std::unordered_map<int, bool> logged_missing;
     static std::unordered_map<int, bool> logged_empty_name;
-    static std::unordered_map<int, bool> logged_serverback_ok;
 
     // Look up shader name (Phase 52: apply shader remap if active)
     const char *raw_name = Godot_Renderer_GetShaderName(shader_handle);
@@ -5112,7 +5196,6 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
         return Ref<ImageTexture>();
     }
 
-    const bool is_serverback = (strstr(name, "serverback") != nullptr);
     const char *lookup_name = name;
     const GodotShaderProps *sp = Godot_ShaderProps_Find(name);
 
@@ -5136,7 +5219,82 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
         }
         if (out_has_alpha) *out_has_alpha = false;
 
-        const char *extensions[] = { "", ".tga", ".jpg", ".png", NULL };
+        // Helper: post-process a loaded Godot Image (dead-alpha fix, alpha detection, mipmaps)
+        auto finalise_image = [&](Ref<Image> img, const char *loaded_path) -> Ref<ImageTexture> {
+            if (!img.is_valid() || img->is_empty()) return Ref<ImageTexture>();
+
+            // Strip useless alpha: all-zero or all-255 → convert to RGB8.
+            // Matches the real renderer's Upload32 which selects GL_RGB
+            // (no alpha) when every alpha byte is 0xFF, and handles the
+            // degenerate all-zero case (broken TGA with empty alpha).
+            if (img->get_format() == Image::FORMAT_RGBA8) {
+                PackedByteArray imgdata = img->get_data();
+                int pixel_count = img->get_width() * img->get_height();
+                const uint8_t *pix = imgdata.ptr();
+                bool all_zero = true, all_opaque = true;
+                for (int p = 0; p < pixel_count; p++) {
+                    uint8_t a = pix[p * 4 + 3];
+                    if (a > 0) all_zero = false;
+                    if (a < 255) all_opaque = false;
+                    if (!all_zero && !all_opaque) break;
+                }
+                if (all_zero || all_opaque) {
+                    img->convert(Image::FORMAT_RGB8);
+                }
+            }
+
+            if (out_has_alpha) {
+                *out_has_alpha = (img->detect_alpha() != Image::ALPHA_NONE);
+            }
+            img->generate_mipmaps();
+            return ImageTexture::create_from_image(img);
+        };
+
+        // ── Primary path: engine's R_LoadRawImage ──
+        // Uses the real renderer's image pipeline: tries JPG before TGA
+        // (matching r_loadjpg behaviour), handles RLE compression, correct
+        // BGRA→RGBA byte swapping, and bottom-up flipping.  This avoids
+        // Godot's TGA parser which misinterprets some MOHAA TGA files.
+        {
+            unsigned char *raw_pic = nullptr;
+            int raw_w = 0, raw_h = 0;
+            if (R_LoadRawImage(qpath, &raw_pic, &raw_w, &raw_h) && raw_pic && raw_w > 0 && raw_h > 0) {
+                int raw_size = raw_w * raw_h * 4;
+
+                // One-shot diagnostic: compute alpha stats before finalise_image
+                {
+                    static std::unordered_set<std::string> logged_raw;
+                    if (logged_raw.find(qpath) == logged_raw.end()) {
+                        logged_raw.insert(qpath);
+                        uint8_t min_a = 255, max_a = 0;
+                        for (int p = 0; p < raw_w * raw_h; p++) {
+                            uint8_t a = raw_pic[p * 4 + 3];
+                            if (a < min_a) min_a = a;
+                            if (a > max_a) max_a = a;
+                        }
+                        UtilityFunctions::print(String("[TEX-LOAD] R_LoadRawImage OK: '") + String(qpath) +
+                            String("' ") + String::num_int64(raw_w) + String("x") + String::num_int64(raw_h) +
+                            String(" alpha_min=") + String::num_int64(min_a) +
+                            String(" alpha_max=") + String::num_int64(max_a));
+                    }
+                }
+
+                PackedByteArray pba;
+                pba.resize(raw_size);
+                memcpy(pba.ptrw(), raw_pic, raw_size);
+                R_FreeRawImage(raw_pic);
+
+                Ref<Image> img = Image::create_from_data(raw_w, raw_h, false, Image::FORMAT_RGBA8, pba);
+                Ref<ImageTexture> tex = finalise_image(img, qpath);
+                if (tex.is_valid()) return tex;
+            }
+        }
+
+        // ── Fallback: VFS + Godot decoders (for extensionless paths, etc.) ──
+        // Try .jpg before .tga to match the engine's r_loadjpg=1 preference:
+        // JPG has no alpha channel, avoiding unwanted transparency from
+        // 32-bit TGA files where the alpha is irrelevant (e.g. serverback).
+        const char *extensions[] = { "", ".jpg", ".tga", ".png", NULL };
         for (int ext_i = 0; extensions[ext_i]; ext_i++) {
             char path[256];
             snprintf(path, sizeof(path), "%s%s", qpath, extensions[ext_i]);
@@ -5144,9 +5302,7 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             void *buf = NULL;
             long len = Godot_VFS_ReadFile(path, &buf);
             if (len <= 0 || !buf) {
-                if (buf) {
-                    Godot_VFS_FreeFile(buf);
-                }
+                if (buf) Godot_VFS_FreeFile(buf);
                 continue;
             }
 
@@ -5159,111 +5315,19 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
             img.instantiate();
             Error err;
 
-            // Detect format by magic bytes
             const uint8_t *data = pba.ptr();
             if (len > 2 && data[0] == 0xFF && data[1] == 0xD8) {
                 err = img->load_jpg_from_buffer(pba);
             } else if (len > 3 && data[0] == 0x89 && data[1] == 'P') {
                 err = img->load_png_from_buffer(pba);
             } else {
-                // Try TGA first, then JPEG
                 err = img->load_tga_from_buffer(pba);
-                if (err != OK) {
-                    err = img->load_jpg_from_buffer(pba);
-                }
+                if (err != OK) err = img->load_jpg_from_buffer(pba);
             }
 
             if (err == OK && !img->is_empty()) {
-                // Fix dead alpha: 32-bit TGA files sometimes have an unused
-                // alpha channel filled with zeros.  The real renderer
-                // ignores texture alpha for opaque shaders (GL_BLEND is
-                // disabled via GLS_DEFAULT stateBits), but our Godot canvas
-                // always blends.  Convert all-zero-alpha RGBA8 to RGB8 so
-                // the texture renders fully opaque.
-                if (img->get_format() == Image::FORMAT_RGBA8) {
-                    PackedByteArray imgdata = img->get_data();
-                    int pixel_count = img->get_width() * img->get_height();
-                    const uint8_t *pix = imgdata.ptr();
-                    bool all_zero_alpha = true;
-                    for (int p = 0; p < pixel_count && all_zero_alpha; p++) {
-                        if (pix[p * 4 + 3] > 0) {
-                            all_zero_alpha = false;
-                        }
-                    }
-                    if (all_zero_alpha) {
-                        img->convert(Image::FORMAT_RGB8);
-                    }
-                }
-                if (out_has_alpha) {
-                    *out_has_alpha = (img->detect_alpha() != Image::ALPHA_NONE);
-                }
-                // Diagnostic: log texture format/alpha/orientation for levelshot shaders
-                if (name && (strstr(name, "mohdm") || strstr(name, "levelshot"))) {
-                    String pixel_info;
-                    if (img->get_format() == Image::FORMAT_RGBA8 && img->get_width() > 0 && img->get_height() > 0) {
-                        int w = img->get_width(), h = img->get_height();
-                        Color tl = img->get_pixel(0, 0);
-                        Color bl = img->get_pixel(0, h - 1);
-                        Color cc = img->get_pixel(w / 2, h / 2);
-                        Color q1 = img->get_pixel(w / 4, h / 4);
-                        Color q3 = img->get_pixel(3 * w / 4, 3 * h / 4);
-                        pixel_info = String(" px(0,0)=A") + String::num(tl.a * 255, 0) +
-                            String(" px(0,bot)=A") + String::num(bl.a * 255, 0) +
-                            String(" px(center)=R") + String::num(cc.r * 255, 0) +
-                            String(",G") + String::num(cc.g * 255, 0) +
-                            String(",B") + String::num(cc.b * 255, 0) +
-                            String(",A") + String::num(cc.a * 255, 0) +
-                            String(" px(q1)=A") + String::num(q1.a * 255, 0) +
-                            String(" px(q3)=A") + String::num(q3.a * 255, 0);
-                        // Compute alpha statistics
-                        PackedByteArray imgdata = img->get_data();
-                        const uint8_t *pix = imgdata.ptr();
-                        int pc = w * h;
-                        int a_min = 255, a_max = 0;
-                        long a_sum = 0;
-                        for (int p = 0; p < pc; p++) {
-                            int a = pix[p * 4 + 3];
-                            if (a < a_min) a_min = a;
-                            if (a > a_max) a_max = a;
-                            a_sum += a;
-                        }
-                        pixel_info += String(" alpha_min=") + String::num_int64(a_min) +
-                            String(" alpha_max=") + String::num_int64(a_max) +
-                            String(" alpha_avg=") + String::num(a_sum / (float)pc, 1);
-                    }
-                    UtilityFunctions::print(
-                        String("[MoHAA][TEX-DIAG] shader='") + String(name) +
-                        String("' path='") + String(path) +
-                        String("' format=") + String::num_int64(img->get_format()) +
-                        String(" size=") + String::num_int64(img->get_width()) +
-                        String("x") + String::num_int64(img->get_height()) +
-                        String(" detect_alpha=") + String::num_int64(img->detect_alpha()) +
-                        String(" has_alpha=") + String(*out_has_alpha ? "true" : "false") +
-                        pixel_info);
-                }
-                img->generate_mipmaps();
-                Ref<ImageTexture> tex = ImageTexture::create_from_image(img);
-                if (is_serverback && logged_serverback_ok.find(shader_handle) == logged_serverback_ok.end()) {
-                    logged_serverback_ok[shader_handle] = true;
-                    UtilityFunctions::print(String("[MoHAA][2D] serverback loaded #") +
-                                            String::num_int64(shader_handle) +
-                                            String(" shader='") + String(name) +
-                                            String("' path='") + String(path) +
-                                            String("' size=") +
-                                            String::num_int64(img->get_width()) + String("x") +
-                                            String::num_int64(img->get_height()));
-                }
-                return tex;
-            }
-
-            // Always log decode errors globally, unconditionally!
-            static std::unordered_set<std::string> logged_errors;
-            if (logged_errors.find(path) == logged_errors.end()) {
-                UtilityFunctions::print(String("[MoHAA][TEX-ERR] Decode failed for shader='") +
-                                        String(name) + String("' path='") + String(path) +
-                                        String("' error_code=") + String::num_int64(err) +
-                                        String(" size=") + String::num_int64(len) + String(" bytes."));
-                logged_errors.insert(path);
+                Ref<ImageTexture> tex = finalise_image(img, path);
+                if (tex.is_valid()) return tex;
             }
         }
 
@@ -5524,36 +5588,27 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
 // ──────────────────────────────────────────────
 //  UI Viewport Coordinate Transformation
 // ──────────────────────────────────────────────
-// Calculate the transformation from engine's 640×480 virtual space to actual viewport.
-// Uses non-uniform (stretch-to-fill) scaling to match OPM's SCR_AdjustFrom640() behaviour.
-// Used by both update_2d_overlay() for rendering and _unhandled_input() for mouse mapping.
+// Calculate the transformation from engine glConfig resolution to actual
+// Godot viewport.  The pre-frame viewport sync (before Com_Frame) keeps
+// glConfig in lock-step with the viewport, so ui_scale will normally
+// be 1.0.  This function ONLY computes the scale — it does NOT modify
+// glConfig (that's done once per frame in the pre-frame sync block).
 void MoHAARunner::update_ui_transform() {
-    // Get engine's virtual resolution (always 640×480 in MOHAA)
-    Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
-    if (ui_vid_w < 1) ui_vid_w = 640;
-    if (ui_vid_h < 1) ui_vid_h = 480;
-
-    // Get actual viewport size
-    Vector2 viewport_size(0, 0);
-    if (hud_control) {
-        viewport_size = hud_control->get_size();
-    }
-
-    // Fallback chain if Control hasn't been laid out yet
+    // Use get_visible_rect() as the authoritative viewport size — always current,
+    // even immediately after a window resize or fullscreen switch.
+    Vector2 viewport_size = get_viewport()->get_visible_rect().size;
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
-        Rect2 visible_rect = get_viewport()->get_visible_rect();
-        viewport_size = visible_rect.size;
-
-        if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
-            Vector2i win = DisplayServer::get_singleton()->window_get_size();
-            viewport_size = Vector2(win);
-        }
+        Vector2i win = DisplayServer::get_singleton()->window_get_size();
+        viewport_size = Vector2(win);
     }
 
-    // Non-uniform scaling — stretch 640×480 to fill the entire viewport.
-    // This matches OPM behaviour: SCR_AdjustFrom640() scales X by
-    // vidWidth/640 and Y by vidHeight/480 independently, so the HUD
-    // fills the full screen regardless of aspect ratio.
+    // Read current glConfig resolution (set by pre-frame sync or GR_BeginRegistration)
+    Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
+    if (ui_vid_w <= 0) ui_vid_w = 640;
+    if (ui_vid_h <= 0) ui_vid_h = 480;
+
+    // Scale from engine glConfig space to actual Godot viewport.
+    // Normally 1.0 because the pre-frame sync keeps them equal.
     ui_scale_x = viewport_size.x / (float)ui_vid_w;
     ui_scale_y = viewport_size.y / (float)ui_vid_h;
     ui_offset_x = 0.0f;
@@ -5634,8 +5689,6 @@ void MoHAARunner::update_mirrors() {
 */
 
 void MoHAARunner::update_2d_overlay() {
-    static std::unordered_set<int> logged_serverback_draw;
-    static std::unordered_set<int> logged_serverback_geometry;
     int cmd_count = Godot_Renderer_Get2DCmdCount();
     if (cmd_count == 0 && !hud_layer) return;
     if (!hud_visible) return;  // F9 toggled off
@@ -6088,64 +6141,6 @@ void MoHAARunner::update_2d_overlay() {
                     }
                 }
 
-
-                if (sname && strstr(sname, "serverback") &&
-                    logged_serverback_draw.find(shader) == logged_serverback_draw.end()) {
-                    logged_serverback_draw.insert(shader);
-                    UtilityFunctions::print(String("[MoHAA][2D] serverback draw colour src=") +
-                                            String::num(col.r, 3) + String(",") +
-                                            String::num(col.g, 3) + String(",") +
-                                            String::num(col.b, 3) + String(",") +
-                                            String::num(col.a, 3) + String(" -> final=") +
-                                            String::num(draw_col.r, 3) + String(",") +
-                                            String::num(draw_col.g, 3) + String(",") +
-                                            String::num(draw_col.b, 3) + String(",") +
-                                            String::num(draw_col.a, 3) +
-                                            String(" shader='") + String(sname) + String("'"));
-                }
-
-                if (sname && strstr(sname, "serverback") &&
-                    logged_serverback_geometry.find(shader) == logged_serverback_geometry.end()) {
-                    logged_serverback_geometry.insert(shader);
-
-                    int fullscreen_opaque_after = 0;
-                    String first_opaque_info;
-                    for (int j = i + 1; j < cmd_count; j++) {
-                        int t2 = 0, sh2 = 0;
-                        float x2 = 0, y2 = 0, w2 = 0, h2 = 0, ss1 = 0, tt1 = 0, ss2 = 0, tt2 = 0, c2[4] = {0, 0, 0, 0};
-                        if (!Godot_Renderer_Get2DCmd(j, &t2, &x2, &y2, &w2, &h2, &ss1, &tt1, &ss2, &tt2, c2, &sh2)) {
-                            continue;
-                        }
-                        if (t2 == 1 && (w2 * h2) > (vid_area * 0.5f) && c2[3] > 0.9f) {
-                            fullscreen_opaque_after++;
-                            if (first_opaque_info.is_empty()) {
-                                first_opaque_info = String(" idx=") + String::num_int64(j) +
-                                                    String(" rect=") + String::num(x2, 1) + String(",") +
-                                                    String::num(y2, 1) + String(" ") +
-                                                    String::num(w2, 1) + String("x") +
-                                                    String::num(h2, 1) + String(" rgba=") +
-                                                    String::num(c2[0], 3) + String(",") +
-                                                    String::num(c2[1], 3) + String(",") +
-                                                    String::num(c2[2], 3) + String(",") +
-                                                    String::num(c2[3], 3);
-                            }
-                        }
-                    }
-
-                    UtilityFunctions::print(String("[MoHAA][2D] serverback draw geometry cmd=") +
-                                            String::num_int64(i) + String(" rect=") +
-                                            String::num(rect.position.x, 1) + String(",") +
-                                            String::num(rect.position.y, 1) + String(" ") +
-                                            String::num(rect.size.x, 1) + String("x") +
-                                            String::num(rect.size.y, 1) + String(" uv=") +
-                                            String::num(s1, 3) + String(",") +
-                                            String::num(t1, 3) + String(" -> ") +
-                                            String::num(s2, 3) + String(",") +
-                                            String::num(t2, 3) + String(" post_fullscreen_opaque=") +
-                                            String::num_int64(fullscreen_opaque_after) +
-                                            first_opaque_info);
-                }
-
                 // Skip fully transparent draws (alphaConst=0 → invisible)
                 if (draw_col.a < 0.001f) continue;
 
@@ -6175,11 +6170,6 @@ void MoHAARunner::update_2d_overlay() {
                              * Forcing BLEND_OPAQUE causes these halos to render as solid black boxes.
                              * We unconditionally use BLEND_MIX here so texture transparency resolves correctly. */
                             draw_blend = BLEND_MIX;
-
-                            if (sname && (strstr(sname, "levelshot") != nullptr || strstr(sname, "mohdm") != nullptr || strstr(sname, "serverback") != nullptr || strstr(sname, "mainback") != nullptr)) {
-                                // Full screen backgrounds often have garbage alpha that causes holes if blended
-                                draw_blend = BLEND_OPAQUE;
-                            }
 
                             /* Multi-stage shader: check the actual texture stage
                              * for a custom blendFunc that overrides the opaque
@@ -6212,6 +6202,31 @@ void MoHAARunner::update_2d_overlay() {
                                 }
                             }
                         }
+
+                        /* NOTE: AGEN_GLOBAL_ALPHA does NOT mean "ignore texture alpha".
+                         * In the real renderer (tr_shade.c), AGEN_GLOBAL_ALPHA sets the
+                         * VERTEX alpha to SetColor.a.  The fragment output is still
+                         * texture × vertex (GL_MODULATE), so fragment.a = tex.a × SetColor.a.
+                         * Blending then uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA, which
+                         * means texture alpha IS part of the final compositing.
+                         * Using BLEND_OPAQUE here would discard texture alpha, breaking
+                         * UI images with meaningful transparency (e.g. loading screen
+                         * photo frames, menu backdrops).  Keep BLEND_MIX. */
+
+                        /* Texture-alpha safety net: if shader_texture_has_alpha says
+                         * the loaded texture image has NO meaningful alpha channel
+                         * (all-255 stripped to RGB8, or JPG), use BLEND_OPAQUE so
+                         * accidental alpha in BLEND_MIX doesn't wash the image out.
+                         * BLEND_OPAQUE outputs vec4(tex.rgb*COLOR.rgb, COLOR.a) —
+                         * identical to BLEND_MIX when tex.a=1.0, but avoids relying
+                         * on Godot treating RGB8 alpha as exactly 1.0. */
+                        if (draw_blend == BLEND_MIX) {
+                            auto ha_it = shader_texture_has_alpha.find(shader);
+                            if (ha_it != shader_texture_has_alpha.end() && !ha_it->second) {
+                                draw_blend = BLEND_OPAQUE;
+                            }
+                        }
+
                     }
                 }
 
@@ -6264,6 +6279,49 @@ void MoHAARunner::update_2d_overlay() {
                         src = Rect2(s1 * tw, t1 * th, (s2 - s1) * tw, (t2 - t1) * th);
                     }
                     draw_blend = BLEND_OPAQUE;
+                }
+
+                // ── One-shot 2D texture diagnostic ──
+                {
+                    static std::unordered_set<int> logged_2d_shaders;
+                    if (logged_2d_shaders.find(shader) == logged_2d_shaders.end() && sname && sname[0]) {
+                        logged_2d_shaders.insert(shader);
+                        const char *fmt_name = "?";
+                        if (tex.is_valid()) {
+                            Ref<Image> dbg_img = tex->get_image();
+                            if (dbg_img.is_valid()) {
+                                int f = (int)dbg_img->get_format();
+                                fmt_name = (f == (int)Image::FORMAT_RGB8) ? "RGB8" :
+                                           (f == (int)Image::FORMAT_RGBA8) ? "RGBA8" : "other";
+                            }
+                        }
+                        const char *blend_name = (draw_blend == BLEND_OPAQUE) ? "OPAQUE" :
+                                                 (draw_blend == BLEND_MIX) ? "MIX" :
+                                                 (draw_blend == BLEND_ADD) ? "ADD" :
+                                                 (draw_blend == BLEND_MUL) ? "MUL" : "OTHER";
+                        const GodotShaderProps *dbg_sp = Godot_ShaderProps_Find(sname);
+                        int dbg_transp = dbg_sp ? dbg_sp->transparency : -1;
+                        int dbg_ag = -1;
+                        if (dbg_sp && dbg_sp->stage_count > 0) {
+                            for (int ds = 0; ds < dbg_sp->stage_count; ds++) {
+                                if (dbg_sp->stages[ds].isLightmap) continue;
+                                const char *dm = dbg_sp->stages[ds].map;
+                                if (!dm[0] || dm[0] == '*') continue;
+                                dbg_ag = (int)dbg_sp->stages[ds].alphaGen;
+                                break;
+                            }
+                        }
+                        auto ha_it2 = shader_texture_has_alpha.find(shader);
+                        bool has_a = (ha_it2 != shader_texture_has_alpha.end()) && ha_it2->second;
+                        UtilityFunctions::print(String("[2D-TEX] shader='") + String(sname) +
+                            String("' fmt=") + String(fmt_name) +
+                            String(" blend=") + String(blend_name) +
+                            String(" transp=") + String::num_int64(dbg_transp) +
+                            String(" alphaGen=") + String::num_int64(dbg_ag) +
+                            String(" has_alpha=") + String(has_a ? "Y" : "N") +
+                            String(" col.a=") + String::num(draw_col.a, 3) +
+                            String(" tex=") + String::num(tw,0) + String("x") + String::num(th,0));
+                    }
                 }
 
                 RID target_ci = get_segment_ci(draw_blend);
@@ -6344,62 +6402,6 @@ void MoHAARunner::update_2d_overlay() {
                         out_y += row_h;
                     }
                 } else {
-                    // Targeted diagnostic for map preview shader
-                    if (sname && strstr(sname, "mohdm")) {
-                        static int mohdm_log_count = 0;
-                        if (mohdm_log_count < 5) {
-                            mohdm_log_count++;
-                            UtilityFunctions::print(String("[MAP-PREVIEW] shader='") + String(sname) +
-                                String("' raw=(") + String::num(x,1) + String(",") + String::num(y,1) +
-                                String(",") + String::num(w,1) + String(",") + String::num(h,1) +
-                                String(") rect=(") + String::num(rect.position.x,1) + String(",") +
-                                String::num(rect.position.y,1) + String(",") + String::num(rect.size.x,1) +
-                                String(",") + String::num(rect.size.y,1) +
-                                String(") draw=(") + String::num(draw_rect.position.x,1) + String(",") +
-                                String::num(draw_rect.position.y,1) + String(",") + String::num(draw_rect.size.x,1) +
-                                String(",") + String::num(draw_rect.size.y,1) +
-                                String(") src=(") + String::num(src.position.x,1) + String(",") +
-                                String::num(src.position.y,1) + String(",") + String::num(src.size.x,1) +
-                                String(",") + String::num(src.size.y,1) +
-                                String(") scissor=") + String(scissor_enabled ? "ON" : "OFF") +
-                                String(" scis_rect=(") + String::num(scissor_rect.position.x,1) + String(",") +
-                                String::num(scissor_rect.position.y,1) + String(",") + String::num(scissor_rect.size.x,1) +
-                                String(",") + String::num(scissor_rect.size.y,1) +
-                                String(") col=(") + String::num(draw_col.r,3) + String(",") +
-                                String::num(draw_col.g,3) + String(",") + String::num(draw_col.b,3) +
-                                String(",") + String::num(draw_col.a,3) +
-                                String(") blend=") + String::num(draw_blend) +
-                                String("(") +
-                                String(draw_blend == BLEND_OPAQUE ? "OPAQUE" :
-                                       draw_blend == BLEND_MIX ? "MIX" :
-                                       draw_blend == BLEND_ADD ? "ADD" :
-                                       draw_blend == BLEND_MUL ? "MUL" :
-                                       draw_blend == BLEND_ALPHA_INV ? "ALPHA_INV" : "OTHER") +
-                                String(")") +
-                                String(" tex=") + String::num(tw,0) + String("x") + String::num(th,0) +
-                                String(" uv=") + String::num(s1,3) + String(",") + String::num(t1,3) +
-                                String("->") + String::num(s2,3) + String(",") + String::num(t2,3) +
-                                String(" scale=") + String::num(ui_scale_x,4) + String(",") + String::num(ui_scale_y,4));
-                            // Dump all stages for mohdm shader
-                            const GodotShaderProps *mp_sp = Godot_ShaderProps_Find(sname);
-                            if (mp_sp) {
-                                UtilityFunctions::print(String("[MAP-PREVIEW-STAGES] transp=") +
-                                    String::num_int64(mp_sp->transparency) +
-                                    String(" stage_count=") + String::num_int64(mp_sp->stage_count));
-                                for (int mps = 0; mps < mp_sp->stage_count; mps++) {
-                                    UtilityFunctions::print(String("[MAP-PREVIEW-STAGE ") + String::num_int64(mps) +
-                                        String("] map='") + String(mp_sp->stages[mps].map) +
-                                        String("' blendSrc=") + String::num_int64(mp_sp->stages[mps].blendSrc) +
-                                        String(" blendDst=") + String::num_int64(mp_sp->stages[mps].blendDst) +
-                                        String(" hasBlend=") + String::num_int64(mp_sp->stages[mps].hasBlendFunc) +
-                                        String(" rgbGen=") + String::num_int64(mp_sp->stages[mps].rgbGen) +
-                                        String(" alphaGen=") + String::num_int64(mp_sp->stages[mps].alphaGen) +
-                                        String(" alphaConst=") + String::num(mp_sp->stages[mps].alphaConst, 3) +
-                                        String(" isLightmap=") + String::num_int64(mp_sp->stages[mps].isLightmap));
-                                }
-                            }
-                        }
-                    }
                     // Use triangle_array with explicit per-vertex colours for
                     // ALL non-tiled textured 2D draws.  Godot 4.2's
                     // canvas_item_add_texture_rect_region passes draw_col
@@ -7127,7 +7129,10 @@ void MoHAARunner::update_hud_models() {
                         arrays[Mesh::ARRAY_NORMAL] = gNrm;
                         arrays[Mesh::ARRAY_TEX_UV] = gUVs;
                         arrays[Mesh::ARRAY_INDEX]  = gIdx;
-                        mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+
+                        if (gPos.size() > 0 && gIdx.size() >= 3) {
+                            mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+                        }
 
                         /* Apply material with texture */
                         if (shaderName[0]) {
@@ -7540,6 +7545,19 @@ void MoHAARunner::_ready() {
 
     CON_Init();
 
+    // Set desktop resolution so GR_BeginRegistration can resolve r_mode -2
+    {
+        DisplayServer *ds = DisplayServer::get_singleton();
+        if (ds) {
+            Vector2i screen = ds->screen_get_size();
+            if (screen.x > 0 && screen.y > 0) {
+                Godot_Renderer_SetDesktopResolution(screen.x, screen.y);
+                UtilityFunctions::print(String("[MoHAA] Desktop resolution: ") +
+                    String::num_int64(screen.x) + String("x") + String::num_int64(screen.y));
+            }
+        }
+    }
+
     // Build command line — full client + dedicated/listen server configurable.
     char cmdline[1024];
     snprintf(cmdline, sizeof(cmdline),
@@ -7647,6 +7665,38 @@ void MoHAARunner::_process(double delta) {
     // We check the CURRENT keyCatcher state (not the cached value) so that the
     // very first frame after a menu opens is handled correctly.
     // SyncGuiMouseToOverlayState() first ensures in_guimouse matches keyCatchers.
+    // ── Pre-frame viewport sync ───────────────────────────────────────────────
+    // Under Godot there is no physical display-mode switch.  The engine's
+    // r_mode cvar is irrelevant — glConfig must always match the actual
+    // Godot viewport.  We sync BEFORE Com_Frame so that:
+    //  1. GR_Transform2D's Y-flip uses the correct vidHeight
+    //  2. SCR_AdjustFrom640 / SetVirtualScale / widget Realign use correct dims
+    //  3. If vid_restart triggers inside Com_Frame, GR_BeginRegistration reads
+    //     the current viewport from gr_desktopWidth/Height
+    //  4. uid.vidWidth/vidHeight stays in sync via CL_FillUIDef wrapper
+    {
+        // Use get_visible_rect() as the authoritative viewport size — it is always
+        // up-to-date even immediately after a window resize or fullscreen switch.
+        // hud_control->get_size() can lag by a frame after a resize event.
+        Vector2 vp = get_viewport()->get_visible_rect().size;
+        if (vp.x < 1.0f || vp.y < 1.0f) {
+            Vector2i win = DisplayServer::get_singleton()->window_get_size();
+            vp = Vector2(win);
+        }
+        int vp_w = (int)vp.x;
+        int vp_h = (int)vp.y;
+        if (vp_w > 0 && vp_h > 0) {
+            int cur_w = 0, cur_h = 0;
+            Godot_Renderer_GetVidSize(&cur_w, &cur_h);
+            if (cur_w != vp_w || cur_h != vp_h) {
+                Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
+                Godot_Renderer_SyncVidSize(vp_w, vp_h);
+                Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
+                Godot_Client_RefreshUIDef();
+            }
+        }
+    }
+
 #ifdef __EMSCRIPTEN__
     {
         Godot_Client_SyncGuiMouseToOverlayState();
@@ -7866,6 +7916,28 @@ void MoHAARunner::_process(double delta) {
         }
     }
 
+    // Event-driven r_fullscreen updates (no per-frame cvar polling).
+    {
+        int new_fullscreen = 0;
+        if (Godot_ConsumeFullscreenCvarChanged(&new_fullscreen)) {
+            cached_r_fullscreen = new_fullscreen ? 1 : 0;
+
+            DisplayServer *ds = DisplayServer::get_singleton();
+            if (ds) {
+                DisplayServer::WindowMode target_mode =
+                    cached_r_fullscreen ? DisplayServer::WINDOW_MODE_FULLSCREEN
+                                        : DisplayServer::WINDOW_MODE_WINDOWED;
+
+                if (ds->window_get_mode() != target_mode) {
+                    ds->window_set_mode(target_mode);
+                }
+
+                UtilityFunctions::print(String("[MoHAA] r_fullscreen -> ") +
+                    String::num_int64(cached_r_fullscreen));
+            }
+        }
+    }
+
     // Vid_restart: apply fullscreen/resolution changes from menu
     {
         int fs = 0, vw = 0, vh = 0;
@@ -7887,17 +7959,18 @@ void MoHAARunner::_process(double delta) {
 
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
+                /* Under Godot, r_mode resolution selection is a no-op.
+                 * GR_BeginRegistration always uses the current viewport
+                 * size.  We only toggle fullscreen/windowed mode here;
+                 * the window size is NOT changed (the viewport stays
+                 * at whatever Godot has it). */
                 if (fs) {
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
                 } else {
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_WINDOWED);
-                    if (vw > 0 && vh > 0) {
-                        ds->window_set_size(Vector2i(vw, vh));
-                    }
                 }
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +
-                    String::num_int64(fs) + String(" size=") +
-                    String::num_int64(vw) + String("x") + String::num_int64(vh));
+                    String::num_int64(fs) + String(" (resolution change ignored under Godot)"));
             }
         }
     }
@@ -8621,7 +8694,15 @@ void MoHAARunner::set_audio_volume(float master, float music, float dialog) {
 }
 
 void MoHAARunner::set_video_fullscreen(bool fullscreen) {
-    // This is a Godot-side setting, not an engine cvar
+    // Keep Godot window mode and engine cvar in sync.
+    if (initialized) {
+        char cmd[64];
+        snprintf(cmd, sizeof(cmd), "set r_fullscreen %d\n", fullscreen ? 1 : 0);
+        Cbuf_AddText(cmd);
+    }
+
+    cached_r_fullscreen = fullscreen ? 1 : 0;
+
     DisplayServer *ds = DisplayServer::get_singleton();
     if (!ds) return;
     if (fullscreen) {
@@ -8921,6 +9002,39 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
     bool overlay_active = (Godot_Client_IsAnyOverlayActive() != 0) ||
                           (Godot_Client_GetGuiMouse() != 0);
 
+    // Handle fullscreen hotkey early so UI controls cannot consume Enter first.
+    InputEventKey *key_event = Object::cast_to<InputEventKey>(p_event.ptr());
+    if (key_event) {
+        bool pressed = key_event->is_pressed();
+        bool echo = key_event->is_echo();
+        int keycode = (int)key_event->get_keycode();
+        bool is_enter_key = (keycode == Key::KEY_ENTER || keycode == Key::KEY_KP_ENTER);
+        bool has_toggle_modifier = key_event->is_alt_pressed() || key_event->is_meta_pressed();
+
+        if (pressed && !echo && is_enter_key && has_toggle_modifier) {
+            DisplayServer *ds = DisplayServer::get_singleton();
+            int new_fullscreen = 1;
+            if (ds) {
+                DisplayServer::WindowMode cur_mode = ds->window_get_mode();
+                new_fullscreen = (cur_mode == DisplayServer::WINDOW_MODE_FULLSCREEN) ? 0 : 1;
+                ds->window_set_mode(new_fullscreen ? DisplayServer::WINDOW_MODE_FULLSCREEN
+                                                   : DisplayServer::WINDOW_MODE_WINDOWED);
+            }
+
+            char cmd[64];
+            snprintf(cmd, sizeof(cmd), "set r_fullscreen %d\n", new_fullscreen);
+            Cbuf_AddText(cmd);
+            cached_r_fullscreen = new_fullscreen;
+
+            UtilityFunctions::print(String("[MoHAA] Fullscreen hotkey -> ") +
+                String::num_int64(new_fullscreen));
+
+            Viewport *vp = get_viewport();
+            if (vp) vp->set_input_as_handled();
+            return;
+        }
+    }
+
     // ── Mouse motion ──
     InputEventMouseMotion *motion_event = Object::cast_to<InputEventMouseMotion>(p_event.ptr());
     if (motion_event) {
@@ -9008,6 +9122,34 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
     if (key_event) {
         bool pressed = key_event->is_pressed();
         bool echo = key_event->is_echo();
+
+        // OpenMOHAA parity: Alt/Meta+Enter toggles fullscreen immediately.
+        {
+            int keycode = (int)key_event->get_keycode();
+            bool is_enter_key = (keycode == Key::KEY_ENTER || keycode == Key::KEY_KP_ENTER);
+            bool has_toggle_modifier = key_event->is_alt_pressed() || key_event->is_meta_pressed();
+
+            if (pressed && !echo && is_enter_key && has_toggle_modifier) {
+                int new_fullscreen = Cvar_VariableIntegerValue("r_fullscreen") ? 0 : 1;
+                char cmd[64];
+                snprintf(cmd, sizeof(cmd), "set r_fullscreen %d\n", new_fullscreen);
+                Cbuf_AddText(cmd);
+                cached_r_fullscreen = new_fullscreen;
+
+                DisplayServer *ds = DisplayServer::get_singleton();
+                if (ds) {
+                    ds->window_set_mode(new_fullscreen ? DisplayServer::WINDOW_MODE_FULLSCREEN
+                                                       : DisplayServer::WINDOW_MODE_WINDOWED);
+                }
+
+                UtilityFunctions::print(String("[MoHAA] Fullscreen hotkey -> ") +
+                    String::num_int64(new_fullscreen));
+
+                Viewport *vp = get_viewport();
+                if (vp) vp->set_input_as_handled();
+                return;
+            }
+        }
 
         // ── DEBUG: Layer toggle keys to isolate double-rendering ──
         // F1 — toggle BSP world mesh

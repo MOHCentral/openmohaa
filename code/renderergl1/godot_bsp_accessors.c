@@ -981,12 +981,15 @@ int Godot_BSP_GetSurfaceCluster(int surfaceIndex)
 }
 
 /* Build a complete surface→cluster mapping in one pass.
- * Walks all leaves once and assigns each surface to the first cluster
- * that references it.  Much faster than per-surface GetSurfaceCluster()
- * calls for large maps. */
+ * Walks all leaves and assigns each surface to its owning cluster.
+ * Surfaces that span multiple clusters (referenced by leaves in
+ * different clusters) are marked -1 (always visible) to match the
+ * original engine's R_RecursiveWorldNode behaviour, which walks ALL
+ * PVS-visible leaves and draws surfaces from each. */
 void Godot_BSP_BuildSurfaceClusterMap(int *surfaceClusterOut, int numSurfaces)
 {
     int i, j;
+    int multi = 0;
 
     for (i = 0; i < numSurfaces; i++)
         surfaceClusterOut[i] = -1;
@@ -1000,12 +1003,80 @@ void Godot_BSP_BuildSurfaceClusterMap(int *surfaceClusterOut, int numSurfaces)
 
         for (j = 0; j < leaf->nummarksurfaces; j++) {
             int surfIdx = (int)(leaf->firstmarksurface[j] - tr.world->surfaces);
-            if (surfIdx >= 0 && surfIdx < numSurfaces &&
-                surfaceClusterOut[surfIdx] < 0) {
+            if (surfIdx < 0 || surfIdx >= numSurfaces) continue;
+
+            if (surfaceClusterOut[surfIdx] == -1) {
+                /* First cluster assignment */
                 surfaceClusterOut[surfIdx] = leaf->cluster;
+            } else if (surfaceClusterOut[surfIdx] >= 0 &&
+                       surfaceClusterOut[surfIdx] != leaf->cluster) {
+                /* Surface spans multiple clusters — mark always-visible.
+                 * Use -2 as sentinel so further assignments are ignored. */
+                surfaceClusterOut[surfIdx] = -2;
+                multi++;
             }
         }
     }
+
+    /* Convert -2 sentinel back to -1 (always-visible group) */
+    for (i = 0; i < numSurfaces; i++) {
+        if (surfaceClusterOut[i] == -2)
+            surfaceClusterOut[i] = -1;
+    }
+
+    if (multi > 0) {
+        ri.Printf(PRINT_ALL, "[BSP-PVS] BuildSurfaceClusterMap: %d surfaces span multiple clusters (always-visible)\n", multi);
+    }
+}
+
+/* Build flat (surfaceIdx, cluster) pairs for all leaf ownership links.
+ * A surface referenced by leaves from multiple clusters yields multiple
+ * pairs. Duplicate pairs are removed. */
+int Godot_BSP_BuildSurfaceClusterPairs(int *pairsOut, int maxPairs, int numSurfaces)
+{
+    int count = 0;
+    int i, j;
+
+    if (!tr.world)
+        return 0;
+
+    for (i = tr.world->numDecisionNodes; i < tr.world->numnodes; i++) {
+        mnode_t *leaf = &tr.world->nodes[i];
+        if (leaf->cluster < 0) continue;
+
+        for (j = 0; j < leaf->nummarksurfaces; j++) {
+            int surfIdx = (int)(leaf->firstmarksurface[j] - tr.world->surfaces);
+            int k;
+            int duplicate = 0;
+
+            if (surfIdx < 0 || surfIdx >= numSurfaces) continue;
+
+            for (k = 0; k < count; k++) {
+                if (pairsOut[k * 2] == surfIdx &&
+                    pairsOut[k * 2 + 1] == leaf->cluster) {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+
+            if (count >= maxPairs) {
+                ri.Printf(PRINT_WARNING,
+                    "[BSP-PVS] BuildSurfaceClusterPairs: overflow at %d pairs\n",
+                    maxPairs);
+                return count;
+            }
+
+            pairsOut[count * 2] = surfIdx;
+            pairsOut[count * 2 + 1] = leaf->cluster;
+            count++;
+        }
+    }
+
+    ri.Printf(PRINT_ALL,
+        "[BSP-PVS] BuildSurfaceClusterPairs: %d pairs for %d surfaces\n",
+        count, numSurfaces);
+    return count;
 }
 
 /* ===================================================================
@@ -1082,6 +1153,7 @@ void Godot_BSP_BuildTerrainClusterMap(int *patchClusterOut, int numPatches)
 {
     int i, j;
     int assigned = 0;
+    int multi = 0;
 
     for (i = 0; i < numPatches; i++)
         patchClusterOut[i] = -1;
@@ -1117,16 +1189,94 @@ void Godot_BSP_BuildTerrainClusterMap(int *patchClusterOut, int numPatches)
             if (!patch) continue;
 
             int patchIdx = (int)(patch - tr.world->terraPatches);
-            if (patchIdx >= 0 && patchIdx < numPatches &&
-                patchClusterOut[patchIdx] < 0) {
+            if (patchIdx < 0 || patchIdx >= numPatches) continue;
+
+            if (patchClusterOut[patchIdx] == -1) {
                 patchClusterOut[patchIdx] = leaf->cluster;
                 assigned++;
+            } else if (patchClusterOut[patchIdx] >= 0 &&
+                       patchClusterOut[patchIdx] != leaf->cluster) {
+                /* Patch spans multiple clusters — mark always-visible */
+                patchClusterOut[patchIdx] = -2;
+                multi++;
             }
         }
     }
 
-    ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: assigned %d of %d patches to clusters\n",
-        assigned, numPatches);
+    /* Keep -2 sentinel for multi-cluster patches (spans multiple leaves).
+     * The Godot BSP mesh builder maps -2 → cluster -1 (always-visible group)
+     * while -1 (truly unassigned, not in any leaf) patches are skipped.
+     * This distinction matters: multi-cluster terrain IS visible and should
+     * render; unassigned terrain is typically underground or inside buildings. */
+
+    ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterMap: assigned %d of %d patches to clusters (%d multi-cluster, always-visible)\n",
+        assigned, numPatches, multi);
+}
+
+/* ===================================================================
+ *  Terrain patch → cluster PAIRS (full multi-cluster support)
+ *
+ *  Returns ALL (patchIdx, cluster) relationships as flat int pairs.
+ *  A patch in 3 clusters produces 3 entries.  The Godot BSP mesh
+ *  builder uses this to duplicate terrain geometry into every owning
+ *  cluster so PVS correctly hides terrain behind buildings.
+ * ================================================================ */
+
+int Godot_BSP_BuildTerrainClusterPairs(int *pairsOut, int maxPairs, int numPatches)
+{
+    int count = 0;
+    int i, j;
+
+    if (!tr.world || !tr.world->visTerraPatches || !tr.world->terraPatches)
+        return 0;
+
+    /* Track which (patch, cluster) combinations we've already emitted
+     * using a simple linear scan — patch count is small (typically <100). */
+    /* We'll use a temporary per-patch cluster list stored inline. */
+    /* Since patches are few, use a brute-force approach: for each
+     * leaf, emit the pair if not already present. We check for
+     * duplicates by scanning existing entries for this patch. */
+
+    for (i = tr.world->numDecisionNodes; i < tr.world->numnodes; i++) {
+        mnode_t *leaf = &tr.world->nodes[i];
+        if (leaf->cluster < 0) continue;
+
+        for (j = 0; j < leaf->numTerraPatches; j++) {
+            int visIdx = leaf->firstTerraPatch + j;
+            if (visIdx < 0 || visIdx >= tr.world->numVisTerraPatches) continue;
+
+            cTerraPatchUnpacked_t *patch = tr.world->visTerraPatches[visIdx];
+            if (!patch) continue;
+
+            int patchIdx = (int)(patch - tr.world->terraPatches);
+            if (patchIdx < 0 || patchIdx >= numPatches) continue;
+
+            /* Check if we already recorded this (patchIdx, cluster) pair */
+            int duplicate = 0;
+            int k;
+            for (k = 0; k < count; k++) {
+                if (pairsOut[k * 2] == patchIdx &&
+                    pairsOut[k * 2 + 1] == leaf->cluster) {
+                    duplicate = 1;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+
+            if (count >= maxPairs) {
+                ri.Printf(PRINT_WARNING, "[BSP-PVS] BuildTerrainClusterPairs: overflow at %d pairs\n", maxPairs);
+                return count;
+            }
+
+            pairsOut[count * 2] = patchIdx;
+            pairsOut[count * 2 + 1] = leaf->cluster;
+            count++;
+        }
+    }
+
+    ri.Printf(PRINT_ALL, "[BSP-PVS] BuildTerrainClusterPairs: %d pairs for %d patches\n",
+        count, numPatches);
+    return count;
 }
 
 /* ===================================================================
@@ -1160,10 +1310,21 @@ void Godot_BSP_BuildStaticModelClusterMap(int *modelClusterOut, int numModels)
             if (!model) continue;
 
             int modelIdx = (int)(model - tr.world->staticModels);
-            if (modelIdx >= 0 && modelIdx < numModels &&
-                modelClusterOut[modelIdx] < 0) {
+            if (modelIdx < 0 || modelIdx >= numModels) continue;
+
+            if (modelClusterOut[modelIdx] == -1) {
                 modelClusterOut[modelIdx] = leaf->cluster;
+            } else if (modelClusterOut[modelIdx] >= 0 &&
+                       modelClusterOut[modelIdx] != leaf->cluster) {
+                /* Model spans multiple clusters — mark always-visible */
+                modelClusterOut[modelIdx] = -2;
             }
         }
+    }
+
+    /* Convert -2 sentinel back to -1 (always-visible group) */
+    for (i = 0; i < numModels; i++) {
+        if (modelClusterOut[i] == -2)
+            modelClusterOut[i] = -1;
     }
 }
