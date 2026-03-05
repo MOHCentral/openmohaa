@@ -238,6 +238,7 @@ private:
     float pvs_last_origin[3] = {0, 0, 0};   // Camera origin used for last PVS update (id coords)
     int pvs_log_count = 0;                   // Limits PVS debug log messages per map
     void update_pvs_visibility();            // Toggle per-cluster mesh visibility
+    void update_terrain_visibility();        // Per-frame terrain marking via engine BSP tree walk
 
     // Static BSP models (Phase 10)
     Node3D *static_model_root = nullptr;     // Container for TIKI static models from BSP

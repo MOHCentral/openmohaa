@@ -288,7 +288,7 @@ void R_AddAnimSurfaces(trRefEntity_t *e) { (void)e; }
 void R_RotateForEntity(const trRefEntity_t *ent, const viewParms_t *vp, orientationr_t *ori) { (void)ent; (void)vp; (void)ori; }
 void R_RotateForStaticModel(cStaticModelUnpacked_t *sm, const viewParms_t *vp, orientationr_t *ori) { (void)sm; (void)vp; (void)ori; }
 void R_RotateForViewer(void) {}
-void R_SetupFrustum(void) {}
+/* R_SetupFrustum un-stubbed — real implementation in tr_main.c (pure math, no GL) */
 
 /* Transform stubs */
 void R_TransformModelToClip(const vec3_t src, const float *mm, const float *pm, vec4_t eye, vec4_t dst) {
@@ -361,14 +361,12 @@ void LoadGHOST(const char *name, byte **pic, int *width, int *height) {
     (void)name; if(pic) *pic = NULL; if(width) *width = 0; if(height) *height = 0;
 }
 
-/* Terrain stubs */
-void R_InitTerrain(void) {}
-void R_ShutdownTerrain(void) {}
-void R_TerrainFree(void) {}
-void R_TerrainPrepareFrame(void) {}
+/* Terrain stubs — R_InitTerrain, R_ShutdownTerrain, R_TerrainFree,
+ * R_TerrainPrepareFrame, and R_MarkTerrainPatch are un-stubbed so the
+ * real implementations in tr_terrain.c handle terrain visibility marking
+ * (they do no GL operations). */
 qboolean R_TerrainHeightForPoly(cTerraPatchUnpacked_t *p, polyVert_t *v, int n) { (void)p; (void)v; (void)n; return qfalse; }
 void R_SwapTerraPatch(cTerraPatch_t *p) { (void)p; }
-void R_MarkTerrainPatch(cTerraPatchUnpacked_t *p) { (void)p; }
 void R_TerrainCrater_f(void) {}
 int R_DlightTerrain(cTerraPatchUnpacked_t *s, int bits) { (void)s; return bits; }
 int R_CheckDlightTerrain(cTerraPatchUnpacked_t *s, int bits) { (void)s; return bits; }

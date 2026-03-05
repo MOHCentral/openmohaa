@@ -640,6 +640,28 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
             break;
     }
 
+    /* OpenMoHAA enables depth writes by default for the first pass of every
+     * shader, including transparent ones.  Godot's blend_mix/add/mul puts
+     * surfaces in the transparent pass which skips depth writes, allowing
+     * geometry behind (e.g. terrain) to show through solid walls/floors.
+     * Fix: always write depth unless the shader explicitly says nodepthwrite. */
+    if (props->transparency != SHADER_OPAQUE
+        && props->transparency != SHADER_ALPHA_TEST) {
+        bool no_depth = false;
+        for (int si = 0; si < props->stage_count; si++) {
+            if (props->stages[si].active
+                && props->stages[si].depthWriteExplicit
+                && !props->stages[si].depthWriteEnabled) {
+                no_depth = true;
+                break;
+            }
+        }
+        if (!no_depth) {
+            if (!render_mode.empty()) render_mode += ", ";
+            render_mode += "depth_draw_always";
+        }
+    }
+
     switch (props->cull) {
         case SHADER_CULL_NONE:
             if (!render_mode.empty()) render_mode += ", ";

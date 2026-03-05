@@ -19,7 +19,7 @@
 #include "godot_bsp_accessors.h"
 #include "godot_shader_props.h"
 #include "godot_shader_material.h"
-#include "godot_terrain_normal.h"
+#include "godot_terrain_normal.h"   // for id_to_godot_dir()
 
 #if __has_include("godot_pbr.h")
 #include "godot_pbr.h"
@@ -31,6 +31,7 @@
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/classes/shader_material.hpp>
 #include <godot_cpp/classes/base_material3d.hpp>
+#include <godot_cpp/classes/material.hpp>
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -60,6 +61,10 @@ extern "C" {
     long Godot_VFS_ReadFile(const char *qpath, void **out_buffer);
     void Godot_VFS_FreeFile(void *buffer);
     int  Godot_ShaderProps_GetTextureMap(const char *shader_name, char *out_path, int out_size);
+    int  Godot_Terrain_GetPatchMesh(int patchIdx,
+                                    float *xyz_out, float *uv0_out, float *uv1_out,
+                                    int max_verts, int *indices_out, int max_indices,
+                                    int *out_vert_count, int *out_index_count);
 }
 
 /* ===================================================================
@@ -111,6 +116,9 @@ static constexpr int SURF_NODRAW        = 0x80;
 static constexpr int SURF_SKY           = 0x4;
 static constexpr int SURF_NOLIGHTMAP    = 0x100;
 static constexpr int SURF_HINT          = 0x40000000;
+
+// Terrain patch flags (from qfiles.h)
+static constexpr uint8_t TERPATCH_FLIP     = 0x40;
 
 struct bsp_lump_t {
     int32_t fileofs;
@@ -296,6 +304,7 @@ static int s_pvs_num_clusters = 0;
 struct TerrainPatchMesh {
     godot::MeshInstance3D *mesh = nullptr;
     std::vector<int> clusters;  /* all PVS clusters that own this patch */
+    int bsp_patch_index = -1;   /* index into tr.world->terraPatches[] for engine visibility queries */
 };
 static std::vector<TerrainPatchMesh> s_terrain_patches;
 
@@ -347,7 +356,7 @@ struct ShaderBatch {
     int                  lightmap_num  = -1;
     bool                 nolightmap    = false;
     int32_t              surface_flags = 0;
-    bool                 force_opaque  = false;  // terrain: always opaque regardless of shader classification
+    bool                 force_opaque  = false;
 };
 
 /// Encode (shaderNum, lightmapNum) into a single int64_t batch key.
@@ -700,35 +709,7 @@ static void load_lightmaps(const uint8_t *lm_data, int lm_len) {
  *  BSP loader implementation
  * ================================================================ */
 
-/// Returns true if the shader name is a tool texture that should not
-/// be rendered (clip planes, trigger volumes, hints, etc.).
-static bool is_tool_shader(const char *name) {
-    if (!name || !name[0]) return true;
 
-    // Common tool textures in MOHAA
-    static const char *skip_prefixes[] = {
-        "clip",
-        "textures/common/clip",
-        "textures/common/trigger",
-        "textures/common/hint",
-        "textures/common/skip",
-        "textures/common/caulk",
-        "textures/common/nodraw",
-        "textures/common/weaponclip",
-        "textures/common/playerclip",
-        "textures/common/full_clip",
-        "textures/common/ai_nosight",
-        nullptr
-    };
-
-    for (int i = 0; skip_prefixes[i]; i++) {
-        if (strncmp(name, skip_prefixes[i], strlen(skip_prefixes[i])) == 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
 
 /* ===================================================================
  *  Helper: convert ShaderBatch map into a Godot ArrayMesh.
@@ -1020,6 +1001,25 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                         default:
                             break;
                     }
+
+                    /* OpenMoHAA defaults to depth writes ON for all surfaces.
+                     * Transparent materials in Godot skip depth writes by default,
+                     * letting terrain/geometry behind show through solid walls.
+                     * Force depth writes unless the shader explicitly says nodepthwrite. */
+                    if (sp->transparency != SHADER_OPAQUE) {
+                        bool no_depth = false;
+                        for (int si = 0; si < sp->stage_count; si++) {
+                            if (sp->stages[si].active
+                                && sp->stages[si].depthWriteExplicit
+                                && !sp->stages[si].depthWriteEnabled) {
+                                no_depth = true;
+                                break;
+                            }
+                        }
+                        if (!no_depth) {
+                            mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_ALWAYS);
+                        }
+                    }
                     switch (sp->cull) {
                         case SHADER_CULL_BACK:
                             mat->set_cull_mode(BaseMaterial3D::CULL_BACK);
@@ -1105,7 +1105,7 @@ static bool process_surface(const bsp_surface_t *surf, int surf_idx,
                              const int32_t *indices, int num_indices,
                              const bsp_shader_t *shaders, int num_shaders,
                              std::unordered_map<int64_t, ShaderBatch> &batches,
-                             int &skipped_nodraw, int &skipped_sky)
+                             int &skipped_nodraw)
 {
     // Skip unsupported surface types
     if (surf->surfaceType != MST_PLANAR &&
@@ -1114,13 +1114,17 @@ static bool process_surface(const bsp_surface_t *surf, int surf_idx,
         return false;
     }
 
-    // Filter tool/invisible shaders
+    // Filter invisible shaders — only SURF_NODRAW and SURF_SKY.
+    // SURF_NODRAW: engine also skips (ParseFace/ParseMesh set SF_SKIP).
+    // SURF_SKY: engine renders sky via special RB_StageIteratorSky
+    // (cubemap at qglDepthRange 1.0,1.0 — far depth plane, NO depth
+    // writes).  Our Godot port handles the skybox via WorldEnvironment
+    // cubemap.  Including sky surfaces as regular BSP geometry creates
+    // tiled texture where the sky should be.
     if (surf->shaderNum >= 0 && surf->shaderNum < num_shaders) {
         const bsp_shader_t *sh = &shaders[surf->shaderNum];
-        if (sh->surfaceFlags & SURF_SKY)    { skipped_sky++;    return false; }
         if (sh->surfaceFlags & SURF_NODRAW) { skipped_nodraw++; return false; }
-        if (sh->surfaceFlags & SURF_HINT)   { skipped_nodraw++; return false; }
-        if (is_tool_shader(sh->shader))      { skipped_nodraw++; return false; }
+        if (sh->surfaceFlags & SURF_SKY)    { skipped_nodraw++; return false; }
     }
 
     // Bounds checks
@@ -1375,7 +1379,6 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
 
     int skipped_nodraw = 0;
     int skipped_type   = 0;
-    int skipped_sky    = 0;
     int skipped_bmodel = 0;
     int processed      = 0;
     int processed_patches = 0;
@@ -1443,7 +1446,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             if (process_surface(surf, s, verts, num_verts, indices, num_indices,
                                 shaders, num_shaders,
                                 cluster_batches[-1],
-                                skipped_nodraw, skipped_sky)) {
+                                skipped_nodraw)) {
                 if (surf->surfaceType == MST_PATCH) processed_patches++;
                 processed++;
             }
@@ -1457,7 +1460,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             if (process_surface(surf, s, verts, num_verts, indices, num_indices,
                                 shaders, num_shaders,
                                 cluster_batches[batch_cluster],
-                                skipped_nodraw, skipped_sky)) {
+                                skipped_nodraw)) {
                 processed_any = true;
             }
         }
@@ -1532,13 +1535,14 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             // Validate shader index
             if (patch->iShader >= (uint16_t)num_shaders) continue;
 
-            // Filter tool/invisible shaders
+            // The engine does ZERO filtering on terrain patches — no NODRAW,
+            // no SKY, no shader-name checks.  R_UnpackTerraPatch loads every
+            // patch, R_MarkTerrainPatch marks purely by distance/cone, and
+            // R_AddTerrainSurfaces submits all marked patches unconditionally.
+            // Only skip truly invalid data (lmapScale == 0 would crash the engine).
             const bsp_shader_t *sh = &shaders[patch->iShader];
-            if (sh->surfaceFlags & SURF_NODRAW) continue;
-            if (sh->surfaceFlags & SURF_SKY) continue;
-            if (is_tool_shader(sh->shader)) continue;
 
-            // Skip patches with invalid lightmap scale
+            // Skip patches with invalid lightmap scale (engine would Com_Error)
             if (patch->lmapScale == 0) continue;
 
             // Compute world-space origin
@@ -1583,75 +1587,142 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             // nodes for individual PVS + frustum culling).
             ShaderBatch tbatch;
             tbatch.shader_name = sh->shader;
-            tbatch.force_opaque = true;
+            tbatch.force_opaque = false;
             tbatch.lightmap_num = terrain_lm;
 
             int base = 0;
-            int solid_verts = 0;
 
-            // Generate 9x9 = 81 vertices.
-            // For each vertex, check if it's inside solid BSP space
-            // (inside a wall/floor brush).  In the original engine,
-            // indoor BSP leaves don't reference terrain patches, so
-            // terrain is never drawn indoors.  Since we render full
-            // patches, clamp vertices in solid space to a very low Z
-            // so the Z-buffer rejects them behind any floor surface.
-            for (int row = 0; row < 9; row++) {
-                for (int col = 0; col < 9; col++) {
-                    float vx = x0 + col * 64.0f;
-                    float vy = y0 + row * 64.0f;
-                    float vz = z0 + patch->heightmap[row * 9 + col] * 2.0f;
+            // Full 9×9 terrain mesh using the real heightmap values.
+            //
+            // The engine (tr_terrain.c) uses all 81 heightmap values at max LOD.
+            // Each vertex height is: z0 + heightmap[row*9+col] * 2.
+            //
+            // The engine does NOT clip terrain triangles against BSP solid
+            // brushes for rendering — it relies on PVS visibility culling
+            // and the depth buffer for occlusion.  Our previous
+            // CM_PointContents-based solid masking was a custom invention
+            // that created jagged sawtooth artifacts at wall-terrain
+            // boundaries and holes in the terrain mesh.
+            static const int TGRID = 9;   // 9x9 vertices
+            static const int TCELLS = 8;  // 8x8 quads
 
-                    // Check if this vertex is in solid BSP space.
-                    // Also check a point slightly above (+16 units) to
-                    // catch vertices that sit exactly on a floor plane.
-                    float test_pt[3] = {vx, vy, vz + 16.0f};
-                    int vtx_cluster = Godot_BSP_PointCluster(test_pt);
-                    if (vtx_cluster < 0) {
-                        // Vertex is inside solid geometry — push it
-                        // far below so it can't appear above any floor.
-                        vz -= 512.0f;
-                        solid_verts++;
+            for (int row = 0; row < TGRID; row++) {
+                for (int col = 0; col < TGRID; col++) {
+                    float uf = (float)col / 8.0f;
+                    float vf = (float)row / 8.0f;
+
+                    // Use the actual heightmap value — matches the engine's
+                    // R_InterpolateVert at max LOD (ter_maxlod = 6).
+                    float h = (float)patch->heightmap[row * 9 + col];
+                    float vx = x0 + (float)col * 64.0f;
+                    float vy = y0 + (float)row * 64.0f;
+                    float vz = z0 + h * 2.0f;
+
+                    float ep[3] = {vx, vy, vz};
+                    tbatch.positions.push_back(id_to_godot_pos(ep));
+
+                    // Surface normal via finite differences from actual heightmap.
+                    // dh/du and dh/dv use central differences where possible,
+                    // forward/backward at edges.  Cell spacing = 64 world units,
+                    // height scale = 2.
+                    float h_left  = (col > 0) ? (float)patch->heightmap[row * 9 + col - 1] : h;
+                    float h_right = (col < 8) ? (float)patch->heightmap[row * 9 + col + 1] : h;
+                    float h_down  = (row > 0) ? (float)patch->heightmap[(row - 1) * 9 + col] : h;
+                    float h_up    = (row < 8) ? (float)patch->heightmap[(row + 1) * 9 + col] : h;
+                    float du_step = (col > 0 && col < 8) ? 128.0f : 64.0f;  // 2 cells or 1 cell
+                    float dv_step = (row > 0 && row < 8) ? 128.0f : 64.0f;
+                    float dh_du = (h_right - h_left) * 2.0f / du_step;  // height scale * 2 / spacing
+                    float dh_dv = (h_up - h_down) * 2.0f / dv_step;
+                    // Cross product of tangent vectors (1,0,dh_du) x (0,1,dh_dv) = (-dh_du, -dh_dv, 1)
+                    float nx_e = -dh_du;
+                    float ny_e = -dh_dv;
+                    float nz_e = 1.0f;
+                    float nlen = sqrtf(nx_e * nx_e + ny_e * ny_e + nz_e * nz_e);
+                    if (nlen > 0.001f) {
+                        nx_e /= nlen;
+                        ny_e /= nlen;
+                        nz_e /= nlen;
+                    } else {
+                        nx_e = 0.0f;
+                        ny_e = 0.0f;
+                        nz_e = 1.0f;
                     }
+                    float n_eng[3] = {nx_e, ny_e, nz_e};
+                    tbatch.normals.push_back(id_to_godot_dir(n_eng));
 
-                    float engine_pos[3] = {vx, vy, vz};
-                    tbatch.positions.push_back(id_to_godot_pos(engine_pos));
-                    tbatch.normals.push_back(
-                        compute_terrain_normal(patch->heightmap, col, row));
-
-                    float u_frac = col / 8.0f;
-                    float v_frac = row / 8.0f;
-                    float u = lerpf(lerpf(s00, s10, u_frac),
-                                    lerpf(s01, s11, u_frac), v_frac);
-                    float v = lerpf(lerpf(t00, t10, u_frac),
-                                    lerpf(t01, t11, u_frac), v_frac);
+                    float u = lerpf(lerpf(s00, s10, uf),
+                                    lerpf(s01, s11, uf), vf);
+                    float v = lerpf(lerpf(t00, t10, uf),
+                                    lerpf(t01, t11, uf), vf);
                     tbatch.uvs.push_back(Vector2(u, v));
 
-                    float lmu = lm_s_norm + u_frac * lm_ext;
-                    float lmv = lm_t_norm + v_frac * lm_ext;
+                    float lmu = lm_s_norm + uf * lm_ext;
+                    float lmv = lm_t_norm + vf * lm_ext;
                     tbatch.lm_uvs.push_back(Vector2(lmu, lmv));
                     tbatch.colors.push_back(Color(1.0f, 1.0f, 1.0f, 1.0f));
                 }
             }
 
-            // Generate 8x8 quads = 128 triangles
-            for (int row = 0; row < 8; row++) {
-                for (int col = 0; col < 8; col++) {
-                    int i0 = base + row * 9 + col;
-                    int i1 = i0 + 1;
-                    int i2 = i0 + 9;
-                    int i3 = i2 + 1;
+            bool flip_winding = ((patch->flags & TERPATCH_FLIP) != 0);
 
-                    tbatch.indices.push_back(i0);
-                    tbatch.indices.push_back(i2);
-                    tbatch.indices.push_back(i1);
-                    tbatch.indices.push_back(i1);
-                    tbatch.indices.push_back(i2);
-                    tbatch.indices.push_back(i3);
+            // Triangle topology: checkerboard alternating diagonal per cell.
+            //
+            // The engine's collision code (cm_terrain.c:301) and full-LOD
+            // ROAM tree both use (col + row) & 1 to alternate the diagonal
+            // direction in a checkerboard pattern.  TERPATCH_NEIGHBOR only
+            // affects the ROAM binary-tree structure (LOD), NOT the
+            // full-resolution topology.  TERPATCH_FLIP swaps the winding
+            // order (face normal direction).
+            //
+            // Vertex mapping (col=i, row=j in engine coords):
+            //   i0 = (col, row)       = engine v1
+            //   i1 = (col+1, row)     = engine v2
+            //   i2 = (col, row+1)     = engine v4
+            //   i3 = (col+1, row+1)   = engine v3
+            //
+            // The engine does NOT clip terrain triangles against BSP solid
+            // brushes — the depth buffer handles occlusion.
+
+            for (int row = 0; row < TCELLS; row++) {
+                for (int col = 0; col < TCELLS; col++) {
+                    int i0 = base + row * TGRID + col;       // v1
+                    int i1 = i0 + 1;                         // v2
+                    int i2 = i0 + TGRID;                     // v4
+                    int i3 = i2 + 1;                         // v3
+
+                    int t0a, t0b, t0c;
+                    int t1a, t1b, t1c;
+
+                    if ((col + row) & 1) {
+                        // Odd cell: diagonal v2→v4 = i1→i2
+                        if (flip_winding) {
+                            t0a = i2; t0b = i1; t0c = i3;   // (v4, v2, v3)
+                            t1a = i1; t1b = i2; t1c = i0;   // (v2, v4, v1)
+                        } else {
+                            t0a = i1; t0b = i2; t0c = i3;   // (v2, v4, v3)
+                            t1a = i2; t1b = i1; t1c = i0;   // (v4, v2, v1)
+                        }
+                    } else {
+                        // Even cell: diagonal v1→v3 = i0→i3
+                        if (flip_winding) {
+                            t0a = i0; t0b = i3; t0c = i2;   // (v1, v3, v4)
+                            t1a = i3; t1b = i0; t1c = i1;   // (v3, v1, v2)
+                        } else {
+                            t0a = i3; t0b = i0; t0c = i2;   // (v3, v1, v4)
+                            t1a = i0; t1b = i3; t1c = i1;   // (v1, v3, v2)
+                        }
+                    }
+
+                    tbatch.indices.push_back(t0a);
+                    tbatch.indices.push_back(t0b);
+                    tbatch.indices.push_back(t0c);
+                    tbatch.indices.push_back(t1a);
+                    tbatch.indices.push_back(t1b);
+                    tbatch.indices.push_back(t1c);
                 }
             }
 
-            tbatch.vertex_offset = 81;
+            tbatch.vertex_offset = TGRID * TGRID;
 
             // Build ArrayMesh via the standard batches_to_array_mesh path
             // (single-batch map keyed by the terrain shader+lightmap).
@@ -1665,20 +1736,17 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             if (tmesh.is_valid() && tmesh->get_surface_count() > 0) {
                 TerrainPatchMesh tpm;
                 tpm.clusters = clusters_for_patch;
+                tpm.bsp_patch_index = p;
 
                 MeshInstance3D *tmi = memnew(MeshInstance3D);
                 tmi->set_name(String("Terrain_") + String::num_int64(p));
                 tmi->set_mesh(tmesh);
+                // Fail-closed: terrain patch is shown only after a successful
+                // live renderer tessellation update for the current frame.
+                tmi->set_visible(false);
                 tpm.mesh = tmi;
 
                 s_terrain_patches.push_back(std::move(tpm));
-
-                if (solid_verts > 0) {
-                    UtilityFunctions::print(
-                        String("[BSP] Terrain patch ") + String::num_int64(p) +
-                        ": " + String::num_int64(solid_verts) +
-                        "/81 vertices in solid BSP space, lowered");
-                }
             }
 
             terrain_processed++;
@@ -1722,8 +1790,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
                             String::num_int64(terrain_processed) +
                             " terrain patches, skipped " +
                             String::num_int64(skipped_nodraw) +
-                            " (nodraw/tool), " + String::num_int64(skipped_sky) +
-                            " (sky), " + String::num_int64(skipped_type) +
+                            " (nodraw), " + String::num_int64(skipped_type) +
                             " (flare), " + String::num_int64(skipped_bmodel) +
                             " (brushmodel). " +
                             String::num_int64((int64_t)cluster_batches.size()) +
@@ -1782,14 +1849,14 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             int count = bsp_models[m].numSurfaces;
 
             std::unordered_map<int64_t, ShaderBatch> bm_batches;
-            int bm_skip_nd = 0, bm_skip_sky = 0;
+            int bm_skip_nd = 0;
 
             for (int si = first; si < first + count && si < num_surfaces; si++) {
                 if (si < 0) continue;
                 const bsp_surface_t *surf = &surfaces[si];
                 process_surface(surf, si, verts, num_verts, indices, num_indices,
                                 shaders, num_shaders, bm_batches,
-                                bm_skip_nd, bm_skip_sky);
+                                bm_skip_nd);
             }
 
             if (!bm_batches.empty()) {
@@ -2039,6 +2106,99 @@ int Godot_BSP_GetTerrainPatchCluster(int index, int ci) {
     if (index < 0 || index >= (int)s_terrain_patches.size()) return -1;
     if (ci < 0 || ci >= (int)s_terrain_patches[index].clusters.size()) return -1;
     return s_terrain_patches[index].clusters[ci];
+}
+
+int Godot_BSP_GetTerrainPatchBSPIndex(int index) {
+    if (index < 0 || index >= (int)s_terrain_patches.size()) return -1;
+    return s_terrain_patches[index].bsp_patch_index;
+}
+
+int Godot_BSP_UpdateTerrainPatchFromRenderer(int index) {
+    static constexpr int MAX_PATCH_VERTS = 8192;
+    static constexpr int MAX_PATCH_INDICES = 24576;
+
+    if (index < 0 || index >= (int)s_terrain_patches.size()) return 0;
+
+    TerrainPatchMesh &tp = s_terrain_patches[index];
+    if (!tp.mesh) return 0;
+    if (tp.bsp_patch_index < 0) return 0;
+
+    std::vector<float> xyz(MAX_PATCH_VERTS * 3);
+    std::vector<float> uv0(MAX_PATCH_VERTS * 2);
+    std::vector<float> uv1(MAX_PATCH_VERTS * 2);
+    std::vector<int> indices(MAX_PATCH_INDICES);
+
+    int vert_count = 0;
+    int index_count = 0;
+
+    if (!Godot_Terrain_GetPatchMesh(tp.bsp_patch_index,
+            xyz.data(), uv0.data(), uv1.data(),
+            MAX_PATCH_VERTS, indices.data(), MAX_PATCH_INDICES,
+            &vert_count, &index_count)) {
+        return 0;
+    }
+
+    if (vert_count <= 0 || index_count <= 0) {
+        return 0;
+    }
+
+    PackedVector3Array positions;
+    PackedVector3Array normals;
+    PackedVector2Array tex_uv;
+    PackedVector2Array lm_uv;
+    PackedColorArray colors;
+    PackedInt32Array inds;
+
+    positions.resize(vert_count);
+    normals.resize(vert_count);
+    tex_uv.resize(vert_count);
+    lm_uv.resize(vert_count);
+    colors.resize(vert_count);
+    inds.resize(index_count);
+
+    for (int v = 0; v < vert_count; v++) {
+        float ep[3] = {
+            xyz[v * 3 + 0],
+            xyz[v * 3 + 1],
+            xyz[v * 3 + 2]
+        };
+        positions.set(v, id_to_godot_pos(ep));
+        normals.set(v, Vector3(0.0f, 1.0f, 0.0f));
+        tex_uv.set(v, Vector2(uv0[v * 2 + 0], uv0[v * 2 + 1]));
+        lm_uv.set(v, Vector2(uv1[v * 2 + 0], uv1[v * 2 + 1]));
+        colors.set(v, Color(1.0f, 1.0f, 1.0f, 1.0f));
+    }
+    for (int i = 0; i < index_count; i++) {
+        inds.set(i, indices[i]);
+    }
+
+    Array arrays;
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = positions;
+    arrays[Mesh::ARRAY_NORMAL] = normals;
+    arrays[Mesh::ARRAY_TEX_UV] = tex_uv;
+    arrays[Mesh::ARRAY_TEX_UV2] = lm_uv;
+    arrays[Mesh::ARRAY_COLOR] = colors;
+    arrays[Mesh::ARRAY_INDEX] = inds;
+
+    Ref<ArrayMesh> mesh = tp.mesh->get_mesh();
+    if (mesh.is_null()) {
+        mesh.instantiate();
+        tp.mesh->set_mesh(mesh);
+    }
+
+    Ref<Material> mat;
+    if (mesh->get_surface_count() > 0) {
+        mat = mesh->surface_get_material(0);
+    }
+
+    mesh->clear_surfaces();
+    mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+    if (mat.is_valid()) {
+        mesh->surface_set_material(0, mat);
+    }
+
+    return 1;
 }
 
 /* C API functions and mark fragment implementation moved to

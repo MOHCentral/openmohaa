@@ -123,6 +123,13 @@ extern "C" {
     const char *Godot_Renderer_GetWorldMapName(void);
     int  Godot_Renderer_IsWorldMapLoaded(void);
 
+    // Terrain visibility — from tr_world.c and tr_terrain.c
+    void R_MarkTerrainForGodot(const float vieworg[3], const float viewaxis[3][3],
+                                float fov_x, float fov_y, float farplane_dist);
+    void Godot_Terrain_TessellateForGodot(void);
+    int  Godot_Terrain_IsPatchMarked(int patchIdx);
+    int  Godot_Terrain_GetRendererPatchCount(void);
+
     // Entity/light bridge (Phase 7e) — from godot_renderer.c
     int  Godot_Renderer_GetEntityCount(void);
     int  Godot_Renderer_GetEntity(int index,
@@ -1430,25 +1437,8 @@ void MoHAARunner::update_pvs_visibility() {
         }
     }
 
-    // Toggle terrain patch visibility — visible if ANY owning cluster is PVS-visible
-    int tp_count = Godot_BSP_GetTerrainPatchCount();
-    int tp_visible = 0, tp_hidden = 0;
-    for (int i = 0; i < tp_count; i++) {
-        MeshInstance3D *tmi = Godot_BSP_GetTerrainPatchMesh(i);
-        if (!tmi) continue;
-        int nc = Godot_BSP_GetTerrainPatchClusterCount(i);
-        bool vis = false;
-        for (int ci = 0; ci < nc; ci++) {
-            int tc = Godot_BSP_GetTerrainPatchCluster(i, ci);
-            if (tc >= 0 && Godot_BSP_ClusterVisible(new_cluster, tc) != 0) {
-                vis = true;
-                break;
-            }
-        }
-        tmi->set_visible(vis);
-        if (vis) tp_visible++;
-        else     tp_hidden++;
-    }
+    // Terrain visibility is now handled per-frame by update_terrain_visibility()
+    // using the engine's real BSP tree walk + PVS + frustum + ter_cull pipeline.
 
     if (pvs_log_count < 5) {
         UtilityFunctions::print(String("[PVS] Cluster ") +
@@ -1461,6 +1451,60 @@ void MoHAARunner::update_pvs_visibility() {
                                 " visible, " + String::num_int64(sm_hidden) +
                                 " hidden.");
         pvs_log_count++;
+    }
+}
+
+// ──────────────────────────────────────────────
+//  Per-frame terrain visibility (engine-parity)
+// ──────────────────────────────────────────────
+//  Uses the engine's real BSP tree walk, PVS, frustum culling, and
+//  ter_cull view-cone test via R_MarkTerrainForGodot(). This replicates
+//  the exact code path that R_AddWorldSurfaces() → R_RecursiveWorldNode()
+//  uses in the real renderer to mark terrain patches as visible.
+
+void MoHAARunner::update_terrain_visibility() {
+    int tp_count = Godot_BSP_GetTerrainPatchCount();
+    if (tp_count <= 0) return;
+
+    // Read current view parameters (already captured by GR_RenderScene)
+    float origin[3];
+    Godot_Renderer_GetViewOrigin(origin);
+
+    float axis_flat[9];
+    Godot_Renderer_GetViewAxis(axis_flat);
+
+    // Reshape flat float[9] → float[3][3] for the engine function
+    float axis[3][3];
+    axis[0][0] = axis_flat[0]; axis[0][1] = axis_flat[1]; axis[0][2] = axis_flat[2];
+    axis[1][0] = axis_flat[3]; axis[1][1] = axis_flat[4]; axis[1][2] = axis_flat[5];
+    axis[2][0] = axis_flat[6]; axis[2][1] = axis_flat[7]; axis[2][2] = axis_flat[8];
+
+    float fov_x = 0.0f, fov_y = 0.0f;
+    Godot_Renderer_GetFov(&fov_x, &fov_y);
+
+    float farplane_dist = 0.0f, farplane_bias = 0.0f;
+    float farplane_color[3] = {0};
+    int   farplane_cull = 0;
+    Godot_Renderer_GetFarplane(&farplane_dist, &farplane_bias, farplane_color, &farplane_cull);
+
+    // Run the engine's terrain marking pipeline:
+    // R_SetupFrustum → R_MarkLeaves → R_TerrainPrepareFrame → R_TerrainOnlyWorldNode
+    R_MarkTerrainForGodot(origin, axis, fov_x, fov_y, farplane_dist);
+    Godot_Terrain_TessellateForGodot();
+
+    // Apply visibility results to Godot MeshInstance3D nodes
+    for (int i = 0; i < tp_count; i++) {
+        MeshInstance3D *tmi = Godot_BSP_GetTerrainPatchMesh(i);
+        if (!tmi) continue;
+        int bsp_idx = Godot_BSP_GetTerrainPatchBSPIndex(i);
+        const bool marked = (bsp_idx >= 0 && Godot_Terrain_IsPatchMarked(bsp_idx) != 0);
+        if (!marked) {
+            tmi->set_visible(false);
+            continue;
+        }
+
+        const bool updated = (Godot_BSP_UpdateTerrainPatchFromRenderer(i) != 0);
+        tmi->set_visible(updated);
     }
 }
 
@@ -8041,6 +8085,9 @@ void MoHAARunner::_process(double delta) {
 
     // ── PVS cluster visibility culling ──
     update_pvs_visibility();
+
+    // ── Per-frame terrain visibility via engine BSP tree walk ──
+    update_terrain_visibility();
 
     // ── Update entity debug meshes from captured render data (Phase 7e) ──
     update_entities();

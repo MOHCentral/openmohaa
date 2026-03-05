@@ -68,7 +68,7 @@ static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
 		sphereCull = R_CullPointAndRadius( cv->localOrigin, cv->meshRadius );
 	}
 	boxCull = CULL_OUT;
-	
+
 	// check for trivial reject
 	if ( sphereCull == CULL_OUT )
 	{
@@ -82,7 +82,7 @@ static qboolean	R_CullGrid( srfGridMesh_t *cv ) {
 
 		boxCull = R_CullLocalBox( cv->meshBounds );
 
-		if ( boxCull == CULL_OUT ) 
+		if ( boxCull == CULL_OUT )
 		{
 			tr.pc.c_box_cull_patch_out++;
 			return qtrue;
@@ -149,7 +149,7 @@ static qboolean	R_CullSurface( surfaceType_t *surface, shader_t *shader ) {
 
 	// don't cull exactly on the plane, because there are levels of rounding
 	// through the BSP, ICD, and hardware that may cause pixel gaps if an
-	// epsilon isn't allowed here 
+	// epsilon isn't allowed here
 	if ( shader->cullType == CT_FRONT_SIDED ) {
 		if ( d < sface->plane.dist - 8 ) {
 			return qtrue;
@@ -495,7 +495,7 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 	if ( clip == CULL_OUT ) {
 		return;
 	}
-	
+
 	R_DlightBmodel( bmodel );
 
 	for ( i = 0 ; i < bmodel->numSurfaces ; i++ ) {
@@ -731,11 +731,11 @@ mnode_t *R_PointInLeaf( const vec3_t p ) {
 	mnode_t		*node;
 	float		d;
 	cplane_t	*plane;
-	
+
 	if ( !tr.world ) {
 		ri.Error (ERR_DROP, "R_PointInLeaf: bad model");
 	}
-	
+
 	node = tr.world->nodes;
 	while( 1 ) {
 		if (node->contents != -1) {
@@ -749,7 +749,7 @@ mnode_t *R_PointInLeaf( const vec3_t p ) {
 			node = node->children[1];
 		}
 	}
-	
+
 	return node;
 }
 
@@ -820,8 +820,8 @@ static void R_MarkLeaves (void) {
 	// if the cluster is the same and the area visibility matrix
 	// hasn't changed, we don't need to mark everything again
 
-	// if r_showcluster was just turned on, remark everything 
-	if ( tr.viewCluster == cluster && !tr.refdef.areamaskModified 
+	// if r_showcluster was just turned on, remark everything
+	if ( tr.viewCluster == cluster && !tr.refdef.areamaskModified
 		&& !r_showcluster->modified ) {
 		return;
 	}
@@ -846,7 +846,7 @@ static void R_MarkLeaves (void) {
 	}
 
 	vis = R_ClusterPVS (tr.viewCluster);
-	
+
 	for (i=0,leaf=tr.world->nodes ; i<tr.world->numnodes ; i++, leaf++) {
 		cluster = leaf->cluster;
 		if ( cluster < 0 || cluster >= tr.world->numClusters ) {
@@ -922,3 +922,125 @@ void R_AddWorldSurfaces (void) {
 
 	R_UpdateLevelMarksSystem();
 }
+
+/* ================================================================
+ *  Godot terrain-only BSP tree walk
+ *  Replicates the terrain-marking part of R_RecursiveWorldNode
+ *  without adding world surfaces to the draw list (no GL).
+ *  Called per-frame from MoHAARunner via the accessor layer.
+ * ================================================================ */
+#ifdef GODOT_GDEXTENSION
+
+/*
+ * Simplified R_RecursiveWorldNode that only marks terrain patches.
+ * Skips surface adding, dlight processing, static model marking,
+ * and permanent mark fragments — all of which are handled by
+ * Godot through separate systems.
+ */
+static void R_TerrainOnlyWorldNode(mnode_t *node, int planeBits) {
+	do {
+		/* PVS check — only visit nodes marked by R_MarkLeaves */
+		if (node->visframe != tr.visCount) {
+			return;
+		}
+
+		/* Frustum culling — identical to R_RecursiveWorldNode */
+		if (!r_nocull->integer) {
+			int r;
+
+			if (planeBits & 1) {
+				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[0]);
+				if (r == 2) return;
+				if (r == 1) planeBits &= ~1;
+			}
+			if (planeBits & 2) {
+				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[1]);
+				if (r == 2) return;
+				if (r == 1) planeBits &= ~2;
+			}
+			if (planeBits & 4) {
+				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[2]);
+				if (r == 2) return;
+				if (r == 1) planeBits &= ~4;
+			}
+			if (planeBits & 8) {
+				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[3]);
+				if (r == 2) return;
+				if (r == 1) planeBits &= ~8;
+			}
+			if ((planeBits & 16) && (tr.viewParms.farplane_cull < FARPLANE_CULL_PORTALSKY || tr.viewParms.isPortalSky)) {
+				r = BoxOnPlaneSide(node->mins, node->maxs, &tr.viewParms.frustum[4]);
+				if (r == 2) return;
+				if (r == 1) planeBits &= ~16;
+			}
+		}
+
+		/* Internal node — recurse children */
+		if (node->contents != -1) {
+			break;
+		}
+
+		R_TerrainOnlyWorldNode(node->children[0], planeBits);
+		node = node->children[1];
+	} while (1);
+
+	/* Leaf node — mark terrain patches only */
+	if (r_drawterrain->integer && tr.refdef.render_terrain && !tr.viewParms.isPortalSky) {
+		int i;
+		for (i = 0; i < node->numTerraPatches; i++) {
+			R_MarkTerrainPatch(tr.world->visTerraPatches[node->firstTerraPatch + i]);
+		}
+	}
+}
+
+/*
+ * Per-frame terrain visibility update for the Godot port.
+ * Sets up view parameters in the renderer's global state,
+ * then runs PVS marking + BSP tree walk to determine which
+ * terrain patches are visible from the current camera.
+ *
+ * Called from MoHAARunner::_process() each frame.
+ */
+void R_MarkTerrainForGodot(const vec3_t vieworg, const vec3_t viewaxis[3],
+                            float fov_x, float fov_y,
+                            float farplane_dist) {
+	if (!tr.world) return;
+
+	/* Populate tr.refdef fields used by R_TerrainPrepareFrame */
+	VectorCopy(vieworg, tr.refdef.vieworg);
+	VectorCopy(viewaxis[0], tr.refdef.viewaxis[0]);
+	VectorCopy(viewaxis[1], tr.refdef.viewaxis[1]);
+	VectorCopy(viewaxis[2], tr.refdef.viewaxis[2]);
+	tr.refdef.fov_x = fov_x;
+	tr.refdef.fov_y = fov_y;
+	tr.refdef.render_terrain = qtrue;
+
+	/* Populate tr.viewParms fields used by R_SetupFrustum and R_MarkLeaves */
+	VectorCopy(vieworg, tr.viewParms.ori.origin);
+	VectorCopy(viewaxis[0], tr.viewParms.ori.axis[0]);
+	VectorCopy(viewaxis[1], tr.viewParms.ori.axis[1]);
+	VectorCopy(viewaxis[2], tr.viewParms.ori.axis[2]);
+	VectorCopy(vieworg, tr.viewParms.pvsOrigin);
+	tr.viewParms.fovX = fov_x;
+	tr.viewParms.fovY = fov_y;
+	tr.viewParms.isPortalSky = qfalse;
+	tr.viewParms.farplane_distance = farplane_dist;
+	tr.viewParms.farplane_cull = (farplane_dist > 0.0f)
+		? FARPLANE_CULL_STANDARD : FARPLANE_CULL_NONE;
+
+	/* Build frustum planes from the view parameters */
+	R_SetupFrustum();
+
+	/* Mark PVS-visible leaves (+ parent chain) */
+	R_MarkLeaves();
+
+	/* Prepare terrain clip parameters for R_MarkTerrainPatch */
+	R_TerrainPrepareFrame();
+
+	/* Walk BSP tree, marking terrain patches from visible leaves */
+	ClearBounds(tr.viewParms.visBounds[0], tr.viewParms.visBounds[1]);
+	R_TerrainOnlyWorldNode(tr.world->nodes,
+		tr.viewParms.fog.extrafrustums ? 31 : 15);
+}
+
+#endif /* GODOT_GDEXTENSION */
