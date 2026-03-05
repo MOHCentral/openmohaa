@@ -107,8 +107,6 @@ godot::MeshInstance3D *Godot_BSP_GetClusterMesh(int cluster);
  * fine-grained PVS + frustum culling. */
 int Godot_BSP_GetTerrainPatchCount();
 godot::MeshInstance3D *Godot_BSP_GetTerrainPatchMesh(int index);
-int Godot_BSP_GetTerrainPatchClusterCount(int index);
-int Godot_BSP_GetTerrainPatchCluster(int index, int ci);
 int Godot_BSP_GetTerrainPatchBSPIndex(int index);
 int Godot_BSP_UpdateTerrainPatchFromRenderer(int index);
 #endif

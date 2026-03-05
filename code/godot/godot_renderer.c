@@ -321,6 +321,37 @@ static const gr_vidmode_t gr_vidModes[] = {
 };
 static const int gr_numVidModes = (int)( sizeof(gr_vidModes) / sizeof(gr_vidModes[0]) );
 
+/* Mirrors renderergl1/tr_init.c::R_GetModeInfo for GUI/video parity. */
+static qboolean GR_GetModeInfo( int *width, int *height, float *windowAspect,
+                                int mode, cvar_t *r_customw,
+                                cvar_t *r_customh, cvar_t *r_customaspect )
+{
+    if ( mode < -1 ) {
+        return qfalse;
+    }
+    if ( mode >= gr_numVidModes ) {
+        return qfalse;
+    }
+
+    if ( mode == -1 ) {
+        int w = r_customw ? r_customw->integer : 640;
+        int h = r_customh ? r_customh->integer : 480;
+        float aspect = r_customaspect ? r_customaspect->value : 0.0f;
+        if ( w <= 0 ) w = 640;
+        if ( h <= 0 ) h = 480;
+        if ( aspect <= 0.0f ) aspect = (float)w / (float)h;
+        *width = w;
+        *height = h;
+        *windowAspect = aspect;
+        return qtrue;
+    }
+
+    *width  = gr_vidModes[mode].width;
+    *height = gr_vidModes[mode].height;
+    *windowAspect = (float)(*width) / (float)(*height);
+    return qtrue;
+}
+
 /* Desktop resolution — set by MoHAARunner before Com_Init so
  * GR_BeginRegistration can resolve r_mode -2 correctly. */
 static int gr_desktopWidth  = 1920;
@@ -567,6 +598,16 @@ extern void RE_Shutdown( qboolean destroyWindow );
 
 static int gr_realRendererInited = 0;
 
+/* Forward declarations for 2D window state (defined in 2D drawing section). */
+static float gr_2d_left;
+static float gr_2d_right;
+static float gr_2d_top;
+static float gr_2d_bottom;
+static int   gr_2d_vp_x;
+static int   gr_2d_vp_y;
+static int   gr_2d_vp_w;
+static int   gr_2d_vp_h;
+
 /* Accessor so Godot-side C++ code can tell whether R_Init() has been called yet */
 int GR_IsRealRendererInited( void ) { return gr_realRendererInited; }
 
@@ -666,8 +707,9 @@ static void GR_BeginRegistration( glconfig_t *config )
     {
         cvar_t *r_mode_cv       = ri.Cvar_Get( "r_mode",         "-2", 0 );
         cvar_t *r_fullscreen_cv = ri.Cvar_Get( "r_fullscreen",   "0",  0 );
-        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1280", 0 );
-        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "720",  0 );
+        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1600", 0 );
+        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "1024", 0 );
+        cvar_t *r_customa_cv    = ri.Cvar_Get( "r_customaspect", "1",    0 );
 
         /* Register r_gamma so the config value is loaded and accessible
          * from the Godot side for full-screen gamma correction. */
@@ -694,24 +736,35 @@ static void GR_BeginRegistration( glconfig_t *config )
         int mode = r_mode_cv ? r_mode_cv->integer : -2;
         int fs   = r_fullscreen_cv ? r_fullscreen_cv->integer : 0;
         int w = 640, h = 480;  /* fallback */
+        float aspect = 4.0f / 3.0f;
 
-        /* Under Godot there is no physical display-mode switch.
-         * The viewport is always at the window's real resolution.
-         * gr_desktopWidth/Height is kept in sync with the actual Godot
-         * viewport each frame (before Com_Frame), so glConfig always
-         * matches the real viewport.  r_mode is irrelevant under Godot;
-         * resolution selection in MOHAA's UI becomes a no-op. */
-        (void)mode;
-        (void)fs;
-        w = gr_desktopWidth;
-        h = gr_desktopHeight;
+        /* Follow OpenMoHAA mode semantics:
+         *  -2: desktop resolution
+         *  -1: r_customwidth/r_customheight/r_customaspect
+         * >=0: indexed mode table
+         * Invalid mode falls back to 640x480 (mode 3 equivalent). */
+        if ( mode == -2 ) {
+            w = gr_desktopWidth;
+            h = gr_desktopHeight;
+            if ( w <= 0 ) w = 640;
+            if ( h <= 0 ) h = 480;
+            aspect = (float)w / (float)h;
+        } else if ( !GR_GetModeInfo( &w, &h, &aspect, mode,
+                                      r_customw_cv, r_customh_cv, r_customa_cv ) ) {
+            ri.Printf( PRINT_WARNING,
+                       "[GodotRenderer] Invalid r_mode %d, falling back to 640x480\n",
+                       mode );
+            w = 640;
+            h = 480;
+            aspect = (float)w / (float)h;
+        }
 
-        /* Set glConfig to match the actual Godot viewport resolution.
-         * The engine UI framework, SCR_AdjustFrom640(), and all draw
-         * code use these values for coordinate scaling and widget layout. */
+        /* Set glConfig to the resolved video mode.
+         * MoHAARunner applies matching Godot window/fullscreen settings
+         * after vid_restart to keep viewport and glConfig in sync. */
         config->vidWidth     = w;
         config->vidHeight    = h;
-        config->windowAspect = (float)w / (float)h;
+        config->windowAspect = aspect;
         config->isFullscreen = (qboolean)( fs != 0 );
 
         gr_vidRestart_fullscreen = fs;
@@ -887,6 +940,27 @@ static void GR_SetWorldVisData( const byte *vis )
 static void GR_BeginFrame( stereoFrame_t stereoFrame )
 {
     (void)stereoFrame;
+    /* Reset 2D transform state to default full-screen window each frame.
+     * Loading/connect draws can run before UI code sets a custom 2D window,
+     * so stale state from a previous frame must not leak forward. */
+    {
+        int vw = stored_glconfig.vidWidth  > 0 ? stored_glconfig.vidWidth  : 640;
+        int vh = stored_glconfig.vidHeight > 0 ? stored_glconfig.vidHeight : 480;
+        gr_2d_vp_x   = 0;
+        gr_2d_vp_y   = 0;
+        gr_2d_vp_w   = vw;
+        gr_2d_vp_h   = vh;
+        gr_2d_left   = 0.0f;
+        gr_2d_right  = (float)vw;
+        gr_2d_top    = 0.0f;
+        gr_2d_bottom = (float)vh;
+
+        gr_scissorX      = 0;
+        gr_scissorY      = 0;
+        gr_scissorWidth  = vw;
+        gr_scissorHeight = vh;
+    }
+
     /* Reset 2D command buffer for this frame */
     gr_num2DCmds = 0;
     /* Reset HUD model state so the first ClearScene does a full clear */

@@ -5955,22 +5955,7 @@ void MoHAARunner::update_2d_overlay() {
     // Use cached transformation values calculated by update_ui_transform()
     float vid_area = (float)(ui_vid_w * ui_vid_h);
 
-    // Determine whether we should allow fullscreen background fills.
-    // When a UI menu is active (main menu, options, console, loading screen)
-    // the engine draws UI_ClearBackground() as a fullscreen black box, plus
-    // menu background textures.  We must let those through so the menu is
-    // visible.  Only suppress large fills when we're in-game (CA_ACTIVE=8)
-    // with no overlay active and the world map is loaded — that's when fills
-    // would harmfully cover the 3D view.
-    bool overlay_on = (Godot_Client_IsMenuUp() != 0)
-                    || (Godot_Client_IsAnyOverlayActive() != 0);
-    bool in_active_game = (Godot_Client_GetState() == 8); // CA_ACTIVE
-    bool world_loaded = Godot_Renderer_IsWorldMapLoaded() != 0;
-    bool allow_fullscreen_fills = overlay_on || !in_active_game || !world_loaded;
-
     bool scissor_enabled = false;
-    bool saw_textured_draw = false;
-    static bool logged_late_clear_skip = false;
 
     Rect2 scissor_rect;
 
@@ -5982,9 +5967,7 @@ void MoHAARunner::update_2d_overlay() {
             sb_dump_done = true;
             UtilityFunctions::print(String("[SB-DIAG] Scoreboard visible, dumping ") +
                                     String::num(cmd_count) + String(" 2D commands:"));
-            UtilityFunctions::print(String("[SB-DIAG] overlay_on=") + String::num((int)overlay_on) +
-                                    String(" allow_fills=") + String::num((int)allow_fullscreen_fills) +
-                                    String(" vid_area=") + String::num(vid_area));
+            UtilityFunctions::print(String("[SB-DIAG] vid_area=") + String::num(vid_area));
             for (int di = 0; di < cmd_count && di < 200; di++) {
                 int dtype, dshader;
                 float dx, dy, dw, dh, ds1, dt1, ds2, dt2, dcol[4];
@@ -6049,24 +6032,16 @@ void MoHAARunner::update_2d_overlay() {
             continue;
         }
 
-        // Menu/UI path: a late fullscreen black box can appear after textured
-        // quads and hide the backdrop. In GL this is constrained by state;
-        // in our flattened 2D stream we suppress that specific late clear.
-        if (overlay_on && saw_textured_draw && type == 1 &&
-            w * h > vid_area * 0.5f && color[3] > 0.95f &&
-            color[0] < 0.05f && color[1] < 0.05f && color[2] < 0.05f) {
-            if (!logged_late_clear_skip) {
-                logged_late_clear_skip = true;
-                UtilityFunctions::print("[MoHAA][2D] Skipping late fullscreen black clear after textured UI draws");
-            }
-            continue;
-        }
-
-        // Skip fullscreen opaque fills when in-game with no overlay.
-        // These screen clears would cover the 3D view.  But when UI menus
-        // are active, we need them for menu backgrounds.
-        if (!allow_fullscreen_fills && type == 1 && w * h > vid_area * 0.5f && color[3] > 0.9f) {
-            continue;
+        /* Draw loading background exactly at the command-stream index recorded
+         * by GR_DrawBackground so layering matches OpenMoHAA.
+         * Menu backdrops/clears before this remain underneath;
+         * frame/text/loading widgets after this draw above it. */
+        if (has_loading_bg && i == bg_cmd_index) {
+            RID bg_ci = get_segment_ci(BLEND_MIX);
+            Rect2 bg_rect(ui_offset_x, ui_offset_y,
+                          (float)ui_vid_w * ui_scale_x,
+                          (float)ui_vid_h * ui_scale_y);
+            rs->canvas_item_add_texture_rect(bg_ci, bg_rect, loading_bg_tex->get_rid());
         }
 
         // no-op: loading bg fill suppression removed — bg now drawn at correct Z position
@@ -6503,16 +6478,12 @@ void MoHAARunner::update_2d_overlay() {
                         rs->canvas_item_add_triangle_array(target_ci, idx, pts, cols, fuv, PackedInt32Array(), PackedFloat32Array(), tex_rid, -1);
                     }
                 }
-                saw_textured_draw = true;
             }
             // If texture not loaded, skip — don't draw opaque coloured rect fallback
         } else if (type == 0) {
-            // StretchPic with no shader — draw unless it's a large opaque fill
-            // that would cover the 3D view when in-game with no overlay.
-            if (allow_fullscreen_fills || w * h < vid_area * 0.5f || color[3] < 0.9f) {
-                RID noshader_ci = get_segment_ci(BLEND_MIX);
-                rs->canvas_item_add_rect(noshader_ci, draw_rect, col);
-            }
+            // StretchPic with no shader — parity path: draw as solid rect.
+            RID noshader_ci = get_segment_ci(BLEND_MIX);
+            rs->canvas_item_add_rect(noshader_ci, draw_rect, col);
         } else if (type == 3 && shader > 0) {
             // GR_2D_TRIANGLE — textured triangle (compass, needle, circle, spinner)
             float tri_verts[6], tri_uvs[6];
@@ -6604,10 +6575,17 @@ void MoHAARunner::update_2d_overlay() {
 
                     RID tex_rid = tex->get_rid();
                     rs->canvas_item_add_polygon(target_ci, points, colors_arr, uvs, tex_rid);
-                    saw_textured_draw = true;
                 }
             }
         }
+    }
+
+    if (has_loading_bg && bg_cmd_index >= cmd_count) {
+        RID bg_ci = get_segment_ci(BLEND_MIX);
+        Rect2 bg_rect(ui_offset_x, ui_offset_y,
+                      (float)ui_vid_w * ui_scale_x,
+                      (float)ui_vid_h * ui_scale_y);
+        rs->canvas_item_add_texture_rect(bg_ci, bg_rect, loading_bg_tex->get_rid());
     }
 
     /* Flush any remaining HUD model viewport textures whose draw_order
@@ -8003,18 +7981,39 @@ void MoHAARunner::_process(double delta) {
 
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
-                /* Under Godot, r_mode resolution selection is a no-op.
-                 * GR_BeginRegistration always uses the current viewport
-                 * size.  We only toggle fullscreen/windowed mode here;
-                 * the window size is NOT changed (the viewport stays
-                 * at whatever Godot has it). */
+                if (vw <= 0) vw = 640;
+                if (vh <= 0) vh = 480;
+
+                /* Match OpenMoHAA vid_restart semantics: honour both
+                 * fullscreen and resolved mode dimensions. */
                 if (fs) {
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
                 } else {
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_WINDOWED);
+                    ds->window_set_size(Vector2i(vw, vh));
                 }
+
+                /* Keep renderer/client video state aligned immediately after
+                 * mode changes so UI and 2D scaling use the new dimensions
+                 * in the same frame. */
+                Vector2 vp = get_viewport()->get_visible_rect().size;
+                int sync_w = (int)vp.x;
+                int sync_h = (int)vp.y;
+                if (sync_w < 1 || sync_h < 1) {
+                    Vector2i win = ds->window_get_size();
+                    sync_w = win.x;
+                    sync_h = win.y;
+                }
+                if (sync_w > 0 && sync_h > 0) {
+                    Godot_Renderer_SetDesktopResolution(sync_w, sync_h);
+                    Godot_Renderer_SyncVidSize(sync_w, sync_h);
+                    Godot_Client_SyncGlConfigVidSize(sync_w, sync_h);
+                    Godot_Client_RefreshUIDef();
+                }
+
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +
-                    String::num_int64(fs) + String(" (resolution change ignored under Godot)"));
+                    String::num_int64(fs) + String(" resolved=") +
+                    String::num_int64(vw) + String("x") + String::num_int64(vh));
             }
         }
     }
