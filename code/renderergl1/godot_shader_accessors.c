@@ -887,7 +887,7 @@ static GodotShaderProps *shader_cache_insert(const char *name) {
 /* ===================================================================
  *  Resolve a shader name → shader_t, with on-demand R_FindShader()
  * ================================================================ */
-static shader_t *resolve_shader(const char *name) {
+static shader_t *resolve_shader_lm(const char *name, int lightmapIndex) {
     shader_t *sh;
 
     /* First try already-loaded lookup (cheap) */
@@ -898,8 +898,10 @@ static shader_t *resolve_shader(const char *name) {
 
     /* Not yet loaded — call R_FindShader which will parse the .shader
      * text definition (or create an implicit shader from the image).
-     * Use LIGHTMAP_NONE for generic lookups. */
-    sh = R_FindShader(name, LIGHTMAP_NONE, qtrue, qtrue, qtrue, qtrue);
+     * Caller specifies lightmapIndex:
+     *   LIGHTMAP_2D   → 2D/UI (RE_RegisterShaderNoMip parity)
+     *   LIGHTMAP_NONE → 3D entities/world */
+    sh = R_FindShader(name, lightmapIndex, qtrue, qtrue, qtrue, qtrue);
     /* Check both the defaultShader flag AND pointer identity.
      * CreateInternalShaders doesn't set tr.defaultShader->defaultShader = qtrue,
      * so pointer comparison is the reliable check. */
@@ -981,8 +983,44 @@ const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name) {
     if (cached)
         return cached;
 
-    /* 2. Resolve via real renderer */
-    sh = resolve_shader(shader_name);
+    /* 2. Resolve via real renderer (generic: LIGHTMAP_NONE) */
+    sh = resolve_shader_lm(shader_name, LIGHTMAP_NONE);
+    if (!sh)
+        return NULL;
+
+    /* 3. Convert and cache */
+    props = shader_cache_insert(lname);
+    if (!props)
+        return NULL;
+
+    convert_shader(sh, props);
+    return props;
+}
+
+const GodotShaderProps *Godot_ShaderProps_Find_2D(const char *shader_name) {
+    const GodotShaderProps *cached;
+    shader_t *sh;
+    GodotShaderProps *props;
+    char lname[MAX_QPATH];
+
+    if (!shader_name || !shader_name[0])
+        return NULL;
+
+    /* Lowercase for consistent lookup */
+    Q_strncpyz(lname, shader_name, sizeof(lname));
+    for (char *p = lname; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
+    }
+
+    /* 1. Check cache */
+    cached = shader_cache_find(lname);
+    if (cached)
+        return cached;
+
+    /* 2. Resolve with LIGHTMAP_2D — matching RE_RegisterShaderNoMip parity.
+     *    All 2D/UI shaders use LIGHTMAP_2D which makes FinishShader set
+     *    CGEN_GLOBAL_COLOR (respects SetColor). */
+    sh = resolve_shader_lm(shader_name, LIGHTMAP_2D);
     if (!sh)
         return NULL;
 

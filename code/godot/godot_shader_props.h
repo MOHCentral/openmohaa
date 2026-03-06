@@ -323,6 +323,13 @@ void Godot_ShaderProps_Unload();
 const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name);
 
 /*
+ * Look up properties for a 2D/UI shader by name.
+ * Uses LIGHTMAP_2D resolution (matching RE_RegisterShaderNoMip parity)
+ * so implicit shaders get CGEN_GLOBAL_COLOR (respects SetColor).
+ */
+const GodotShaderProps *Godot_ShaderProps_Find_2D(const char *shader_name);
+
+/*
  * Returns the number of parsed shader definitions.
  */
 int Godot_ShaderProps_Count();

@@ -94,6 +94,21 @@
 #define HAS_SCREEN_EFFECTS_MODULE 1
 #endif
 
+#if __has_include("godot_weapon_effects.h")
+#include "godot_weapon_effects.h"
+#define HAS_WEAPON_EFFECTS_MODULE 1
+#endif
+
+#if __has_include("godot_impact_effects.h")
+#include "godot_impact_effects.h"
+#define HAS_IMPACT_EFFECTS_MODULE 1
+#endif
+
+#if __has_include("godot_explosion_effects.h")
+#include "godot_explosion_effects.h"
+#define HAS_EXPLOSION_EFFECTS_MODULE 1
+#endif
+
 #if __has_include("godot_game_accessors.h")
 #include "godot_game_accessors.h"
 #define HAS_GAME_ACCESSORS_MODULE 1
@@ -318,6 +333,9 @@ private:
     // Reverb state
     int current_reverb_type = -1;
     int reverb_bus_idx = -1;
+
+    // Screen effect trigger state — track health to detect damage
+    int prev_health = -1;  // Previous frame's player health (-1 = uninitialised)
 
     // Entity mesh caching (Phase 37, improved Phase 60)
     // Track per-entity state hash to avoid rebuilding meshes each frame

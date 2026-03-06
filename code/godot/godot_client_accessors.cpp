@@ -246,4 +246,20 @@ void Godot_Client_ResolutionChange(void) {
     }
 }
 
+/* Player health — STAT_HEALTH (index 0) from playerState_t.stats[].
+ * Returns 0 when dead, negative when not yet valid. */
+int Godot_Client_GetPlayerHealth(void) {
+    return cl.snap.ps.stats[0]; /* STAT_HEALTH = 0 */
+}
+
+/* Full-screen blend colour from playerState_t.blend[4].
+ * The engine sets this for damage flash (red), underwater tint (blue-green),
+ * etc.  Values are in [0..1] RGBA. */
+void Godot_Client_GetScreenBlend(float *r, float *g, float *b, float *a) {
+    *r = cl.snap.ps.blend[0];
+    *g = cl.snap.ps.blend[1];
+    *b = cl.snap.ps.blend[2];
+    *a = cl.snap.ps.blend[3];
+}
+
 } /* extern "C" */

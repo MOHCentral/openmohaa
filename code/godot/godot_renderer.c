@@ -3414,6 +3414,12 @@ const char *Godot_Renderer_GetShaderName( int handle )
     return gr_shaders[handle].name;
 }
 
+int Godot_Renderer_IsShaderNoMip( int handle )
+{
+    if ( handle < 0 || handle >= gr_numShaders ) return 0;
+    return gr_shaders[handle].nomip;
+}
+
 int Godot_Renderer_GetShaderCount( void )
 {
     return gr_numShaders;

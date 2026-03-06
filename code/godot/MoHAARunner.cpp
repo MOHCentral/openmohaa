@@ -177,6 +177,7 @@ extern "C" {
                                          float *verts,  /* [3][2] */
                                          float *uvs);   /* [3][2] */
     const char *Godot_Renderer_GetShaderName(int handle);
+    int  Godot_Renderer_IsShaderNoMip(int handle);
     int  Godot_Renderer_GetShaderCount(void);
     int  Godot_Renderer_RegisterShader(const char *name);
     void Godot_Renderer_GetVidSize(int *w, int *h);
@@ -6228,23 +6229,33 @@ void MoHAARunner::update_2d_overlay() {
 
                 // ── Apply shader stage rgbGen/alphaGen semantics to draw colour ──
                 //
-                // RE_RegisterShaderNoMip uses LIGHTMAP_2D, which makes FinishShader
-                // set CGEN_GLOBAL_COLOR.  Stages respect SetColor colour.
+                //All 2D overlay shaders originate from RE_RegisterShaderNoMip
+                // which uses LIGHTMAP_2D.  FinishShader for LIGHTMAP_2D sets
+                // CGEN_GLOBAL_COLOR + AGEN_GLOBAL_ALPHA, so implicit shaders
+                // (no .shader definition) respect SetColor automatically.
                 //
-                // resolve_shader() in the accessor also uses LIGHTMAP_2D for UI
-                // shaders (path patterns: gfx/*, ui/*, loadingbar_*) to match
-                // RE_RegisterShaderNoMip parity.  Other shaders default to
-                // IDENTITY_LIGHTING (white texture, no SetColor).
+                // We use Godot_ShaderProps_Find_2D() which resolves with
+                // LIGHTMAP_2D — exact parity with RE_RegisterShaderNoMip.
                 //
                 // Summary:
-                //   IDENTITY / IDENTITY_LIGHTING (non-UI)        → white
-                //   GLOBAL_COLOR (LIGHTMAP_2D shaders)            → SetColor
-                //   CONST                                        → explicit constant
+                //   GLOBAL_COLOR (LIGHTMAP_2D default)  → SetColor
+                //   IDENTITY / IDENTITY_LIGHTING        → white (explicit .shader)
+                //   CONST                               → explicit constant
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
+                // Check nomip flag: 1 = RE_RegisterShaderNoMip (UI decorations) → LIGHTMAP_2D
+                //                   0 = RE_RegisterShader (photos, backdrops)   → LIGHTMAP_NONE
+                int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
+
+                // DEBUG: Print nomip flag for loading screen shaders
+                if (sname && sname[0] && strstr(sname, "loadingbar")) {
+                    UtilityFunctions::print("[2D STRETCHPIC] shader='", sname, "' nomip=", is_nomip);
+                }
+
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                          : Godot_ShaderProps_Find(sname);
                     if (sp && sp->stage_count > 0) {
                         for (int st = 0; st < sp->stage_count; st++) {
                             if (!sp->stages[st].active) continue;
@@ -6292,7 +6303,8 @@ void MoHAARunner::update_2d_overlay() {
                  * - SHADER_ALPHA_BLEND: standard alpha blending. */
                 int draw_blend = BLEND_MIX;
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                           : Godot_ShaderProps_Find(sname);
                     if (sp2) {
                         if (sp2->transparency == SHADER_MULTIPLICATIVE) {
                             draw_blend = BLEND_MUL;
@@ -6435,7 +6447,8 @@ void MoHAARunner::update_2d_overlay() {
                                                  (draw_blend == BLEND_MIX) ? "MIX" :
                                                  (draw_blend == BLEND_ADD) ? "ADD" :
                                                  (draw_blend == BLEND_MUL) ? "MUL" : "OTHER";
-                        const GodotShaderProps *dbg_sp = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *dbg_sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                                  : Godot_ShaderProps_Find(sname);
                         int dbg_transp = dbg_sp ? dbg_sp->transparency : -1;
                         int dbg_ag = -1;
                         if (dbg_sp && dbg_sp->stage_count > 0) {
@@ -6618,8 +6631,10 @@ void MoHAARunner::update_2d_overlay() {
                     Color draw_col = col;
                     // Apply shader stage rgbGen/alphaGen like STRETCHPIC
                     const char *sname = Godot_Renderer_GetShaderName(shader);
+                    int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                              : Godot_ShaderProps_Find(sname);
                         if (sp && sp->stage_count > 0) {
                             for (int st = 0; st < sp->stage_count; st++) {
                                 if (!sp->stages[st].active) continue;
@@ -6655,7 +6670,8 @@ void MoHAARunner::update_2d_overlay() {
                     // Choose blend mode based on shader transparency
                     int draw_blend = BLEND_MIX;
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                               : Godot_ShaderProps_Find(sname);
                         if (sp2) {
                             if (sp2->transparency == SHADER_MULTIPLICATIVE) {
                                 draw_blend = BLEND_MUL;
@@ -8450,14 +8466,22 @@ void MoHAARunner::_process(double delta) {
 
                 /* Keep renderer/client video state aligned immediately after
                  * mode changes so UI and 2D scaling use the new dimensions
-                 * in the same frame. */
-                Vector2 vp = get_viewport()->get_visible_rect().size;
-                int sync_w = (int)vp.x;
-                int sync_h = (int)vp.y;
-                if (sync_w < 1 || sync_h < 1) {
-                    Vector2i win = ds->window_get_size();
-                    sync_w = win.x;
-                    sync_h = win.y;
+                 * in the same frame.
+                 *
+                 * IMPORTANT: use the TARGET dimensions (vw/vh or screen size)
+                 * directly — NOT get_visible_rect().  The Godot viewport does
+                 * not update until the next frame after window_set_size/mode,
+                 * so querying it here returns the OLD size and would re-sync
+                 * glConfig to the previous resolution, breaking HUD layout
+                 * and mouse coordinate mapping for one or more frames. */
+                int sync_w, sync_h;
+                if (fs) {
+                    Vector2i screen = ds->screen_get_size();
+                    sync_w = screen.x;
+                    sync_h = screen.y;
+                } else {
+                    sync_w = vw;
+                    sync_h = vh;
                 }
                 if (sync_w > 0 && sync_h > 0) {
                     Godot_Renderer_SetDesktopResolution(sync_w, sync_h);
