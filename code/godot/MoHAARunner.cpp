@@ -6074,31 +6074,6 @@ void MoHAARunner::update_2d_overlay() {
     // Use cached transformation values calculated by update_ui_transform()
     float vid_area = (float)(ui_vid_w * ui_vid_h);
 
-    // ── Loading screen debug logging ──
-    // Log when loading screen starts/stops to help diagnose "black loading screen" issues.
-    {
-        static bool was_loading = false;
-        static int loading_frame_count = 0;
-        if (has_loading_bg) {
-            if (!was_loading) {
-                UtilityFunctions::print("[LOADING-DBG] Loading screen started. bg_cmd_index=",
-                    bg_cmd_index, " cmd_count=", cmd_count);
-                loading_frame_count = 0;
-            }
-            loading_frame_count++;
-            if (loading_frame_count <= 5 || loading_frame_count % 30 == 0) {
-                UtilityFunctions::print("[LOADING-DBG] Frame ", loading_frame_count,
-                    ": has_loading_bg=true, cmd_count=", cmd_count,
-                    " bg_cmd_index=", bg_cmd_index);
-            }
-            was_loading = true;
-        } else if (was_loading) {
-            UtilityFunctions::print("[LOADING-DBG] Loading screen ended after ", loading_frame_count, " frames. cmd_count=", cmd_count);
-            was_loading = false;
-            loading_frame_count = 0;
-        }
-    }
-
     bool scissor_enabled = false;
 
     Rect2 scissor_rect;
@@ -6254,30 +6229,34 @@ void MoHAARunner::update_2d_overlay() {
 
                 // ── Apply shader stage rgbGen/alphaGen semantics to draw colour ──
                 //
-                // RE_RegisterShaderNoMip uses LIGHTMAP_NONE, so FinishShader
-                // does NOT set CGEN_GLOBAL_COLOR.  Stages keep their parsed
-                // rgbGen — typically IDENTITY_LIGHTING for shaders with no
-                // explicit rgbGen.  In the real renderer, IDENTITY_LIGHTING
-                // produces white vertex colour (texture appears as-is),
-                // regardless of the current SetColor.
+                //All 2D overlay shaders originate from RE_RegisterShaderNoMip
+                // which uses LIGHTMAP_2D.  FinishShader for LIGHTMAP_2D sets
+                // CGEN_GLOBAL_COLOR + AGEN_GLOBAL_ALPHA, so implicit shaders
+                // (no .shader definition) respect SetColor automatically.
                 //
-                // Fonts are special: R_LoadFontShader overrides to
-                // CGEN_GLOBAL_COLOR (use SetColor).  Our accessor resolves
-                // with LIGHTMAP_NONE so fonts report IDENTITY_LIGHTING too.
-                // We detect fonts via path heuristic ("gfx/fonts/") and
-                // treat them as GLOBAL_COLOR.
+                // We use Godot_ShaderProps_Find_2D() which resolves with
+                // LIGHTMAP_2D — exact parity with RE_RegisterShaderNoMip.
                 //
                 // Summary:
-                //   IDENTITY / IDENTITY_LIGHTING (non-font) → white
-                //   GLOBAL_COLOR or font                    → SetColor
-                //   CONST                                   → explicit constant
+                //   GLOBAL_COLOR (LIGHTMAP_2D default)  → SetColor
+                //   IDENTITY / IDENTITY_LIGHTING        → white (explicit .shader)
+                //   CONST                               → explicit constant
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
+                // Check nomip flag: 1 = RE_RegisterShaderNoMip (UI decorations) → LIGHTMAP_2D
+                //                   0 = RE_RegisterShader (photos, backdrops)   → LIGHTMAP_NONE
+                int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
+
+                // DEBUG: Print nomip flag for loading screen shaders
+                if (sname && sname[0] && strstr(sname, "loadingbar")) {
+                    UtilityFunctions::print("[2D STRETCHPIC] shader='", sname, "' nomip=", is_nomip);
+                }
+
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                          : Godot_ShaderProps_Find(sname);
                     if (sp && sp->stage_count > 0) {
-                        bool is_font = (strstr(sname, "gfx/fonts/") != nullptr);
                         for (int st = 0; st < sp->stage_count; st++) {
                             if (!sp->stages[st].active) continue;
                             if (sp->stages[st].isLightmap) continue;
@@ -6288,7 +6267,7 @@ void MoHAARunner::update_2d_overlay() {
                                 draw_col.r = stg->rgbConst[0];
                                 draw_col.g = stg->rgbConst[1];
                                 draw_col.b = stg->rgbConst[2];
-                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR || is_font) {
+                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR) {
                                 // Use SetColor (draw_col = col already)
                             } else if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
                                        stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
@@ -6300,7 +6279,7 @@ void MoHAARunner::update_2d_overlay() {
                             // alphaGen
                             if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                 draw_col.a = stg->alphaConst;
-                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA || is_font) {
+                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA) {
                                 // Use SetColor alpha (draw_col.a = col.a already)
                             } else if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                 draw_col.a = 1.0f;
@@ -6324,7 +6303,8 @@ void MoHAARunner::update_2d_overlay() {
                  * - SHADER_ALPHA_BLEND: standard alpha blending. */
                 int draw_blend = BLEND_MIX;
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                           : Godot_ShaderProps_Find(sname);
                     if (sp2) {
                         if (sp2->transparency == SHADER_MULTIPLICATIVE) {
                             draw_blend = BLEND_MUL;
@@ -6335,10 +6315,7 @@ void MoHAARunner::update_2d_overlay() {
                         } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
                             draw_blend = BLEND_ALPHA_INV;
                         } else if (sp2->transparency == SHADER_OPAQUE) {
-                            /* In Godot, UI textures often contain soft alpha halos (e.g. hover states).
-                             * Forcing BLEND_OPAQUE causes these halos to render as solid black boxes.
-                             * We unconditionally use BLEND_MIX here so texture transparency resolves correctly. */
-                            draw_blend = BLEND_MIX;
+                            draw_blend = BLEND_OPAQUE;
 
                             /* Multi-stage shader: check the actual texture stage
                              * for a custom blendFunc that overrides the opaque
@@ -6382,16 +6359,18 @@ void MoHAARunner::update_2d_overlay() {
                          * UI images with meaningful transparency (e.g. loading screen
                          * photo frames, menu backdrops).  Keep BLEND_MIX. */
 
-                        /* Texture-alpha safety net: if shader_texture_has_alpha says
-                         * the loaded texture image has NO meaningful alpha channel
-                         * (all-255 stripped to RGB8, or JPG), use BLEND_OPAQUE so
-                         * accidental alpha in BLEND_MIX doesn't wash the image out.
-                         * BLEND_OPAQUE outputs vec4(tex.rgb*COLOR.rgb, COLOR.a) —
-                         * identical to BLEND_MIX when tex.a=1.0, but avoids relying
-                         * on Godot treating RGB8 alpha as exactly 1.0. */
-                        if (draw_blend == BLEND_MIX) {
-                            auto ha_it = shader_texture_has_alpha.find(shader);
-                            if (ha_it != shader_texture_has_alpha.end() && !ha_it->second) {
+                        /* Texture-alpha parity for implicit/UI shaders:
+                         * - If blend resolved to OPAQUE but the loaded texture has
+                         *   meaningful alpha, use BLEND_MIX so cutout/soft edges
+                         *   render correctly (e.g. loadingbar_border, overlays).
+                         * - If blend is MIX but texture has no alpha, collapse to
+                         *   OPAQUE for exact opaque output. */
+                        auto ha_it = shader_texture_has_alpha.find(shader);
+                        if (ha_it != shader_texture_has_alpha.end()) {
+                            const bool tex_has_alpha = ha_it->second;
+                            if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
+                                draw_blend = BLEND_MIX;
+                            } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
                                 draw_blend = BLEND_OPAQUE;
                             }
                         }
@@ -6468,8 +6447,8 @@ void MoHAARunner::update_2d_overlay() {
                                                  (draw_blend == BLEND_MIX) ? "MIX" :
                                                  (draw_blend == BLEND_ADD) ? "ADD" :
                                                  (draw_blend == BLEND_MUL) ? "MUL" : "OTHER";
-                        const GodotShaderProps *dbg_sp = Godot_ShaderProps_Find_2D(sname);
-                        if (!dbg_sp) dbg_sp = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *dbg_sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                                  : Godot_ShaderProps_Find(sname);
                         int dbg_transp = dbg_sp ? dbg_sp->transparency : -1;
                         int dbg_ag = -1;
                         if (dbg_sp && dbg_sp->stage_count > 0) {
@@ -6652,25 +6631,24 @@ void MoHAARunner::update_2d_overlay() {
                     Color draw_col = col;
                     // Apply shader stage rgbGen/alphaGen like STRETCHPIC
                     const char *sname = Godot_Renderer_GetShaderName(shader);
+                    int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                              : Godot_ShaderProps_Find(sname);
                         if (sp && sp->stage_count > 0) {
                             for (int st = 0; st < sp->stage_count; st++) {
                                 if (!sp->stages[st].active) continue;
                                 if (sp->stages[st].isLightmap) continue;
                                 const MohaaShaderStage *stg = &sp->stages[st];
-                                // Match STRETCHPIC: explicit shaders with rgbGen
-                                // identity → white.  Fonts exempt (GLOBAL_COLOR).
-                                bool is_font_t = (sname && strstr(sname, "gfx/fonts/") != nullptr);
-                                if (!is_font_t && (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING)) {
+                                if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
                                     draw_col.r = draw_col.g = draw_col.b = 1.0f;
                                 } else if (stg->rgbGen == STAGE_RGBGEN_CONST) {
                                     draw_col.r = stg->rgbConst[0];
                                     draw_col.g = stg->rgbConst[1];
                                     draw_col.b = stg->rgbConst[2];
                                 }
-                                if (!is_font_t && stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                                if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                     draw_col.a = 1.0f;
                                 } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                     draw_col.a = stg->alphaConst;
@@ -6692,7 +6670,8 @@ void MoHAARunner::update_2d_overlay() {
                     // Choose blend mode based on shader transparency
                     int draw_blend = BLEND_MIX;
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp2 = Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
+                                                               : Godot_ShaderProps_Find(sname);
                         if (sp2) {
                             if (sp2->transparency == SHADER_MULTIPLICATIVE) {
                                 draw_blend = BLEND_MUL;
@@ -6703,8 +6682,7 @@ void MoHAARunner::update_2d_overlay() {
                             } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
                                 draw_blend = BLEND_ALPHA_INV;
                             } else if (sp2->transparency == SHADER_OPAQUE) {
-                                /* UI hover fix: use BLEND_MIX to properly resolve texture alpha */
-                                draw_blend = BLEND_MIX;
+                                draw_blend = BLEND_OPAQUE;
                                 if (sp2->stage_count > 1) {
                                     for (int st = 0; st < sp2->stage_count; st++) {
                                         if (sp2->stages[st].isLightmap) continue;
@@ -6720,6 +6698,17 @@ void MoHAARunner::update_2d_overlay() {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // Texture-alpha parity (same rationale as stretch-pic path)
+                    auto ha_it = shader_texture_has_alpha.find(shader);
+                    if (ha_it != shader_texture_has_alpha.end()) {
+                        const bool tex_has_alpha = ha_it->second;
+                        if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
+                            draw_blend = BLEND_MIX;
+                        } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
+                            draw_blend = BLEND_OPAQUE;
                         }
                     }
 

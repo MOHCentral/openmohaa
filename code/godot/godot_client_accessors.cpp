@@ -235,23 +235,10 @@ void Godot_Client_RefreshUIDef(void) {
     CL_FillUIDef();
 }
 
-/* Run the same UI + cgame resolution-update path used by OpenMoHAA
- * after a video mode change (CL_SetVidMode / CL_SetFullscreen).
- *
- * This rebuilds scaled widget geometry, menu frames, HUD layout, AND
- * notifies cgame.so so that cgs.glconfig / cgs.uiHiResScale are
- * refreshed.  Without the cgame notification the crosshair, compass,
- * and all CG_AdjustFrom640-based draws use stale dimensions. */
+/* Run the same UI resolution-update path used by OpenMoHAA after a
+ * video mode change. This rebuilds scaled widget geometry, menu frames,
+ * and HUD layout instead of only refreshing uid.vidWidth/vidHeight. */
 void Godot_Client_ResolutionChange(void) {
-    /* Update renderer stored config so re.SetMode path is consistent */
-    re.SetMode(-1, &cls.glconfig);
-
-    /* Notify cgame (crosshair, HUD, scope overlay, etc.) */
-    if (cge) {
-        cge->CG_GetRendererConfig();
-    }
-
-    /* Rebuild UI widget geometry, menu frames, HUD layout */
     if (cls.uiStarted) {
         UI_ResolutionChange();
     } else {
