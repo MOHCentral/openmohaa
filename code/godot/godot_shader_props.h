@@ -323,11 +323,23 @@ void Godot_ShaderProps_Unload();
 const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name);
 
 /*
+ * Look up properties for a shader by name with an explicit lightmap domain.
+ * Use LIGHTMAP_NONE for 3D/world path and LIGHTMAP_2D for NoMip/UI path.
+ */
+const GodotShaderProps *Godot_ShaderProps_Find_Lightmap(const char *shader_name, int lightmap_index);
+
+/*
  * Look up properties for a 2D/UI shader by name.
  * Uses LIGHTMAP_2D resolution (matching RE_RegisterShaderNoMip parity)
  * so implicit shaders get CGEN_GLOBAL_COLOR (respects SetColor).
  */
 const GodotShaderProps *Godot_ShaderProps_Find_2D(const char *shader_name);
+
+/*
+ * Look up properties for a shader by handle, using the same lightmap domain
+ * that was used when the handle was registered in the renderer.
+ */
+const GodotShaderProps *Godot_ShaderProps_Find_ByHandle(int shader_handle);
 
 /*
  * Returns the number of parsed shader definitions.

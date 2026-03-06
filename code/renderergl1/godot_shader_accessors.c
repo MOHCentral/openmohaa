@@ -824,6 +824,7 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
 
 typedef struct shader_cache_entry_s {
     char name[MAX_QPATH];
+    int lightmapIndex;
     GodotShaderProps props;
     struct shader_cache_entry_s *next;
 } shader_cache_entry_t;
@@ -835,7 +836,7 @@ static int s_shaderCacheCount = 0;
 static shader_cache_entry_t s_cachePool[SHADER_CACHE_POOL_SIZE];
 static int s_cachePoolUsed = 0;
 
-static unsigned int shader_cache_hash(const char *name) {
+static unsigned int shader_cache_hash(const char *name, int lightmapIndex) {
     unsigned int hash = 0;
     const char *p = name;
     while (*p) {
@@ -843,6 +844,7 @@ static unsigned int shader_cache_hash(const char *name) {
         if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
         hash = hash * 31 + c;
     }
+    hash = hash * 31 + (unsigned int)(lightmapIndex & 0x3);
     return hash & SHADER_CACHE_MASK;
 }
 
@@ -852,28 +854,29 @@ static void shader_cache_clear(void) {
     s_cachePoolUsed = 0;
 }
 
-static const GodotShaderProps *shader_cache_find(const char *name) {
-    unsigned int h = shader_cache_hash(name);
+static const GodotShaderProps *shader_cache_find(const char *name, int lightmapIndex) {
+    unsigned int h = shader_cache_hash(name, lightmapIndex);
     shader_cache_entry_t *e = s_shaderCache[h];
     while (e) {
-        if (!Q_stricmp(e->name, name))
+        if (e->lightmapIndex == lightmapIndex && !Q_stricmp(e->name, name))
             return &e->props;
         e = e->next;
     }
     return NULL;
 }
 
-static GodotShaderProps *shader_cache_insert(const char *name) {
+static GodotShaderProps *shader_cache_insert(const char *name, int lightmapIndex) {
     if (s_cachePoolUsed >= SHADER_CACHE_POOL_SIZE) {
         ri.Printf(PRINT_WARNING, "[ShaderAccessors] Cache pool exhausted (%d entries)\n",
                    SHADER_CACHE_POOL_SIZE);
         return NULL;
     }
 
-    unsigned int h = shader_cache_hash(name);
+    unsigned int h = shader_cache_hash(name, lightmapIndex);
     shader_cache_entry_t *e = &s_cachePool[s_cachePoolUsed++];
     memset(e, 0, sizeof(*e));
     Q_strncpyz(e->name, name, sizeof(e->name));
+    e->lightmapIndex = lightmapIndex;
     /* Lowercase the name for consistent lookup */
     for (char *p = e->name; *p; p++) {
         if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
@@ -890,14 +893,20 @@ static GodotShaderProps *shader_cache_insert(const char *name) {
 static shader_t *resolve_shader_lm(const char *name, int lightmapIndex) {
     shader_t *sh;
 
-    /* First try already-loaded lookup (cheap) */
+    /* Try already-loaded lookup (cheap), but only accept if lightmapIndex
+     * matches.  R_FindShaderByName ignores lightmapIndex, so a LIGHTMAP_NONE
+     * shader_t could be returned when LIGHTMAP_2D was requested.  The two
+     * variants have different FinishShader() semantics (LIGHTMAP_2D sets
+     * CGEN_GLOBAL_COLOR + GLS_SRCBLEND_SRC_ALPHA for UI alpha blending)
+     * so returning the wrong one causes 2D elements to lose transparency. */
     sh = R_FindShaderByName(name);
-    if (sh && sh != tr.defaultShader) {
+    if (sh && sh != tr.defaultShader && sh->lightmapIndex == lightmapIndex) {
         return sh;
     }
 
-    /* Not yet loaded — call R_FindShader which will parse the .shader
-     * text definition (or create an implicit shader from the image).
+    /* Either not found or found with wrong lightmapIndex.
+     * R_FindShader has its own per-lightmapIndex hash cache and will
+     * create a new shader_t with the correct FinishShader() semantics.
      * Caller specifies lightmapIndex:
      *   LIGHTMAP_2D   → 2D/UI (RE_RegisterShaderNoMip parity)
      *   LIGHTMAP_NONE → 3D entities/world */
@@ -938,8 +947,8 @@ void Godot_ShaderProps_Load(void) {
             if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
         }
 
-        if (!shader_cache_find(lname)) {
-            GodotShaderProps *props = shader_cache_insert(lname);
+        if (!shader_cache_find(lname, LIGHTMAP_NONE)) {
+            GodotShaderProps *props = shader_cache_insert(lname, LIGHTMAP_NONE);
             if (props)
                 convert_shader(sh, props);
         }
@@ -963,7 +972,7 @@ void Godot_ShaderProps_Unload(void) {
  * shader props are loaded so stale dimension data is cleared. */
 extern void Godot_Renderer_InvalidateShaderDimCache(void);
 
-const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name) {
+const GodotShaderProps *Godot_ShaderProps_Find_Lightmap(const char *shader_name, int lightmap_index) {
     const GodotShaderProps *cached;
     shader_t *sh;
     GodotShaderProps *props;
@@ -979,17 +988,17 @@ const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name) {
     }
 
     /* 1. Check cache */
-    cached = shader_cache_find(lname);
+    cached = shader_cache_find(lname, lightmap_index);
     if (cached)
         return cached;
 
-    /* 2. Resolve via real renderer (generic: LIGHTMAP_NONE) */
-    sh = resolve_shader_lm(shader_name, LIGHTMAP_NONE);
+    /* 2. Resolve via real renderer using the caller's lightmap domain */
+    sh = resolve_shader_lm(shader_name, lightmap_index);
     if (!sh)
         return NULL;
 
     /* 3. Convert and cache */
-    props = shader_cache_insert(lname);
+    props = shader_cache_insert(lname, lightmap_index);
     if (!props)
         return NULL;
 
@@ -997,40 +1006,29 @@ const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name) {
     return props;
 }
 
+const GodotShaderProps *Godot_ShaderProps_Find(const char *shader_name) {
+    return Godot_ShaderProps_Find_Lightmap(shader_name, LIGHTMAP_NONE);
+}
+
 const GodotShaderProps *Godot_ShaderProps_Find_2D(const char *shader_name) {
-    const GodotShaderProps *cached;
-    shader_t *sh;
-    GodotShaderProps *props;
-    char lname[MAX_QPATH];
+    return Godot_ShaderProps_Find_Lightmap(shader_name, LIGHTMAP_2D);
+}
 
-    if (!shader_name || !shader_name[0])
+extern const char *Godot_Renderer_GetShaderName(int handle);
+extern int Godot_Renderer_IsShaderNoMip(int handle);
+
+const GodotShaderProps *Godot_ShaderProps_Find_ByHandle(int shader_handle) {
+    const char *name = Godot_Renderer_GetShaderName(shader_handle);
+    int lightmap_index;
+
+    if (!name || !name[0]) {
         return NULL;
-
-    /* Lowercase for consistent lookup */
-    Q_strncpyz(lname, shader_name, sizeof(lname));
-    for (char *p = lname; *p; p++) {
-        if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
     }
 
-    /* 1. Check cache */
-    cached = shader_cache_find(lname);
-    if (cached)
-        return cached;
-
-    /* 2. Resolve with LIGHTMAP_2D — matching RE_RegisterShaderNoMip parity.
-     *    All 2D/UI shaders use LIGHTMAP_2D which makes FinishShader set
-     *    CGEN_GLOBAL_COLOR (respects SetColor). */
-    sh = resolve_shader_lm(shader_name, LIGHTMAP_2D);
-    if (!sh)
-        return NULL;
-
-    /* 3. Convert and cache */
-    props = shader_cache_insert(lname);
-    if (!props)
-        return NULL;
-
-    convert_shader(sh, props);
-    return props;
+    /* Match the engine registration path:
+     * RegisterShaderNoMip -> LIGHTMAP_2D, RegisterShader -> LIGHTMAP_NONE. */
+    lightmap_index = Godot_Renderer_IsShaderNoMip(shader_handle) ? LIGHTMAP_2D : LIGHTMAP_NONE;
+    return Godot_ShaderProps_Find_Lightmap(name, lightmap_index);
 }
 
 int Godot_ShaderProps_Count(void) {

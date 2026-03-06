@@ -177,7 +177,6 @@ extern "C" {
                                          float *verts,  /* [3][2] */
                                          float *uvs);   /* [3][2] */
     const char *Godot_Renderer_GetShaderName(int handle);
-    int  Godot_Renderer_IsShaderNoMip(int handle);
     int  Godot_Renderer_GetShaderCount(void);
     int  Godot_Renderer_RegisterShader(const char *name);
     void Godot_Renderer_GetVidSize(int *w, int *h);
@@ -6034,7 +6033,7 @@ void MoHAARunner::update_2d_overlay() {
         int cols = 0, rows = 0, bgr = 0;
         const unsigned char *bg_data = nullptr;
         if (Godot_Renderer_GetBackground(&cols, &rows, &bgr, &bg_data) &&
-            cols > 0 && rows > 0 && bg_data && !Godot_Renderer_IsWorldMapLoaded()) {
+            cols > 0 && rows > 0 && bg_data) {
 
             PackedByteArray pixels;
             pixels.resize(cols * rows * 4);
@@ -6234,8 +6233,8 @@ void MoHAARunner::update_2d_overlay() {
                 // CGEN_GLOBAL_COLOR + AGEN_GLOBAL_ALPHA, so implicit shaders
                 // (no .shader definition) respect SetColor automatically.
                 //
-                // We use Godot_ShaderProps_Find_2D() which resolves with
-                // LIGHTMAP_2D — exact parity with RE_RegisterShaderNoMip.
+                // We resolve shader properties by handle so the accessor can
+                // use the exact registration domain (NoMip/UI vs normal).
                 //
                 // Summary:
                 //   GLOBAL_COLOR (LIGHTMAP_2D default)  → SetColor
@@ -6244,18 +6243,8 @@ void MoHAARunner::update_2d_overlay() {
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
-                // Check nomip flag: 1 = RE_RegisterShaderNoMip (UI decorations) → LIGHTMAP_2D
-                //                   0 = RE_RegisterShader (photos, backdrops)   → LIGHTMAP_NONE
-                int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
-
-                // DEBUG: Print nomip flag for loading screen shaders
-                if (sname && sname[0] && strstr(sname, "loadingbar")) {
-                    UtilityFunctions::print("[2D STRETCHPIC] shader='", sname, "' nomip=", is_nomip);
-                }
-
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
-                                                          : Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp = Godot_ShaderProps_Find_ByHandle(shader);
                     if (sp && sp->stage_count > 0) {
                         for (int st = 0; st < sp->stage_count; st++) {
                             if (!sp->stages[st].active) continue;
@@ -6292,89 +6281,47 @@ void MoHAARunner::update_2d_overlay() {
                 // Skip fully transparent draws (alphaConst=0 → invisible)
                 if (draw_col.a < 0.001f) continue;
 
-                /* Choose blend mode based on shader transparency.
-                 * - SHADER_MULTIPLICATIVE: blendFunc filter (dst*src)
-                 * - SHADER_MULTIPLICATIVE_INV: dst*(1-src)
-                 * - SHADER_ADDITIVE: blendFunc add (src+dst)
-                 * - SHADER_OPAQUE: the real renderer disables GL_BLEND
-                 *   (GLS_DEFAULT stateBits), making texture alpha
-                 *   irrelevant.  BLEND_OPAQUE ignores texture alpha
-                 *   but preserves SetColor alpha (COLOR.a).
-                 * - SHADER_ALPHA_BLEND: standard alpha blending. */
+                /* Choose blend mode based on shader stage blend factors.
+                 *
+                 * OpenMoHAA parity: ALL 2D shaders are registered via
+                 * RE_RegisterShaderNoMip → R_FindShader(name, LIGHTMAP_2D).
+                 * For implicit shaders (no .shader definition), LIGHTMAP_2D
+                 * sets stateBits = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_
+                 * MINUS_SRC_ALPHA (alpha blend).  FinishShader assigns
+                 * sort = SS_BLEND0 (transparent).
+                 *
+                 * This means BLEND_OPAQUE is NEVER correct for 2D draws.
+                 * Default to BLEND_MIX (alpha blend) and only override for
+                 * explicit blend modes from the shader's stage definition
+                 * (add, multiply, inverse alpha). */
                 int draw_blend = BLEND_MIX;
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
-                                                           : Godot_ShaderProps_Find(sname);
+                    const GodotShaderProps *sp2 = Godot_ShaderProps_Find_ByHandle(shader);
                     if (sp2) {
-                        if (sp2->transparency == SHADER_MULTIPLICATIVE) {
-                            draw_blend = BLEND_MUL;
-                        } else if (sp2->transparency == SHADER_MULTIPLICATIVE_INV) {
-                            draw_blend = BLEND_MUL_INV;
-                        } else if (sp2->transparency == SHADER_ADDITIVE) {
-                            draw_blend = BLEND_ADD;
-                        } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
-                            draw_blend = BLEND_ALPHA_INV;
-                        } else if (sp2->transparency == SHADER_OPAQUE) {
-                            draw_blend = BLEND_OPAQUE;
+                        /* Read blend from the first non-lightmap stage —
+                         * this is exactly what GL_State(pStage->stateBits)
+                         * does in the real renderer. */
+                        for (int st = 0; st < sp2->stage_count; st++) {
+                            if (!sp2->stages[st].active) continue;
+                            if (sp2->stages[st].isLightmap) continue;
+                            if (!sp2->stages[st].hasBlendFunc) break; /* no blend → alpha (LIGHTMAP_2D default) */
 
-                            /* Multi-stage shader: check the actual texture stage
-                             * for a custom blendFunc that overrides the opaque
-                             * default (e.g. GL_ONE_MINUS_SRC_ALPHA, GL_SRC_ALPHA).
-                             * Skip internal engine images: the shader accessor
-                             * stores $whiteimage as "*white", $lightmap as
-                             * "*lightmap", etc.  These are first-pass fill stages
-                             * (e.g. mohdm* levelshots write white in stage 0,
-                             * then alpha-blend the screenshot in stage 1). */
-                            if (sp2->stage_count > 1) {
-                                for (int st = 0; st < sp2->stage_count; st++) {
-                                    if (sp2->stages[st].isLightmap) continue;
-                                    const char *sm = sp2->stages[st].map;
-                                    if (!sm[0]) continue;
-                                    if (strcmp(sm, "$lightmap") == 0) continue;
-                                    if (strcmp(sm, "$whiteimage") == 0) continue;
-                                    if (sm[0] == '*') continue;
+                            MohaaBlendFactor bs = sp2->stages[st].blendSrc;
+                            MohaaBlendFactor bd = sp2->stages[st].blendDst;
 
-                                    if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
-                                        sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
-                                        draw_blend = BLEND_ALPHA_INV;
-                                    } else if (sp2->stages[st].blendSrc == BLEND_SRC_ALPHA &&
-                                               sp2->stages[st].blendDst == BLEND_ONE_MINUS_SRC_ALPHA) {
-                                        draw_blend = BLEND_MIX;
-                                    } else if (sp2->stages[st].blendSrc == BLEND_ONE &&
-                                               sp2->stages[st].blendDst == BLEND_ONE) {
-                                        draw_blend = BLEND_ADD;
-                                    }
-                                    break;
-                                }
+                            if (bs == BLEND_ONE && bd == BLEND_ONE) {
+                                draw_blend = BLEND_ADD;
+                            } else if (bs == BLEND_DST_COLOR && bd == BLEND_ZERO) {
+                                draw_blend = BLEND_MUL;
+                            } else if (bs == BLEND_ZERO && bd == BLEND_ONE_MINUS_SRC_COLOR) {
+                                draw_blend = BLEND_MUL_INV;
+                            } else if (bs == BLEND_ONE_MINUS_SRC_ALPHA && bd == BLEND_SRC_ALPHA) {
+                                draw_blend = BLEND_ALPHA_INV;
                             }
+                            /* All other blend combos (including SRC_ALPHA/ONE_MINUS_SRC_ALPHA)
+                             * stay as BLEND_MIX — standard alpha blend. */
+                            break;
                         }
-
-                        /* NOTE: AGEN_GLOBAL_ALPHA does NOT mean "ignore texture alpha".
-                         * In the real renderer (tr_shade.c), AGEN_GLOBAL_ALPHA sets the
-                         * VERTEX alpha to SetColor.a.  The fragment output is still
-                         * texture × vertex (GL_MODULATE), so fragment.a = tex.a × SetColor.a.
-                         * Blending then uses GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA, which
-                         * means texture alpha IS part of the final compositing.
-                         * Using BLEND_OPAQUE here would discard texture alpha, breaking
-                         * UI images with meaningful transparency (e.g. loading screen
-                         * photo frames, menu backdrops).  Keep BLEND_MIX. */
-
-                        /* Texture-alpha parity for implicit/UI shaders:
-                         * - If blend resolved to OPAQUE but the loaded texture has
-                         *   meaningful alpha, use BLEND_MIX so cutout/soft edges
-                         *   render correctly (e.g. loadingbar_border, overlays).
-                         * - If blend is MIX but texture has no alpha, collapse to
-                         *   OPAQUE for exact opaque output. */
-                        auto ha_it = shader_texture_has_alpha.find(shader);
-                        if (ha_it != shader_texture_has_alpha.end()) {
-                            const bool tex_has_alpha = ha_it->second;
-                            if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
-                                draw_blend = BLEND_MIX;
-                            } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
-                                draw_blend = BLEND_OPAQUE;
-                            }
-                        }
-
                     }
                 }
 
@@ -6447,8 +6394,7 @@ void MoHAARunner::update_2d_overlay() {
                                                  (draw_blend == BLEND_MIX) ? "MIX" :
                                                  (draw_blend == BLEND_ADD) ? "ADD" :
                                                  (draw_blend == BLEND_MUL) ? "MUL" : "OTHER";
-                        const GodotShaderProps *dbg_sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
-                                                                  : Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *dbg_sp = Godot_ShaderProps_Find_ByHandle(shader);
                         int dbg_transp = dbg_sp ? dbg_sp->transparency : -1;
                         int dbg_ag = -1;
                         if (dbg_sp && dbg_sp->stage_count > 0) {
@@ -6631,10 +6577,8 @@ void MoHAARunner::update_2d_overlay() {
                     Color draw_col = col;
                     // Apply shader stage rgbGen/alphaGen like STRETCHPIC
                     const char *sname = Godot_Renderer_GetShaderName(shader);
-                    int is_nomip = Godot_Renderer_IsShaderNoMip(shader);
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp = is_nomip ? Godot_ShaderProps_Find_2D(sname)
-                                                              : Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp = Godot_ShaderProps_Find_ByHandle(shader);
                         if (sp && sp->stage_count > 0) {
                             for (int st = 0; st < sp->stage_count; st++) {
                                 if (!sp->stages[st].active) continue;
@@ -6667,48 +6611,30 @@ void MoHAARunner::update_2d_overlay() {
                         colors_arr.set(v, draw_col);
                     }
 
-                    // Choose blend mode based on shader transparency
+                    // Choose blend mode — same logic as STRETCHPIC path
                     int draw_blend = BLEND_MIX;
                     if (sname && sname[0]) {
-                        const GodotShaderProps *sp2 = is_nomip ? Godot_ShaderProps_Find_2D(sname)
-                                                               : Godot_ShaderProps_Find(sname);
+                        const GodotShaderProps *sp2 = Godot_ShaderProps_Find_ByHandle(shader);
                         if (sp2) {
-                            if (sp2->transparency == SHADER_MULTIPLICATIVE) {
-                                draw_blend = BLEND_MUL;
-                            } else if (sp2->transparency == SHADER_MULTIPLICATIVE_INV) {
-                                draw_blend = BLEND_MUL_INV;
-                            } else if (sp2->transparency == SHADER_ADDITIVE) {
-                                draw_blend = BLEND_ADD;
-                            } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
-                                draw_blend = BLEND_ALPHA_INV;
-                            } else if (sp2->transparency == SHADER_OPAQUE) {
-                                draw_blend = BLEND_OPAQUE;
-                                if (sp2->stage_count > 1) {
-                                    for (int st = 0; st < sp2->stage_count; st++) {
-                                        if (sp2->stages[st].isLightmap) continue;
-                                        const char *sm = sp2->stages[st].map;
-                                        if (!sm[0]) continue;
-                                        if (strcmp(sm, "$lightmap") == 0) continue;
-                                        if (strcmp(sm, "$whiteimage") == 0) continue;
-                                        if (sp2->stages[st].blendSrc == BLEND_ONE_MINUS_SRC_ALPHA &&
-                                            sp2->stages[st].blendDst == BLEND_SRC_ALPHA) {
-                                            draw_blend = BLEND_ALPHA_INV;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                            for (int st = 0; st < sp2->stage_count; st++) {
+                                if (!sp2->stages[st].active) continue;
+                                if (sp2->stages[st].isLightmap) continue;
+                                if (!sp2->stages[st].hasBlendFunc) break;
 
-                    // Texture-alpha parity (same rationale as stretch-pic path)
-                    auto ha_it = shader_texture_has_alpha.find(shader);
-                    if (ha_it != shader_texture_has_alpha.end()) {
-                        const bool tex_has_alpha = ha_it->second;
-                        if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
-                            draw_blend = BLEND_MIX;
-                        } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
-                            draw_blend = BLEND_OPAQUE;
+                                MohaaBlendFactor bs = sp2->stages[st].blendSrc;
+                                MohaaBlendFactor bd = sp2->stages[st].blendDst;
+
+                                if (bs == BLEND_ONE && bd == BLEND_ONE) {
+                                    draw_blend = BLEND_ADD;
+                                } else if (bs == BLEND_DST_COLOR && bd == BLEND_ZERO) {
+                                    draw_blend = BLEND_MUL;
+                                } else if (bs == BLEND_ZERO && bd == BLEND_ONE_MINUS_SRC_COLOR) {
+                                    draw_blend = BLEND_MUL_INV;
+                                } else if (bs == BLEND_ONE_MINUS_SRC_ALPHA && bd == BLEND_SRC_ALPHA) {
+                                    draw_blend = BLEND_ALPHA_INV;
+                                }
+                                break;
+                            }
                         }
                     }
 
@@ -8160,17 +8086,19 @@ void MoHAARunner::_process(double delta) {
     // SyncGuiMouseToOverlayState() first ensures in_guimouse matches keyCatchers.
     // ── Pre-frame viewport sync ───────────────────────────────────────────────
     // Under Godot there is no physical display-mode switch.  The engine's
-    // r_mode cvar is irrelevant — glConfig must always match the actual
-    // Godot viewport.  We sync BEFORE Com_Frame so that:
+    // glConfig must always match the actual Godot viewport.  We sync BEFORE
+    // Com_Frame so that:
     //  1. GR_Transform2D's Y-flip uses the correct vidHeight
     //  2. SCR_AdjustFrom640 / SetVirtualScale / widget Realign use correct dims
-    //  3. If vid_restart triggers inside Com_Frame, GR_BeginRegistration reads
-    //     the current viewport from gr_desktopWidth/Height
-    //  4. uid.vidWidth/vidHeight stays in sync via CL_FillUIDef wrapper
-    {
-        // Use get_visible_rect() as the authoritative viewport size — it is always
-        // up-to-date even immediately after a window resize or fullscreen switch.
-        // hud_control->get_size() can lag by a frame after a resize event.
+    //  3. uid.vidWidth/vidHeight stays in sync via CL_FillUIDef wrapper
+    //
+    // After a vid_restart, the Godot window hasn't processed the resize yet,
+    // so get_visible_rect() still returns the OLD size.  We skip syncing for
+    // a few frames (vid_restart_grace_frames) to let Godot settle, otherwise
+    // we'd immediately undo the vid_restart resolution.
+    if (vid_restart_grace_frames > 0) {
+        vid_restart_grace_frames--;
+    } else {
         Vector2 vp = get_viewport()->get_visible_rect().size;
         if (vp.x < 1.0f || vp.y < 1.0f) {
             Vector2i win = DisplayServer::get_singleton()->window_get_size();
@@ -8182,7 +8110,9 @@ void MoHAARunner::_process(double delta) {
             int cur_w = 0, cur_h = 0;
             Godot_Renderer_GetVidSize(&cur_w, &cur_h);
             if (cur_w != vp_w || cur_h != vp_h) {
-                Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
+                UtilityFunctions::print(String("[MoHAA] Viewport sync: ") +
+                    String::num_int64(cur_w) + String("x") + String::num_int64(cur_h) +
+                    String(" -> ") + String::num_int64(vp_w) + String("x") + String::num_int64(vp_h));
                 Godot_Renderer_SyncVidSize(vp_w, vp_h);
                 Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
                 Godot_Client_ResolutionChange();
@@ -8484,11 +8414,17 @@ void MoHAARunner::_process(double delta) {
                     sync_h = vh;
                 }
                 if (sync_w > 0 && sync_h > 0) {
-                    Godot_Renderer_SetDesktopResolution(sync_w, sync_h);
+                    /* Keep gr_desktopWidth/Height as the real display
+                     * resolution so r_mode -2 continues to mean "desktop".
+                     * Only update stored_glconfig and cls.glconfig here. */
                     Godot_Renderer_SyncVidSize(sync_w, sync_h);
                     Godot_Client_SyncGlConfigVidSize(sync_w, sync_h);
                     Godot_Client_ResolutionChange();
                 }
+
+                // Give Godot a few frames to process the window resize before
+                // the pre-frame viewport sync is allowed to run again.
+                vid_restart_grace_frames = 3;
 
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +
                     String::num_int64(fs) + String(" resolved=") +

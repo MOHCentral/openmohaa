@@ -535,6 +535,12 @@ private:
     // Last applied r_fullscreen value (detects immediate console changes)
     int cached_r_fullscreen = -1;
 
+    // Grace period after vid_restart — skip pre-frame viewport sync for a
+    // few frames so Godot has time to process window_set_size.  Without this
+    // the pre-frame sync re-syncs glConfig back to the OLD viewport before
+    // Godot has applied the new window dimensions.
+    int vid_restart_grace_frames = 0;
+
 protected:
     static void _bind_methods();
 

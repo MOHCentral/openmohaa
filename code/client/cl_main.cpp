@@ -1622,8 +1622,6 @@ void CL_Vid_Restart_f( void ) {
 	CL_InitRef();
 	// initialize the UI
 	//CL_InitializeUI();
-	// initialize the ui library
-	UI_ResolutionChange();
 	// clear aliases
 	Alias_Clear();
 
@@ -1631,6 +1629,14 @@ void CL_Vid_Restart_f( void ) {
 	Com_Unpause();
 
 	CL_StartHunkUsers(qfalse);
+
+	/* UI_ResolutionChange must run AFTER CL_StartHunkUsers because
+	 * GR_BeginRegistration (called from CL_BeginRegistration inside
+	 * CL_StartHunkUsers) resolves the new r_mode and writes the
+	 * updated vidWidth/vidHeight into cls.glconfig.  Running it
+	 * before that point uses the OLD resolution and the menu
+	 * widgets never rescale to the new window size. */
+	UI_ResolutionChange();
 
 #if !defined(NO_MODERN_DMA) || !NO_MODERN_DMA
     s_bSoundPaused = true;
@@ -2921,7 +2927,6 @@ void CL_StartHunkUsers( qboolean rendererOnly ) {
 	if ( !cls.rendererRegistered ) {
 		cls.rendererRegistered = qtrue;
 		CL_BeginRegistration();
-		UI_ResolutionChange();
 	}
 
 	if( !cls.cgameStarted ) {
@@ -2933,6 +2938,12 @@ void CL_StartHunkUsers( qboolean rendererOnly ) {
 	if ( !cls.uiStarted ) {
 		cls.uiStarted = qtrue;
 		CL_InitializeUI();
+
+		/* UI_ResolutionChange must run AFTER CL_InitializeUI so that
+		 * uie.ResolutionChange (set by UI_InitExports) is valid.
+		 * Otherwise the early-return guard skips menuManager.RealignMenus
+		 * and the GUI never scales from 640x480 to the actual viewport. */
+		UI_ResolutionChange();
 	}
 }
 

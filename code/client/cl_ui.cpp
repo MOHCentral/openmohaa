@@ -3970,6 +3970,11 @@ void UI_ResolutionChange(void)
     CL_FillUIImports();
     CL_FillUIDef();
 
+#ifdef GODOT_GDEXTENSION
+    Com_Printf("[GodotUI] UI_ResolutionChange: uid.vidWidth=%d uid.vidHeight=%d\n",
+               uid.vidWidth, uid.vidHeight);
+#endif
+
     // Added in OPM
     //  Scaling for high resolutions
     if (uid.vidWidth > maxWidthRes && uid.vidHeight > maxHeightRes) {
@@ -3986,7 +3991,15 @@ void UI_ResolutionChange(void)
         uid.bHighResScaling = qfalse;
     }
 
+#ifdef GODOT_GDEXTENSION
+    Com_Printf("[GodotUI] UI_ResolutionChange: scaleRes=(%.3f, %.3f) highRes=%d\n",
+               uid.scaleRes[0], uid.scaleRes[1], uid.bHighResScaling);
+#endif
+
     if (!uie.ResolutionChange) {
+#ifdef GODOT_GDEXTENSION
+        Com_Printf("[GodotUI] UI_ResolutionChange: uie.ResolutionChange is NULL — skipping realignment!\n");
+#endif
         return;
     }
 
@@ -5432,6 +5445,15 @@ void CL_InitializeUI(void)
     ui_NumHits             = Cvar_Get("ui_NumHits", "0", 0);
     ui_NumShotsFired       = Cvar_Get("ui_NumShotsFired", "0", 0);
     ui_gmboxspam           = Cvar_Get("ui_gmboxspam", "1", 0);
+
+    // Register ui_compass_scale early — getDefaultGMBoxRectangle/getDefaultDMBoxRectangle
+    // dereference it during uie.Init() menu creation below.
+    if (com_target_game->integer >= TG_MOHTA) {
+        ui_compass_scale = Cvar_Get("ui_compass_scale", "0.75", CVAR_ARCHIVE | CVAR_LATCH);
+    } else {
+        ui_compass_scale = Cvar_Get("ui_compass_scale", "0.55", CVAR_ARCHIVE | CVAR_LATCH);
+    }
+
     ui_gotmedal            = Cvar_Get("ui_gotmedal", "0", 0);
     ui_success             = Cvar_Get("ui_success", "0", 0);
     ui_failed              = Cvar_Get("ui_failed", "0", 0);
