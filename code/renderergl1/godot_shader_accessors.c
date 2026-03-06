@@ -162,6 +162,11 @@ static enum MohaaStageRgbGen convert_stage_rgbgen(colorGen_t cg) {
         case CGEN_LIGHTING_SPHERICAL: return STAGE_RGBGEN_LIGHTING_DIFFUSE;
         case CGEN_CONSTANT:           return STAGE_RGBGEN_CONST;
         case CGEN_GLOBAL_COLOR:       return STAGE_RGBGEN_GLOBAL_COLOR;
+        case CGEN_STATIC:             return STAGE_RGBGEN_VERTEX; /* static vertex colour */
+        case CGEN_SCOORD:             return STAGE_RGBGEN_SCOORD;
+        case CGEN_TCOORD:             return STAGE_RGBGEN_TCOORD;
+        case CGEN_DOT:                return STAGE_RGBGEN_DOT;
+        case CGEN_ONE_MINUS_DOT:      return STAGE_RGBGEN_ONE_MINUS_DOT;
         default:                      return STAGE_RGBGEN_IDENTITY;
     }
 }
@@ -190,16 +195,30 @@ static int convert_alphagen_type(alphaGen_t ag) {
 static enum MohaaStageAlphaGen convert_stage_alphagen(alphaGen_t ag) {
     switch (ag) {
         case AGEN_IDENTITY:
-        case AGEN_SKIP:          return STAGE_ALPHAGEN_IDENTITY;
+        case AGEN_SKIP:                     return STAGE_ALPHAGEN_IDENTITY;
         case AGEN_VERTEX:
-        case AGEN_ONE_MINUS_VERTEX: return STAGE_ALPHAGEN_VERTEX;
-        case AGEN_WAVEFORM:      return STAGE_ALPHAGEN_WAVE;
-        case AGEN_ENTITY:
-        case AGEN_ONE_MINUS_ENTITY: return STAGE_ALPHAGEN_ENTITY;
-        case AGEN_PORTAL:        return STAGE_ALPHAGEN_PORTAL;
-        case AGEN_CONSTANT:      return STAGE_ALPHAGEN_CONST;
-        case AGEN_GLOBAL_ALPHA:  return STAGE_ALPHAGEN_GLOBAL_ALPHA;
-        default:                 return STAGE_ALPHAGEN_IDENTITY;
+        case AGEN_ONE_MINUS_VERTEX:         return STAGE_ALPHAGEN_VERTEX;
+        case AGEN_WAVEFORM:                 return STAGE_ALPHAGEN_WAVE;
+        case AGEN_ENTITY:                   return STAGE_ALPHAGEN_ENTITY;
+        case AGEN_ONE_MINUS_ENTITY:         return STAGE_ALPHAGEN_ONE_MINUS_ENTITY;
+        case AGEN_PORTAL:                   return STAGE_ALPHAGEN_PORTAL;
+        case AGEN_CONSTANT:                 return STAGE_ALPHAGEN_CONST;
+        case AGEN_GLOBAL_ALPHA:             return STAGE_ALPHAGEN_GLOBAL_ALPHA;
+        case AGEN_DOT:                      return STAGE_ALPHAGEN_DOT;
+        case AGEN_ONE_MINUS_DOT:            return STAGE_ALPHAGEN_ONE_MINUS_DOT;
+        case AGEN_DOT_VIEW:                 return STAGE_ALPHAGEN_DOT_VIEW;
+        case AGEN_ONE_MINUS_DOT_VIEW:       return STAGE_ALPHAGEN_ONE_MINUS_DOT_VIEW;
+        case AGEN_DIST_FADE:                return STAGE_ALPHAGEN_DIST_FADE;
+        case AGEN_ONE_MINUS_DIST_FADE:      return STAGE_ALPHAGEN_ONE_MINUS_DIST_FADE;
+        case AGEN_TIKI_DIST_FADE:           return STAGE_ALPHAGEN_TIKI_DIST_FADE;
+        case AGEN_ONE_MINUS_TIKI_DIST_FADE: return STAGE_ALPHAGEN_ONE_MINUS_TIKI_DIST_FADE;
+        case AGEN_HEIGHT_FADE:              return STAGE_ALPHAGEN_HEIGHT_FADE;
+        case AGEN_SKYALPHA:                 return STAGE_ALPHAGEN_SKYALPHA;
+        case AGEN_ONE_MINUS_SKYALPHA:       return STAGE_ALPHAGEN_ONE_MINUS_SKYALPHA;
+        case AGEN_SCOORD:                   return STAGE_ALPHAGEN_SCOORD;
+        case AGEN_TCOORD:                   return STAGE_ALPHAGEN_TCOORD;
+        case AGEN_LIGHTING_SPECULAR:        return STAGE_ALPHAGEN_LIGHTING_SPECULAR;
+        default:                            return STAGE_ALPHAGEN_IDENTITY;
     }
 }
 
@@ -338,6 +357,11 @@ static void convert_stage(const shaderStage_t *src, struct MohaaShaderStage *dst
          * shader level.  Default to 0. */
         dst->alphaPortalDist = 0.0f;
     }
+
+    /* alphaMin/alphaMax — used by DOT, DOT_VIEW, DIST_FADE, HEIGHT_FADE etc. */
+    dst->alphaMin = src->alphaMin;
+    dst->alphaMax = src->alphaMax;
+    VectorCopy(src->specOrigin, dst->specOrigin);
 
     /* tcGen */
     if (!dst->isLightmap) {
@@ -528,6 +552,32 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
                 break;
             case DEFORM_AUTOSPRITE2:
                 out->deform_type = 4;
+                break;
+            case DEFORM_NORMALS:
+                out->deform_type = 5; /* DEFORM_NORMALS */
+                out->deform_base      = d->deformationWave.base;
+                out->deform_amplitude = d->deformationWave.amplitude;
+                out->deform_frequency = d->deformationWave.frequency;
+                out->deform_phase     = d->deformationWave.phase;
+                break;
+            case DEFORM_LIGHTGLOW:
+                out->deform_type = 6; /* DEFORM_LIGHTGLOW */
+                break;
+            case DEFORM_FLAP_S:
+                out->deform_type = 7; /* DEFORM_FLAP_S */
+                out->deform_div = d->deformationSpread;
+                out->deform_base      = d->deformationWave.base;
+                out->deform_amplitude = d->deformationWave.amplitude;
+                out->deform_frequency = d->deformationWave.frequency;
+                out->deform_phase     = d->deformationWave.phase;
+                break;
+            case DEFORM_FLAP_T:
+                out->deform_type = 8; /* DEFORM_FLAP_T */
+                out->deform_div = d->deformationSpread;
+                out->deform_base      = d->deformationWave.base;
+                out->deform_amplitude = d->deformationWave.amplitude;
+                out->deform_frequency = d->deformationWave.frequency;
+                out->deform_phase     = d->deformationWave.phase;
                 break;
             default:
                 out->has_deform = 0;

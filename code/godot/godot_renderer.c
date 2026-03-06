@@ -378,6 +378,19 @@ static qboolean gr_farplane_cull    = qfalse;
 static qboolean gr_hasNewFrame     = qfalse;
 static int     gr_frameCount       = 0;
 
+/* Phase 39 parity: additional refdef_t fields */
+static int      gr_refdef_time      = 0;        /* milliseconds — shader time source */
+static int      gr_refdef_rdflags   = 0;
+static byte     gr_areamask[32]     = {0};       /* MAX_MAP_AREA_BYTES = 32 */
+static qboolean gr_sky_portal       = qfalse;
+static float    gr_sky_alpha        = 0.0f;
+static float    gr_sky_origin[3]    = {0};
+static float    gr_sky_axis[3][3]   = {{0}};
+static qboolean gr_renderTerrain    = qtrue;
+static qboolean gr_skybox_farplane  = qfalse;
+static float    gr_farclipOverride  = 0.0f;
+static float    gr_farplaneColorOverride[3] = {0};
+
 /* World map name captured by GR_LoadWorld for BSP loader */
 static char     gr_worldMapName[256] = {0};
 static qboolean gr_worldMapLoaded   = qfalse;
@@ -416,6 +429,12 @@ typedef struct {
     int         bone_tag[5];         /* controller bone indices */
     float       bone_quat[5][4];     /* controller bone quaternions */
     void       *tiki;                /* dtiki_t pointer */
+
+    /* Phase 39 parity: additional refEntity_t fields */
+    int         customSkin;          /* qhandle_t — alternate skin override */
+    float       shaderTime;          /* subtracted from refdef time for effect timing */
+    float       shaderTexCoord[2];   /* tcMod entity UV offsets */
+    int         nonNormalizedAxes;   /* qboolean — axis vectors have non-unit scale */
 
     /* Per-surface state flags (32 bytes, matches MAX_MODEL_SURFACES).
      * Bit 2 (MDL_SURFACE_NODRAW = 4) = hidden surface.
@@ -1027,6 +1046,11 @@ static void GR_AddRefEntityToScene( const refEntity_t *re, int parentEntityNumbe
     ge->radius        = re->radius;
     ge->rotation      = re->rotation;
     ge->shadowPlane   = re->shadowPlane;
+    ge->customSkin    = (int)re->customSkin;
+    ge->shaderTime    = re->shaderTime;
+    ge->shaderTexCoord[0] = re->shaderTexCoord[0];
+    ge->shaderTexCoord[1] = re->shaderTexCoord[1];
+    ge->nonNormalizedAxes = (int)re->nonNormalizedAxes;
 
     VectorCopy( re->lightingOrigin, ge->lightingOrigin );
 
@@ -1201,6 +1225,21 @@ static void GR_RenderScene( const refdef_t *fd )
     gr_farplane_bias = fd->farplane_bias;
     VectorCopy( fd->farplane_color, gr_farplane_color );
     gr_farplane_cull = fd->farplane_cull;
+
+    /* Phase 39 parity: capture additional refdef_t fields */
+    gr_refdef_time     = fd->time;
+    gr_refdef_rdflags  = fd->rdflags;
+    memcpy( gr_areamask, fd->areamask, sizeof(gr_areamask) );
+    gr_sky_portal      = fd->sky_portal;
+    gr_sky_alpha       = fd->sky_alpha;
+    VectorCopy( fd->sky_origin, gr_sky_origin );
+    VectorCopy( fd->sky_axis[0], gr_sky_axis[0] );
+    VectorCopy( fd->sky_axis[1], gr_sky_axis[1] );
+    VectorCopy( fd->sky_axis[2], gr_sky_axis[2] );
+    gr_renderTerrain   = fd->renderTerrain;
+    gr_skybox_farplane = fd->skybox_farplane;
+    gr_farclipOverride = fd->farclipOverride;
+    VectorCopy( fd->farplaneColorOverride, gr_farplaneColorOverride );
 
     /* Set up the real renderer's backend view params so that
      * Godot_ComputeSpriteQuad() (and future engine pipeline
@@ -1853,11 +1892,26 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
     float charHeight;
     float startx, starty;
     int i;
+    float fWidthScale = 1.0f, fHeightScale = 1.0f;
     qhandle_t shader;
 
     if ( !font || !text || !text[0] ) return;
 
     GR_RefreshFontHandlesIfNeeded();
+
+    if ( pvVirtualScreen ) {
+        if ( pvVirtualScreen[0] ) {
+            fWidthScale = pvVirtualScreen[0];
+        } else {
+            fWidthScale = (float)stored_glconfig.vidWidth / 640.0f;
+        }
+
+        if ( pvVirtualScreen[1] ) {
+            fHeightScale = pvVirtualScreen[1];
+        } else {
+            fHeightScale = (float)stored_glconfig.vidHeight / 480.0f;
+        }
+    }
 
     shader = font->trhandle;
     charHeight = gr_fontHeightScale * font->height * gr_fontGeneralScale;
@@ -1903,6 +1957,13 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
             gx = x;
             gy = y;
 
+            if ( pvVirtualScreen ) {
+                gx *= fWidthScale;
+                gy *= fHeightScale;
+                gw *= fWidthScale;
+                gh *= fHeightScale;
+            }
+
             /* UV coordinates (already normalised to 0–1) */
             s1 = loc->pos[0];
             t1 = loc->pos[1];
@@ -1912,7 +1973,10 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
             /* Emit as a DrawStretchPic command */
             GR_DrawStretchPic( gx, gy, gw, gh, s1, t1, s2, t2, shader );
 
-            x += gw;
+            /* Match tr_font.cpp: cursor advance remains in virtual 640x480
+             * space; only emitted quad vertices are scaled by pvVirtualScreen.
+             * Advancing by scaled gw distorts glyph spacing at non-4:3 scales. */
+            x += gr_fontGeneralScale * loc->size[0] * 256.0f;
             break;
         }
     }
@@ -2891,6 +2955,69 @@ void Godot_Renderer_GetFarplane( float *distance, float *bias, float *color, int
     if ( cull ) *cull = (int)gr_farplane_cull;
 }
 
+/* ===================================================================
+ *  Phase 39 parity: additional refdef_t field accessors
+ * ================================================================ */
+
+int Godot_Renderer_GetRefdefTime( void )
+{
+    return gr_refdef_time;
+}
+
+int Godot_Renderer_GetRefdefFlags( void )
+{
+    return gr_refdef_rdflags;
+}
+
+void Godot_Renderer_GetAreamask( unsigned char *out, int maxBytes )
+{
+    int n = maxBytes < (int)sizeof(gr_areamask) ? maxBytes : (int)sizeof(gr_areamask);
+    if ( out ) memcpy( out, gr_areamask, n );
+}
+
+int Godot_Renderer_GetSkyPortal( float *origin, float *axis, float *alpha )
+{
+    if ( !gr_sky_portal ) return 0;
+    if ( origin ) VectorCopy( gr_sky_origin, origin );
+    if ( axis )   memcpy( axis, gr_sky_axis, 9 * sizeof(float) );
+    if ( alpha )  *alpha = gr_sky_alpha;
+    return 1;
+}
+
+int Godot_Renderer_GetRenderTerrain( void )
+{
+    return (int)gr_renderTerrain;
+}
+
+int Godot_Renderer_GetSkyboxFarplane( void )
+{
+    return (int)gr_skybox_farplane;
+}
+
+void Godot_Renderer_GetFarplaneOverrides( float *farclip, float *colorOverride )
+{
+    if ( farclip )       *farclip = gr_farclipOverride;
+    if ( colorOverride ) VectorCopy( gr_farplaneColorOverride, colorOverride );
+}
+
+/* Phase 39 parity: entity additional field accessors */
+void Godot_Renderer_GetEntityShaderData( int index,
+                                         float *shaderTime,
+                                         float *shaderTexCoord,  /* [2] */
+                                         int   *customSkin,
+                                         int   *nonNormalizedAxes )
+{
+    if ( index < 0 || index >= gr_numEntities ) return;
+    const gr_entity_t *ge = &gr_entities[index];
+    if ( shaderTime )         *shaderTime         = ge->shaderTime;
+    if ( shaderTexCoord ) {
+        shaderTexCoord[0] = ge->shaderTexCoord[0];
+        shaderTexCoord[1] = ge->shaderTexCoord[1];
+    }
+    if ( customSkin )         *customSkin          = ge->customSkin;
+    if ( nonNormalizedAxes )  *nonNormalizedAxes   = ge->nonNormalizedAxes;
+}
+
 /* Also expose the world map path so MoHAARunner knows what BSP to load */
 
 const char *Godot_Renderer_GetWorldMapName( void )
@@ -3486,6 +3613,17 @@ int Godot_RI_GetSkelAnimFrame( void *tiki, void *bonesOut, float *radiusOut )
                                &radius, &mins, &maxs );
     if ( radiusOut ) *radiusOut = radius;
     return 1;
+}
+
+/* ── Morph weight frame accessor ──
+ * Wraps ri.SKEL_GetMorphWeightFrame: fills data[] with integer morph
+ * weights for the current animation pose.  Returns number of morph
+ * targets (entries written), or 0 if none. */
+int Godot_RI_GetMorphWeightFrame( void *skeletor, int index, float time, int *data )
+{
+    if ( !skeletor || !data ) return 0;
+    if ( !ri.SKEL_GetMorphWeightFrame ) return 0;
+    return ri.SKEL_GetMorphWeightFrame( skeletor, index, time, data );
 }
 
 /* ── Entity animation data accessor ── */

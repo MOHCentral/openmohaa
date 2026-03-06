@@ -32,6 +32,7 @@
 #include <godot_cpp/classes/sub_viewport.hpp>
 #include <godot_cpp/classes/viewport_texture.hpp>
 #include <godot_cpp/classes/audio_server.hpp>
+#include <godot_cpp/classes/audio_effect_reverb.hpp>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -122,6 +123,18 @@ extern "C" {
     void Godot_Renderer_GetFarplane(float *distance, float *bias, float *color, int *cull);
     const char *Godot_Renderer_GetWorldMapName(void);
     int  Godot_Renderer_IsWorldMapLoaded(void);
+
+    // Phase 39 parity: additional refdef_t and entity field accessors
+    int  Godot_Renderer_GetRefdefTime(void);
+    int  Godot_Renderer_GetRefdefFlags(void);
+    void Godot_Renderer_GetAreamask(unsigned char *out, int maxBytes);
+    int  Godot_Renderer_GetSkyPortal(float *origin, float *axis, float *alpha);
+    int  Godot_Renderer_GetRenderTerrain(void);
+    int  Godot_Renderer_GetSkyboxFarplane(void);
+    void Godot_Renderer_GetFarplaneOverrides(float *farclip, float *colorOverride);
+    void Godot_Renderer_GetEntityShaderData(int index, float *shaderTime,
+                                            float *shaderTexCoord, int *customSkin,
+                                            int *nonNormalizedAxes);
 
     // Terrain visibility — from tr_world.c and tr_terrain.c
     void R_MarkTerrainForGodot(const float vieworg[3], const float viewaxis[3][3],
@@ -216,6 +229,11 @@ extern "C" {
                                      float listener_z,
                                      float origin_x, float origin_y,
                                      float origin_z);
+
+    // Phase 5: Ambient volume and clear buffer
+    float Godot_Sound_GetAmbientVolume(void);
+    int   Godot_Sound_GetClearRequested(void);
+    void  Godot_Sound_ClearClearRequest(void);
     void  Godot_SoundOcclusion_SetEnabled(int enabled);
     int   Godot_SoundOcclusion_IsEnabled(void);
 
@@ -267,11 +285,13 @@ extern "C" {
     void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
                                    const void *frameInfo, const int *bone_tag,
                                    const float *bone_quat, float actionWeight,
-                                   int *outBoneCount);
+                                   int *outBoneCount,
+                                   int **outMorphCache, int *outMorphCount);
     int   Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
                                   const void *boneCache, int boneCount,
                                   float *outPositions, float *outNormals,
-                                  int maxVerts = -1);
+                                  int maxVerts,
+                                  const int *morphCache, int morphCount);
     int   Godot_Skel_GetMeshCount(void *tikiPtr);
     float Godot_Skel_GetScale(void *tikiPtr);
     void  Godot_Skel_GetOrigin(void *tikiPtr, float *out);
@@ -332,6 +352,7 @@ extern "C" {
     // Client accessor: sync cls.glconfig with actual Godot viewport
     void  Godot_Client_SyncGlConfigVidSize(int w, int h);
     void  Godot_Client_RefreshUIDef(void);
+    void  Godot_Client_ResolutionChange(void);
 
     // Cvar event bridge (event-driven fullscreen updates)
     int   Godot_ConsumeFullscreenCvarChanged(int *out_fullscreen);
@@ -1078,6 +1099,22 @@ void MoHAARunner::update_camera() {
     float fp_color[3] = {0, 0, 0};
     int   fp_cull = 0;
     Godot_Renderer_GetFarplane(&fp_dist, &fp_bias, fp_color, &fp_cull);
+
+    // Phase 39 parity: farclipOverride and farplaneColorOverride from refdef_t.
+    // When the engine sets these per-frame (e.g. via script or entity trigger),
+    // they take priority over the standard farplane_distance / farplane_color cvars.
+    float farclip_override = 0.0f;
+    float fp_color_override[3] = {0, 0, 0};
+    Godot_Renderer_GetFarplaneOverrides(&farclip_override, fp_color_override);
+    if (farclip_override > 0.0f) {
+        fp_dist = farclip_override;
+    }
+    if (fp_color_override[0] > 0.0f || fp_color_override[1] > 0.0f || fp_color_override[2] > 0.0f) {
+        fp_color[0] = fp_color_override[0];
+        fp_color[1] = fp_color_override[1];
+        fp_color[2] = fp_color_override[2];
+    }
+
     if (fp_dist > 0.0f) {
         camera->set_far((double)(fp_dist * MOHAA_UNIT_SCALE));
 
@@ -1465,6 +1502,16 @@ void MoHAARunner::update_pvs_visibility() {
 void MoHAARunner::update_terrain_visibility() {
     int tp_count = Godot_BSP_GetTerrainPatchCount();
     if (tp_count <= 0) return;
+
+    // Phase 39 parity: respect renderTerrain flag from refdef_t.
+    // When false (e.g. during certain cinematics or UI screens), hide all terrain.
+    if (!Godot_Renderer_GetRenderTerrain()) {
+        for (int pi = 0; pi < tp_count; pi++) {
+            MeshInstance3D *patch_mi = Godot_BSP_GetTerrainPatchMesh(pi);
+            if (patch_mi) patch_mi->set_visible(false);
+        }
+        return;
+    }
 
     // Read current view parameters (already captured by GR_RenderScene)
     float origin[3];
@@ -2767,10 +2814,15 @@ static float eval_wave(MohaaWaveFunc func, float base, float amp,
 // ──────────────────────────────────────────────
 
 // Entity type constants matching refEntityType_t (tr_types.h)
-// RT_MODEL=0, RT_POLY=1, RT_SPRITE=2, RT_BEAM=3
-static constexpr int RT_MODEL   = 0;
-static constexpr int RT_SPRITE  = 2;
-static constexpr int RT_BEAM    = 3;
+// RT_MODEL=0, RT_POLY=1, RT_SPRITE=2, RT_BEAM=3, RT_RAIL_CORE=4, etc.
+static constexpr int RT_MODEL        = 0;
+static constexpr int RT_POLY         = 1;  /* Q3A only — not used by MOHAA cgame */
+static constexpr int RT_SPRITE       = 2;
+static constexpr int RT_BEAM         = 3;
+static constexpr int RT_RAIL_CORE    = 4;  /* Q3A only */
+static constexpr int RT_RAIL_RINGS   = 5;  /* Q3A only */
+static constexpr int RT_LIGHTNING    = 6;  /* Q3A only */
+static constexpr int RT_PORTALSURFACE = 7;
 
 void MoHAARunner::update_entities() {
     if (!game_world) return;
@@ -2868,6 +2920,25 @@ void MoHAARunner::update_entities() {
             }
         }
 #endif
+
+        // Phase 39 parity: fetch per-entity shader data (shaderTime, shaderTexCoord)
+        // In the original renderer, tess.shaderTime = refdef.floatTime - entity.shaderTime.
+        // This makes effect animations start at zero when the entity is spawned.
+        float ent_shaderTime = 0.0f;
+        float ent_shaderTexCoord[2] = {0.0f, 0.0f};
+        int   ent_customSkin = 0;
+        int   ent_nonNormalizedAxes = 0;
+        Godot_Renderer_GetEntityShaderData(i, &ent_shaderTime,
+                                           ent_shaderTexCoord, &ent_customSkin,
+                                           &ent_nonNormalizedAxes);
+
+        // Compute per-entity effective shader time (in seconds).
+        // Mirrors RB_StageIteratorGeneric: tess.shaderTime = floatTime - shaderStartTime.
+        double ent_effective_time = shader_anim_time;
+        if (ent_shaderTime > 0.0f) {
+            ent_effective_time = shader_anim_time - (double)ent_shaderTime;
+            if (ent_effective_time < 0.0) ent_effective_time = 0.0;
+        }
 
         // RT_SPRITE: billboard quad at entity origin (Phase 16)
         // MOHAA .spr sprites are sized by image dimensions × scale, NOT by
@@ -3478,11 +3549,14 @@ void MoHAARunner::update_entities() {
                 }
                 if (!skinned_mesh.is_valid()) {
                     int boneCount = 0;
+                    int *morphCache = nullptr;
+                    int morphCount = 0;
                     void *boneCache = Godot_Skel_PrepareBones(
                         tikiPtr, entNum,
                         (const void *)frameInfoBuf, boneTagBuf,
                         (const float *)boneQuatBuf,
-                        actionWeight, &boneCount);
+                        actionWeight, &boneCount,
+                        &morphCache, &morphCount);
 
                     if (boneCache && boneCount > 0) {
                         skinned_mesh.instantiate();
@@ -3514,7 +3588,8 @@ void MoHAARunner::update_entities() {
                                 // Get skinned positions + normals (cap at LOD vertex limit)
                                 if (!Godot_Skel_SkinSurface(tikiPtr, mesh, surf,
                                         boneCache, boneCount,
-                                        positions, normals, lodVertLimit)) {
+                                        positions, normals, lodVertLimit,
+                                        morphCache, morphCount)) {
                                     ::free(positions); ::free(normals);
                                     ::free(texcoords); ::free(indices);
                                     continue;
@@ -3615,6 +3690,7 @@ void MoHAARunner::update_entities() {
                         }
 
                         ::free(boneCache);
+                        ::free(morphCache);
                     }
 
                     // Phase 60: Cache the newly built skinned mesh
@@ -3996,13 +4072,15 @@ void MoHAARunner::update_entities() {
                     }
 
                     // Phase 135: Apply rgbGen/alphaGen wave animation (pulsing color/alpha effects)
-                    // Mirrors update_shader_animations() wave logic but applied per-entity
+                    // Mirrors update_shader_animations() wave logic but applied per-entity.
+                    // Uses ent_effective_time so per-entity shaderTime offsets are respected
+                    // (e.g. muzzle flashes animate from spawn time, not map load time).
                     if (sp) {
                         if (sp->rgbgen_type == 2) { // wave
                             float wave_val = eval_wave(sp->rgbgen_wave_func,
                                 sp->rgbgen_wave_base, sp->rgbgen_wave_amp,
                                 sp->rgbgen_wave_phase, sp->rgbgen_wave_freq,
-                                shader_anim_time);
+                                ent_effective_time);
                             wave_val = clamp01(wave_val);
                             entity_tint.r *= wave_val;
                             entity_tint.g *= wave_val;
@@ -4013,7 +4091,7 @@ void MoHAARunner::update_entities() {
                             float alpha_wave = eval_wave(sp->alphagen_wave_func,
                                 sp->alphagen_wave_base, sp->alphagen_wave_amp,
                                 sp->alphagen_wave_phase, sp->alphagen_wave_freq,
-                                shader_anim_time);
+                                ent_effective_time);
                             entity_tint.a *= clamp01(alpha_wave);
                             has_entity_tint = true;
                         }
@@ -5065,7 +5143,16 @@ void MoHAARunner::update_shadow_blobs() {
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_shader_animations(double delta) {
-    shader_anim_time += delta;
+    // Use engine's refdef.time (milliseconds) for shader animations.
+    // This keeps shader timing in sync with the engine clock and prevents
+    // drift from Godot's variable delta accumulation.
+    // Fallback to delta accumulation if refdef time is zero (pre-init).
+    int refdef_ms = Godot_Renderer_GetRefdefTime();
+    if (refdef_ms > 0) {
+        shader_anim_time = (double)refdef_ms / 1000.0;
+    } else {
+        shader_anim_time += delta;
+    }
 
     // Iterate over BSP world mesh surfaces and apply tcMod scroll offset
     if (!bsp_map_node) return;
@@ -6041,6 +6128,12 @@ void MoHAARunner::update_2d_overlay() {
             Rect2 bg_rect(ui_offset_x, ui_offset_y,
                           (float)ui_vid_w * ui_scale_x,
                           (float)ui_vid_h * ui_scale_y);
+            if (scissor_enabled) {
+                bg_rect = bg_rect.intersection(scissor_rect);
+            }
+            if (bg_rect.size.x <= 0.0f || bg_rect.size.y <= 0.0f) {
+                continue;
+            }
             rs->canvas_item_add_texture_rect(bg_ci, bg_rect, loading_bg_tex->get_rid());
         }
 
@@ -6127,7 +6220,6 @@ void MoHAARunner::update_2d_overlay() {
                 if (sname && sname[0]) {
                     const GodotShaderProps *sp = Godot_ShaderProps_Find(sname);
                     if (sp && sp->stage_count > 0) {
-                        bool is_font = (strstr(sname, "gfx/fonts/") != nullptr);
                         for (int st = 0; st < sp->stage_count; st++) {
                             if (!sp->stages[st].active) continue;
                             if (sp->stages[st].isLightmap) continue;
@@ -6138,7 +6230,7 @@ void MoHAARunner::update_2d_overlay() {
                                 draw_col.r = stg->rgbConst[0];
                                 draw_col.g = stg->rgbConst[1];
                                 draw_col.b = stg->rgbConst[2];
-                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR || is_font) {
+                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR) {
                                 // Use SetColor (draw_col = col already)
                             } else if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
                                        stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
@@ -6150,7 +6242,7 @@ void MoHAARunner::update_2d_overlay() {
                             // alphaGen
                             if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                 draw_col.a = stg->alphaConst;
-                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA || is_font) {
+                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA) {
                                 // Use SetColor alpha (draw_col.a = col.a already)
                             } else if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                 draw_col.a = 1.0f;
@@ -6185,10 +6277,7 @@ void MoHAARunner::update_2d_overlay() {
                         } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
                             draw_blend = BLEND_ALPHA_INV;
                         } else if (sp2->transparency == SHADER_OPAQUE) {
-                            /* In Godot, UI textures often contain soft alpha halos (e.g. hover states).
-                             * Forcing BLEND_OPAQUE causes these halos to render as solid black boxes.
-                             * We unconditionally use BLEND_MIX here so texture transparency resolves correctly. */
-                            draw_blend = BLEND_MIX;
+                            draw_blend = BLEND_OPAQUE;
 
                             /* Multi-stage shader: check the actual texture stage
                              * for a custom blendFunc that overrides the opaque
@@ -6232,16 +6321,18 @@ void MoHAARunner::update_2d_overlay() {
                          * UI images with meaningful transparency (e.g. loading screen
                          * photo frames, menu backdrops).  Keep BLEND_MIX. */
 
-                        /* Texture-alpha safety net: if shader_texture_has_alpha says
-                         * the loaded texture image has NO meaningful alpha channel
-                         * (all-255 stripped to RGB8, or JPG), use BLEND_OPAQUE so
-                         * accidental alpha in BLEND_MIX doesn't wash the image out.
-                         * BLEND_OPAQUE outputs vec4(tex.rgb*COLOR.rgb, COLOR.a) —
-                         * identical to BLEND_MIX when tex.a=1.0, but avoids relying
-                         * on Godot treating RGB8 alpha as exactly 1.0. */
-                        if (draw_blend == BLEND_MIX) {
-                            auto ha_it = shader_texture_has_alpha.find(shader);
-                            if (ha_it != shader_texture_has_alpha.end() && !ha_it->second) {
+                        /* Texture-alpha parity for implicit/UI shaders:
+                         * - If blend resolved to OPAQUE but the loaded texture has
+                         *   meaningful alpha, use BLEND_MIX so cutout/soft edges
+                         *   render correctly (e.g. loadingbar_border, overlays).
+                         * - If blend is MIX but texture has no alpha, collapse to
+                         *   OPAQUE for exact opaque output. */
+                        auto ha_it = shader_texture_has_alpha.find(shader);
+                        if (ha_it != shader_texture_has_alpha.end()) {
+                            const bool tex_has_alpha = ha_it->second;
+                            if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
+                                draw_blend = BLEND_MIX;
+                            } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
                                 draw_blend = BLEND_OPAQUE;
                             }
                         }
@@ -6508,18 +6599,15 @@ void MoHAARunner::update_2d_overlay() {
                                 if (!sp->stages[st].active) continue;
                                 if (sp->stages[st].isLightmap) continue;
                                 const MohaaShaderStage *stg = &sp->stages[st];
-                                // Match STRETCHPIC: explicit shaders with rgbGen
-                                // identity → white.  Fonts exempt (GLOBAL_COLOR).
-                                bool is_font_t = (sname && strstr(sname, "gfx/fonts/") != nullptr);
-                                if (!is_font_t && (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING)) {
+                                if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                    stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
                                     draw_col.r = draw_col.g = draw_col.b = 1.0f;
                                 } else if (stg->rgbGen == STAGE_RGBGEN_CONST) {
                                     draw_col.r = stg->rgbConst[0];
                                     draw_col.g = stg->rgbConst[1];
                                     draw_col.b = stg->rgbConst[2];
                                 }
-                                if (!is_font_t && stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                                if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
                                     draw_col.a = 1.0f;
                                 } else if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
                                     draw_col.a = stg->alphaConst;
@@ -6552,8 +6640,7 @@ void MoHAARunner::update_2d_overlay() {
                             } else if (sp2->transparency == SHADER_ALPHA_BLEND_INV) {
                                 draw_blend = BLEND_ALPHA_INV;
                             } else if (sp2->transparency == SHADER_OPAQUE) {
-                                /* UI hover fix: use BLEND_MIX to properly resolve texture alpha */
-                                draw_blend = BLEND_MIX;
+                                draw_blend = BLEND_OPAQUE;
                                 if (sp2->stage_count > 1) {
                                     for (int st = 0; st < sp2->stage_count; st++) {
                                         if (sp2->stages[st].isLightmap) continue;
@@ -6571,6 +6658,18 @@ void MoHAARunner::update_2d_overlay() {
                             }
                         }
                     }
+
+                    // Texture-alpha parity (same rationale as stretch-pic path)
+                    auto ha_it = shader_texture_has_alpha.find(shader);
+                    if (ha_it != shader_texture_has_alpha.end()) {
+                        const bool tex_has_alpha = ha_it->second;
+                        if (draw_blend == BLEND_OPAQUE && tex_has_alpha) {
+                            draw_blend = BLEND_MIX;
+                        } else if (draw_blend == BLEND_MIX && !tex_has_alpha) {
+                            draw_blend = BLEND_OPAQUE;
+                        }
+                    }
+
                     RID target_ci = get_segment_ci(draw_blend);
 
                     RID tex_rid = tex->get_rid();
@@ -6585,7 +6684,12 @@ void MoHAARunner::update_2d_overlay() {
         Rect2 bg_rect(ui_offset_x, ui_offset_y,
                       (float)ui_vid_w * ui_scale_x,
                       (float)ui_vid_h * ui_scale_y);
-        rs->canvas_item_add_texture_rect(bg_ci, bg_rect, loading_bg_tex->get_rid());
+        if (scissor_enabled) {
+            bg_rect = bg_rect.intersection(scissor_rect);
+        }
+        if (bg_rect.size.x > 0.0f && bg_rect.size.y > 0.0f) {
+            rs->canvas_item_add_texture_rect(bg_ci, bg_rect, loading_bg_tex->get_rid());
+        }
     }
 
     /* Flush any remaining HUD model viewport textures whose draw_order
@@ -6646,6 +6750,7 @@ void MoHAARunner::setup_audio() {
         p->set_attenuation_model(AudioStreamPlayer3D::ATTENUATION_INVERSE_DISTANCE);
         p->set_unit_size(1.0f);
         p->set_max_polyphony(1);
+        p->set_doppler_tracking(AudioStreamPlayer3D::DOPPLER_TRACKING_IDLE_STEP);
         audio_root->add_child(p);
         sfx_players_3d.push_back(p);
     }
@@ -7071,11 +7176,14 @@ void MoHAARunner::update_hud_models() {
 
         if (need_rebuild && has_anim) {
             int boneCount = 0;
+            int *morphCache = nullptr;
+            int morphCount = 0;
             void *boneCache = Godot_Skel_PrepareBones(
                 tiki, 1023 /* entityNumber from CL_Draw3DModel */,
                 (const void *)frameInfoBuf, boneTagBuf,
                 (const float *)boneQuatBuf,
-                actionWeight, &boneCount);
+                actionWeight, &boneCount,
+                &morphCache, &morphCount);
 
             if (boneCache && boneCount > 0) {
                 Ref<ArrayMesh> mesh;
@@ -7107,7 +7215,8 @@ void MoHAARunner::update_hud_models() {
                         }
 
                         if (!Godot_Skel_SkinSurface(tiki, m, s,
-                                boneCache, boneCount, positions, normals)) {
+                                boneCache, boneCount, positions, normals, -1,
+                                morphCache, morphCount)) {
                             ::free(positions); ::free(normals);
                             ::free(texcoords); ::free(indices);
                             continue;
@@ -7187,6 +7296,7 @@ void MoHAARunner::update_hud_models() {
                 }
 
                 ::free(boneCache);
+                ::free(morphCache);
 
                 if (mesh.is_valid() && mesh->get_surface_count() > 0) {
                     hud_model_mesh->set_mesh(mesh);
@@ -7442,18 +7552,161 @@ void MoHAARunner::update_audio(double delta) {
         }
     }
 
-    // -- 4. Sound fade (Phase 50) --
+    // -- 4. Sound fade --
     if (Godot_Sound_GetFadeActive()) {
         float fade_time = Godot_Sound_GetFadeTime();
         if (fade_time > 0.0f) {
             sound_fade_duration = fade_time;
             sound_fade_elapsed = 0.0f;
             sound_fading = true;
+        } else {
+            // Instant fade
+            sound_fade_factor = 0.0f;
+            sound_fading = false;
         }
         Godot_Sound_ClearFade();
     }
+    if (sound_fading) {
+        sound_fade_elapsed += (float)delta;
+        if (sound_fade_elapsed >= sound_fade_duration) {
+            sound_fade_factor = 0.0f;
+            sound_fading = false;
+        } else {
+            sound_fade_factor = 1.0f - (sound_fade_elapsed / sound_fade_duration);
+        }
+    } else if (sound_fade_factor < 1.0f) {
+        // Recover from fade (engine will send new events to restore)
+    }
 
-    // -- 5. Log sound stats once --
+    // -- 5. Apply global fade + ambient volume to active 3D players --
+    {
+        float ambient_vol = Godot_Sound_GetAmbientVolume();
+        float global_scale = sound_fade_factor * ambient_vol;
+        // We apply fade as a master volume modifier; individual player volumes
+        // were set at play-time, so we apply fade via AudioServer bus volume
+        // if available, or we could adjust per-player. For simplicity, we
+        // adjust the Master bus volume.
+        if (global_scale < 0.999f || global_scale > 1.001f) {
+            // Apply to Master bus: convert linear scale to dB
+            float bus_db = (global_scale > 0.001f) ? (20.0f * log10f(global_scale)) : -80.0f;
+            AudioServer *as = AudioServer::get_singleton();
+            if (as) {
+                int master_idx = as->get_bus_index(StringName("Master"));
+                if (master_idx >= 0) {
+                    as->set_bus_volume_db(master_idx, bus_db);
+                }
+            }
+        } else {
+            AudioServer *as = AudioServer::get_singleton();
+            if (as) {
+                int master_idx = as->get_bus_index(StringName("Master"));
+                if (master_idx >= 0) {
+                    as->set_bus_volume_db(master_idx, 0.0f);
+                }
+            }
+        }
+    }
+
+    // -- 6. Reverb --
+    {
+        int rev_type = Godot_Sound_GetReverbType();
+        float rev_level = Godot_Sound_GetReverbLevel();
+        if (rev_type != current_reverb_type) {
+            current_reverb_type = rev_type;
+            AudioServer *as = AudioServer::get_singleton();
+            if (as) {
+                // Ensure a "Reverb" bus exists
+                if (reverb_bus_idx < 0) {
+                    int bus_count = as->get_bus_count();
+                    for (int b = 0; b < bus_count; b++) {
+                        if (as->get_bus_name(b) == StringName("Reverb")) {
+                            reverb_bus_idx = b;
+                            break;
+                        }
+                    }
+                    if (reverb_bus_idx < 0) {
+                        as->add_bus();
+                        reverb_bus_idx = as->get_bus_count() - 1;
+                        as->set_bus_name(reverb_bus_idx, StringName("Reverb"));
+                        as->set_bus_send(reverb_bus_idx, StringName("Master"));
+                        // Add a reverb effect
+                        Ref<AudioEffectReverb> reverb;
+                        reverb.instantiate();
+                        as->add_bus_effect(reverb_bus_idx, reverb);
+                    }
+                }
+                // Map EAX reverb type to Godot reverb parameters
+                // EAX types: 0=generic, 1=paddedcell, 2=room, 3=bathroom,
+                // 4=livingroom, 5=stoneroom, 6=auditorium, 7=concerthall,
+                // 8=cave, 9=arena, 10=hangar, 11=carpetedhallway, 12=hallway,
+                // 13=stonecorridor, 14=alley, 15=forest, 16=city, 17=mountains,
+                // 18=quarry, 19=plain, 20=parkinglot, 21=sewerpipe, 22=underwater,
+                // 23=drugged, 24=dizzy, 25=psychotic
+                float room_size = 0.5f;
+                float damping = 0.5f;
+                float wet = 0.3f;
+                float dry = 0.7f;
+                switch (rev_type) {
+                    case 0:  room_size=0.5f; damping=0.5f; wet=0.3f; break; // generic
+                    case 1:  room_size=0.1f; damping=0.9f; wet=0.2f; break; // padded cell
+                    case 2:  room_size=0.3f; damping=0.6f; wet=0.3f; break; // room
+                    case 3:  room_size=0.4f; damping=0.3f; wet=0.5f; break; // bathroom
+                    case 4:  room_size=0.3f; damping=0.7f; wet=0.2f; break; // living room
+                    case 5:  room_size=0.6f; damping=0.4f; wet=0.5f; break; // stone room
+                    case 6:  room_size=0.8f; damping=0.5f; wet=0.5f; break; // auditorium
+                    case 7:  room_size=0.9f; damping=0.4f; wet=0.6f; break; // concert hall
+                    case 8:  room_size=0.9f; damping=0.2f; wet=0.7f; break; // cave
+                    case 9:  room_size=0.8f; damping=0.3f; wet=0.6f; break; // arena
+                    case 10: room_size=1.0f; damping=0.3f; wet=0.6f; break; // hangar
+                    case 11: room_size=0.2f; damping=0.8f; wet=0.1f; break; // carpeted hallway
+                    case 12: room_size=0.4f; damping=0.5f; wet=0.4f; break; // hallway
+                    case 13: room_size=0.5f; damping=0.3f; wet=0.5f; break; // stone corridor
+                    case 14: room_size=0.3f; damping=0.4f; wet=0.3f; break; // alley
+                    case 15: room_size=0.6f; damping=0.8f; wet=0.2f; break; // forest
+                    case 16: room_size=0.4f; damping=0.5f; wet=0.2f; break; // city
+                    case 17: room_size=0.7f; damping=0.6f; wet=0.3f; break; // mountains
+                    case 18: room_size=0.6f; damping=0.3f; wet=0.4f; break; // quarry
+                    case 19: room_size=0.5f; damping=0.7f; wet=0.1f; break; // plain
+                    case 20: room_size=0.4f; damping=0.6f; wet=0.2f; break; // parking lot
+                    case 21: room_size=0.7f; damping=0.2f; wet=0.7f; break; // sewer pipe
+                    case 22: room_size=0.8f; damping=0.1f; wet=0.8f; break; // underwater
+                    case 23: room_size=0.6f; damping=0.3f; wet=0.5f; break; // drugged
+                    case 24: room_size=0.5f; damping=0.4f; wet=0.4f; break; // dizzy
+                    case 25: room_size=0.7f; damping=0.2f; wet=0.6f; break; // psychotic
+                    default: room_size=0.5f; damping=0.5f; wet=0.3f; break;
+                }
+                wet *= rev_level;
+                dry = 1.0f - (wet * 0.5f);
+                if (as->get_bus_effect_count(reverb_bus_idx) > 0) {
+                    Ref<AudioEffectReverb> eff = as->get_bus_effect(reverb_bus_idx, 0);
+                    if (eff.is_valid()) {
+                        eff->set_room_size(room_size);
+                        eff->set_damping(damping);
+                        eff->set_wet(wet);
+                        eff->set_dry(dry);
+                    }
+                }
+                // Route 3D players through the Reverb bus
+                String bus_name = (rev_type > 0 && rev_level > 0.01f) ? "Reverb" : "Master";
+                for (auto *p : sfx_players_3d) {
+                    p->set_bus(StringName(bus_name));
+                }
+            }
+        }
+    }
+
+    // -- 7. Clear sound buffer --
+    if (Godot_Sound_GetClearRequested()) {
+        for (auto *p : sfx_players_3d) { if (p->is_playing()) p->stop(); }
+        for (auto *p : sfx_players_2d) { if (p->is_playing()) p->stop(); }
+        active_loops.clear();
+        Godot_Sound_ClearClearRequest();
+    }
+
+    // -- 8. Music --
+    update_music(delta);
+
+    // -- 9. Log sound stats once --
     static bool logged_audio = false;
     if (!logged_audio && evt_count > 0) {
         int sfx_count = Godot_Sound_GetSfxCount();
@@ -7462,6 +7715,170 @@ void MoHAARunner::update_audio(double delta) {
             String::num_int64(evt_count) + String(" events this frame, ") +
             String::num_int64(loop_count) + String(" loops active."));
         logged_audio = true;
+    }
+}
+
+// ──────────────────────────────────────────────
+//  Music playback
+// ──────────────────────────────────────────────
+
+Ref<AudioStream> MoHAARunner::load_music_from_vfs(const char *name) {
+    if (!name || !name[0]) return Ref<AudioStream>();
+
+    // Try loading via VFS — music files are typically in sound/music/
+    unsigned char *data = nullptr;
+    int len = 0;
+
+    // Try as-is first (engine usually provides full path like "sound/music/...")
+    len = Godot_VFS_ReadFile(name, (void **)&data);
+    if (len <= 0 || !data) {
+        // Try with "sound/" prefix
+        char prefixed[512];
+        snprintf(prefixed, sizeof(prefixed), "sound/%s", name);
+        len = Godot_VFS_ReadFile(prefixed, (void **)&data);
+    }
+    if (len <= 0 || !data) return Ref<AudioStream>();
+
+    // Detect format
+    bool is_mp3 = false;
+    if (len >= 3) {
+        // ID3 tag or MP3 sync word
+        if ((data[0] == 'I' && data[1] == 'D' && data[2] == '3') ||
+            (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0)) {
+            is_mp3 = true;
+        }
+    }
+    if (!is_mp3 && len >= 4 && data[0] == 'R' && data[1] == 'I' &&
+        data[2] == 'F' && data[3] == 'F') {
+        // WAV — check for MP3-in-WAV (format tag 0x0055)
+        if (len > 20) {
+            // Find fmt chunk and check format tag
+            for (int off = 12; off < len - 8; off++) {
+                if (data[off] == 'f' && data[off+1] == 'm' &&
+                    data[off+2] == 't' && data[off+3] == ' ') {
+                    if (off + 12 < len) {
+                        uint16_t fmt_tag = data[off+8] | (data[off+9] << 8);
+                        if (fmt_tag == 0x0055) is_mp3 = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    if (is_mp3) {
+        PackedByteArray pba;
+        pba.resize(len);
+        memcpy(pba.ptrw(), data, len);
+        Ref<AudioStreamMP3> mp3;
+        mp3.instantiate();
+        mp3->set_data(pba);
+        Godot_VFS_FreeFile(data);
+        return mp3;
+    }
+
+    // Try loading as WAV (reuse the WAV loading logic from load_wav_from_vfs)
+    // For music, WAV is less common but possible
+    Godot_VFS_FreeFile(data);
+    return Ref<AudioStream>();
+}
+
+void MoHAARunner::update_music(double delta) {
+    if (!music_player) return;
+
+    // Process music state changes from the engine
+    int action = Godot_Sound_GetMusicAction();
+    if (action != 0) { // GR_MUSIC_NONE = 0
+        const char *name = Godot_Sound_GetMusicName();
+        float volume = Godot_Sound_GetMusicVolume();
+        float fade_time = Godot_Sound_GetMusicFadeTime();
+
+        if (action == 1) { // GR_MUSIC_PLAY
+            String new_name = name ? String(name) : String();
+            if (new_name.length() > 0 && new_name != current_music_name) {
+                Ref<AudioStream> stream = load_music_from_vfs(name);
+                if (stream.is_valid()) {
+                    // Enable looping for music
+                    Ref<AudioStreamMP3> mp3 = stream;
+                    if (mp3.is_valid()) {
+                        mp3->set_loop(true);
+                    }
+                    music_player->set_stream(stream);
+                    music_player->set_volume_db(0.0f);
+                    music_player->play();
+                    current_music_name = new_name;
+                    music_current_volume = (volume > 0.01f) ? volume : 1.0f;
+                    music_target_volume = music_current_volume;
+                    float vol_db = (music_current_volume > 0.001f)
+                        ? (20.0f * log10f(music_current_volume)) : -80.0f;
+                    music_player->set_volume_db(vol_db);
+                    UtilityFunctions::print(String("[MoHAA] Music: playing ") + new_name);
+                }
+            }
+        } else if (action == 2) { // GR_MUSIC_STOP
+            if (music_player->is_playing()) {
+                music_player->stop();
+                current_music_name = "";
+            }
+        } else if (action == 3) { // GR_MUSIC_VOLUME
+            music_target_volume = volume;
+            music_fade_time = fade_time;
+            music_fade_elapsed = 0.0f;
+        }
+        Godot_Sound_ClearMusicAction();
+    }
+
+    // Process triggered music
+    int trig_action = Godot_Sound_GetTriggeredAction();
+    if (trig_action > 0) {
+        if (trig_action == 1) { // GR_TRIG_START
+            const char *trig_name = Godot_Sound_GetTriggeredName();
+            if (trig_name && trig_name[0]) {
+                Ref<AudioStream> stream = load_music_from_vfs(trig_name);
+                if (stream.is_valid()) {
+                    int loop_count = Godot_Sound_GetTriggeredLoopCount();
+                    Ref<AudioStreamMP3> mp3 = stream;
+                    if (mp3.is_valid()) {
+                        mp3->set_loop(loop_count != 0);
+                    }
+                    music_player->set_stream(stream);
+                    music_player->set_volume_db(0.0f);
+                    music_player->play();
+                    current_music_name = String(trig_name);
+                    music_current_volume = 1.0f;
+                    music_target_volume = 1.0f;
+                }
+            }
+        } else if (trig_action == 2) { // GR_TRIG_STOP
+            if (music_player->is_playing()) {
+                music_player->stop();
+                current_music_name = "";
+            }
+        } else if (trig_action == 3) { // GR_TRIG_PAUSE
+            // Godot AudioStreamPlayer has no pause — set volume to -80 dB
+            music_player->set_volume_db(-80.0f);
+        } else if (trig_action == 4) { // GR_TRIG_UNPAUSE
+            float vol_db = (music_current_volume > 0.001f)
+                ? (20.0f * log10f(music_current_volume)) : -80.0f;
+            music_player->set_volume_db(vol_db);
+        }
+        Godot_Sound_ClearTriggeredAction();
+    }
+
+    // Interpolate music volume fade
+    if (music_fade_time > 0.0f && music_player->is_playing()) {
+        music_fade_elapsed += (float)delta;
+        if (music_fade_elapsed >= music_fade_time) {
+            music_current_volume = music_target_volume;
+            music_fade_time = 0.0f;
+        } else {
+            float t = music_fade_elapsed / music_fade_time;
+            // Lerp from current towards target
+            music_current_volume += (music_target_volume - music_current_volume) * t;
+        }
+        float vol_db = (music_current_volume > 0.001f)
+            ? (20.0f * log10f(music_current_volume)) : -80.0f;
+        music_player->set_volume_db(vol_db);
     }
 }
 
@@ -7714,7 +8131,7 @@ void MoHAARunner::_process(double delta) {
                 Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
                 Godot_Renderer_SyncVidSize(vp_w, vp_h);
                 Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
-                Godot_Client_RefreshUIDef();
+                Godot_Client_ResolutionChange();
             }
         }
     }
@@ -8008,7 +8425,7 @@ void MoHAARunner::_process(double delta) {
                     Godot_Renderer_SetDesktopResolution(sync_w, sync_h);
                     Godot_Renderer_SyncVidSize(sync_w, sync_h);
                     Godot_Client_SyncGlConfigVidSize(sync_w, sync_h);
-                    Godot_Client_RefreshUIDef();
+                    Godot_Client_ResolutionChange();
                 }
 
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +

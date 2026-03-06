@@ -313,6 +313,11 @@ private:
     float sound_fade_elapsed = 0.0f;
     float sound_fade_duration = 0.0f;
     bool sound_fading = false;
+    float sound_fade_factor = 1.0f;  // Current global fade multiplier (0..1)
+
+    // Reverb state
+    int current_reverb_type = -1;
+    int reverb_bus_idx = -1;
 
     // Entity mesh caching (Phase 37, improved Phase 60)
     // Track per-entity state hash to avoid rebuilding meshes each frame
@@ -445,10 +450,17 @@ private:
     std::vector<PlayerSlotInfo> player_slot_info;                    // Size = MAX_3D_PLAYERS
 
     AudioStreamPlayer *music_player = nullptr;                       // Background music player
+    String current_music_name;                                       // Currently playing music file
+    float music_target_volume = 1.0f;                                // Target music volume (0..1)
+    float music_fade_time = 0.0f;                                    // Music fade duration in seconds
+    float music_fade_elapsed = 0.0f;                                 // Current fade progress
+    float music_current_volume = 1.0f;                               // Current interpolated volume
 
     void setup_audio();                                              // Create audio player pools
     void update_audio(double delta);                                 // Process sound events + loops
+    void update_music(double delta);                                 // Process music state changes
     Ref<AudioStream> load_wav_from_vfs(int sfxHandle);                // Load WAV/MP3 via engine VFS
+    Ref<AudioStream> load_music_from_vfs(const char *name);           // Load music file via engine VFS
 
     // Cinematic display (Phase 11)
     CanvasLayer *cin_layer = nullptr;                                // Overlay for cinematic video

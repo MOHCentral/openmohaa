@@ -235,4 +235,15 @@ void Godot_Client_RefreshUIDef(void) {
     CL_FillUIDef();
 }
 
+/* Run the same UI resolution-update path used by OpenMoHAA after a
+ * video mode change. This rebuilds scaled widget geometry, menu frames,
+ * and HUD layout instead of only refreshing uid.vidWidth/vidHeight. */
+void Godot_Client_ResolutionChange(void) {
+    if (cls.uiStarted) {
+        UI_ResolutionChange();
+    } else {
+        CL_FillUIDef();
+    }
+}
+
 } /* extern "C" */

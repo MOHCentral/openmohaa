@@ -654,7 +654,13 @@ void S_Update(void)
 {
 }
 
-void S_SetGlobalAmbientVolumeLevel(float volume) {}
+static float gr_ambient_volume = 1.0f;
+
+void S_SetGlobalAmbientVolumeLevel(float volume) {
+    gr_ambient_volume = volume;
+}
+
+float Godot_Sound_GetAmbientVolume(void) { return gr_ambient_volume; }
 
 void S_SetReverb(int reverb_type, float reverb_level)
 {
@@ -698,7 +704,14 @@ void S_SoundList(void) {}
  *  Clear / misc
  * ================================================================ */
 
-void S_ClearSoundBuffer(void) {}
+static int gr_sound_clear_requested = 0;
+
+void S_ClearSoundBuffer(void) {
+    gr_sound_clear_requested = 1;
+}
+
+int  Godot_Sound_GetClearRequested(void) { return gr_sound_clear_requested; }
+void Godot_Sound_ClearClearRequest(void) { gr_sound_clear_requested = 0; }
 void S_DisableSounds(void) {}
 
 /* ===================================================================

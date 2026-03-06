@@ -79,7 +79,11 @@ typedef enum MohaaStageRgbGen {
     STAGE_RGBGEN_ONE_MINUS_ENTITY,
     STAGE_RGBGEN_LIGHTING_DIFFUSE,
     STAGE_RGBGEN_CONST,
-    STAGE_RGBGEN_GLOBAL_COLOR,  /* CGEN_GLOBAL_COLOR: modulate texture by SetColor() */
+    STAGE_RGBGEN_GLOBAL_COLOR,      /* CGEN_GLOBAL_COLOR: modulate texture by SetColor() */
+    STAGE_RGBGEN_SCOORD,            /* CGEN_SCOORD: use S texture coordinate as RGB */
+    STAGE_RGBGEN_TCOORD,            /* CGEN_TCOORD: use T texture coordinate as RGB */
+    STAGE_RGBGEN_DOT,               /* CGEN_DOT: dot(normal, view)² */
+    STAGE_RGBGEN_ONE_MINUS_DOT,     /* CGEN_ONE_MINUS_DOT: 1 - dot(normal, view)² */
 } MohaaStageRgbGen;
 
 /* Per-stage alphaGen type */
@@ -91,7 +95,21 @@ typedef enum MohaaStageAlphaGen {
     STAGE_ALPHAGEN_ONE_MINUS_ENTITY,
     STAGE_ALPHAGEN_PORTAL,
     STAGE_ALPHAGEN_CONST,
-    STAGE_ALPHAGEN_GLOBAL_ALPHA,  /* AGEN_GLOBAL_ALPHA: use alpha from SetColor() */
+    STAGE_ALPHAGEN_GLOBAL_ALPHA,            /* AGEN_GLOBAL_ALPHA: use alpha from SetColor() */
+    STAGE_ALPHAGEN_DOT,                     /* AGEN_DOT: dot(normal, view)² scaled by [alphaMin, alphaMax] */
+    STAGE_ALPHAGEN_ONE_MINUS_DOT,           /* AGEN_ONE_MINUS_DOT: 1 - dot(normal, view)² */
+    STAGE_ALPHAGEN_DOT_VIEW,                /* AGEN_DOT_VIEW: abs(dot(viewForward, normal)) */
+    STAGE_ALPHAGEN_ONE_MINUS_DOT_VIEW,      /* AGEN_ONE_MINUS_DOT_VIEW */
+    STAGE_ALPHAGEN_DIST_FADE,               /* AGEN_DIST_FADE: distance fade [near, range] */
+    STAGE_ALPHAGEN_ONE_MINUS_DIST_FADE,     /* AGEN_ONE_MINUS_DIST_FADE */
+    STAGE_ALPHAGEN_TIKI_DIST_FADE,          /* AGEN_TIKI_DIST_FADE: TIKI distance fade */
+    STAGE_ALPHAGEN_ONE_MINUS_TIKI_DIST_FADE,/* AGEN_ONE_MINUS_TIKI_DIST_FADE */
+    STAGE_ALPHAGEN_HEIGHT_FADE,             /* AGEN_HEIGHT_FADE: vertical Z height fade */
+    STAGE_ALPHAGEN_SKYALPHA,                /* AGEN_SKYALPHA: sky atmosphere alpha */
+    STAGE_ALPHAGEN_ONE_MINUS_SKYALPHA,      /* AGEN_ONE_MINUS_SKYALPHA */
+    STAGE_ALPHAGEN_SCOORD,                  /* AGEN_SCOORD: S texture coordinate as alpha */
+    STAGE_ALPHAGEN_TCOORD,                  /* AGEN_TCOORD: T texture coordinate as alpha */
+    STAGE_ALPHAGEN_LIGHTING_SPECULAR,       /* AGEN_LIGHTING_SPECULAR: specular highlight */
 } MohaaStageAlphaGen;
 
 /* Per-stage tcGen type */
@@ -183,6 +201,11 @@ typedef struct MohaaShaderStage {
     bool depthWriteExplicit;         /* true if depthwrite/nodepthwrite was specified */
     bool depthWriteEnabled;          /* true = force depth write; false = disable depth write */
     bool noDepthTest;                /* true = disable depth testing (noDepthTest) */
+
+    /* Phase 39: alphaMin/alphaMax — used by DOT, DOT_VIEW, DIST_FADE, HEIGHT_FADE alphaGen types */
+    float alphaMin;                  /* lower bound / near distance */
+    float alphaMax;                  /* upper bound / range */
+    float specOrigin[3];             /* for AGEN_LIGHTING_SPECULAR */
 } MohaaShaderStage;
 
 /* ── Per-shader properties ── */

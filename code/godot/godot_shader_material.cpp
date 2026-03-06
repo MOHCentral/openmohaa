@@ -145,6 +145,28 @@ static bool needs_entity_color(const GodotShaderProps *props) {
     return false;
 }
 
+/* Returns true if any stage uses global colour (SetColor() state) */
+static bool needs_global_color(const GodotShaderProps *props) {
+    for (int i = 0; i < props->stage_count; i++) {
+        const MohaaShaderStage *s = &props->stages[i];
+        if (!s->active) continue;
+        if (s->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR) return true;
+        if (s->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA) return true;
+    }
+    return false;
+}
+
+/* Returns true if any stage uses sky alpha */
+static bool needs_sky_alpha(const GodotShaderProps *props) {
+    for (int i = 0; i < props->stage_count; i++) {
+        const MohaaShaderStage *s = &props->stages[i];
+        if (!s->active) continue;
+        if (s->alphaGen == STAGE_ALPHAGEN_SKYALPHA ||
+            s->alphaGen == STAGE_ALPHAGEN_ONE_MINUS_SKYALPHA) return true;
+    }
+    return false;
+}
+
 /* Returns true if any stage uses lighting diffuse (needs lit shading) */
 static bool needs_diffuse_lighting(const GodotShaderProps *props) {
     for (int i = 0; i < props->stage_count; i++) {
@@ -482,6 +504,26 @@ static std::string gen_rgbgen_code(int stage_idx, const MohaaShaderStage *s) {
             code += "    s" + si + ".rgb *= vec3(" + ftos(s->rgbConst[0]) + ", " +
                     ftos(s->rgbConst[1]) + ", " + ftos(s->rgbConst[2]) + ");\n";
             break;
+        case STAGE_RGBGEN_GLOBAL_COLOR:
+            /* Global colour from SetColor() — exposed as uniform for runtime use */
+            code += "    s" + si + ".rgb *= global_color.rgb;\n";
+            break;
+        case STAGE_RGBGEN_SCOORD:
+            /* Use S texture coordinate as RGB */
+            code += "    s" + si + ".rgb *= vec3(UV.x);\n";
+            break;
+        case STAGE_RGBGEN_TCOORD:
+            /* Use T texture coordinate as RGB */
+            code += "    s" + si + ".rgb *= vec3(UV.y);\n";
+            break;
+        case STAGE_RGBGEN_DOT:
+            /* dot(normal, view)² — Fresnel-like effect */
+            code += "    s" + si + ".rgb *= vec3(pow(max(dot(NORMAL, VIEW), 0.0), 2.0));\n";
+            break;
+        case STAGE_RGBGEN_ONE_MINUS_DOT:
+            /* 1 - dot(normal, view)² — inverse Fresnel */
+            code += "    s" + si + ".rgb *= vec3(1.0 - pow(max(dot(NORMAL, VIEW), 0.0), 2.0));\n";
+            break;
     }
 
     return code;
@@ -517,6 +559,91 @@ static std::string gen_alphagen_code(int stage_idx, const MohaaShaderStage *s) {
         case STAGE_ALPHAGEN_CONST:
             code += "    s" + si + ".a *= " + ftos(s->alphaConst) + ";\n";
             break;
+        case STAGE_ALPHAGEN_GLOBAL_ALPHA:
+            /* Global alpha from SetColor() — exposed as uniform for runtime use */
+            code += "    s" + si + ".a *= global_color.a;\n";
+            break;
+        case STAGE_ALPHAGEN_DOT: {
+            /* dot(normal, view)² scaled by [alphaMin, alphaMax] */
+            std::string amin = ftos(s->alphaMin);
+            std::string amax = ftos(s->alphaMax);
+            code += "    { float _dot" + si + " = pow(max(dot(NORMAL, VIEW), 0.0), 2.0);\n";
+            code += "      s" + si + ".a *= clamp((" + amax + " - " + amin + ") * _dot" + si + " + " + amin + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_ONE_MINUS_DOT: {
+            /* 1 - dot(normal, view)² scaled by [alphaMin, alphaMax] */
+            std::string amin = ftos(s->alphaMin);
+            std::string amax = ftos(s->alphaMax);
+            code += "    { float _dot" + si + " = 1.0 - pow(max(dot(NORMAL, VIEW), 0.0), 2.0);\n";
+            code += "      s" + si + ".a *= clamp((" + amax + " - " + amin + ") * _dot" + si + " + " + amin + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_DOT_VIEW: {
+            /* abs(dot(viewForward, normal)) scaled by [alphaMin, alphaMax]
+             * viewForward = INV_VIEW_MATRIX[2].xyz in Godot */
+            std::string amin = ftos(s->alphaMin);
+            std::string amax = ftos(s->alphaMax);
+            code += "    { float _dotv" + si + " = abs(dot(normalize(VIEW), NORMAL));\n";
+            code += "      s" + si + ".a *= clamp((" + amax + " - " + amin + ") * _dotv" + si + " + " + amin + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_ONE_MINUS_DOT_VIEW: {
+            std::string amin = ftos(s->alphaMin);
+            std::string amax = ftos(s->alphaMax);
+            code += "    { float _dotv" + si + " = 1.0 - abs(dot(normalize(VIEW), NORMAL));\n";
+            code += "      s" + si + ".a *= clamp((" + amax + " - " + amin + ") * _dotv" + si + " + " + amin + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_DIST_FADE:
+        case STAGE_ALPHAGEN_TIKI_DIST_FADE: {
+            /* Distance fade: alpha = clamp((dist - near) / range, 0, 1)
+             * alphaMin = near distance, alphaMax = range */
+            std::string near_d = ftos(s->alphaMin);
+            std::string range = ftos(s->alphaMax > 0.0f ? s->alphaMax : 1.0f);
+            code += "    { float _ddist" + si + " = length(VERTEX);\n";
+            code += "      s" + si + ".a *= clamp((_ddist" + si + " - " + near_d + ") / " + range + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_ONE_MINUS_DIST_FADE:
+        case STAGE_ALPHAGEN_ONE_MINUS_TIKI_DIST_FADE: {
+            std::string near_d = ftos(s->alphaMin);
+            std::string range = ftos(s->alphaMax > 0.0f ? s->alphaMax : 1.0f);
+            code += "    { float _ddist" + si + " = length(VERTEX);\n";
+            code += "      s" + si + ".a *= 1.0 - clamp((_ddist" + si + " - " + near_d + ") / " + range + ", 0.0, 1.0); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_HEIGHT_FADE: {
+            /* Height-based fade using Z distance: alpha = 1 - (dist - min) / (max - min)
+             * In Godot view space, VERTEX.y is the vertical component */
+            std::string amin = ftos(s->alphaMin);
+            std::string amax = ftos(s->alphaMax > s->alphaMin ? s->alphaMax : s->alphaMin + 1.0f);
+            code += "    { float _hdist" + si + " = abs((INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).y * 39.37 - " +
+                    "(INV_VIEW_MATRIX * vec4(0.0, 0.0, 0.0, 1.0)).y * 39.37);\n";
+            code += "      _hdist" + si + " = clamp(_hdist" + si + ", " + amin + ", " + amax + ");\n";
+            code += "      s" + si + ".a *= 1.0 - (_hdist" + si + " - " + amin + ") / (" + amax + " - " + amin + "); }\n";
+            break;
+        }
+        case STAGE_ALPHAGEN_SKYALPHA:
+            code += "    s" + si + ".a *= sky_alpha;\n";
+            break;
+        case STAGE_ALPHAGEN_ONE_MINUS_SKYALPHA:
+            code += "    s" + si + ".a *= (1.0 - sky_alpha);\n";
+            break;
+        case STAGE_ALPHAGEN_SCOORD:
+            code += "    s" + si + ".a *= UV.x;\n";
+            break;
+        case STAGE_ALPHAGEN_TCOORD:
+            code += "    s" + si + ".a *= UV.y;\n";
+            break;
+        case STAGE_ALPHAGEN_LIGHTING_SPECULAR: {
+            /* Specular: (reflect(-lightDir, normal) . view)⁴
+             * Use a simple approximation with the camera direction */
+            code += "    { vec3 _refl" + si + " = reflect(-normalize(VIEW), NORMAL);\n";
+            code += "      float _spec" + si + " = pow(max(dot(_refl" + si + ", normalize(VIEW)), 0.0), 4.0);\n";
+            code += "      s" + si + ".a *= _spec" + si + "; }\n";
+            break;
+        }
     }
 
     return code;
@@ -716,6 +843,12 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
 
     if (needs_entity_color(props))
         code += "uniform vec4 entity_color = vec4(1.0, 1.0, 1.0, 1.0);\n";
+
+    if (needs_global_color(props))
+        code += "uniform vec4 global_color = vec4(1.0, 1.0, 1.0, 1.0);\n";
+
+    if (needs_sky_alpha(props))
+        code += "uniform float sky_alpha = 1.0;\n";
 
     /* Shadow reception uniform.  Default 0.0 = same result as render_mode unshaded.
      * Set to 0.5 from MoHAARunner when r_shadows >= 1 to darken BSP floors in shadow. */

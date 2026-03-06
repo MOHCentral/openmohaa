@@ -19,6 +19,10 @@
 #define DEFORM_MOVE        2
 #define DEFORM_AUTOSPRITE  3
 #define DEFORM_AUTOSPRITE2 4
+#define DEFORM_NORMALS     5
+#define DEFORM_LIGHTGLOW   6
+#define DEFORM_FLAP_S      7
+#define DEFORM_FLAP_T      8
 
 #ifdef __cplusplus
 

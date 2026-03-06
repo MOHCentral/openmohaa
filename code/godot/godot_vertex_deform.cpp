@@ -150,6 +150,73 @@ static String generate_autosprite2_vertex() {
 }
 
 /* ===================================================================
+ *  Normals deform — perturb normals using a noise function.
+ *
+ *  deformVertexes normals <div> <base> <amp> <phase> <freq>
+ *
+ *  Perturbs the vertex normals using a simple time-based noise.
+ *  Used for surfaces like water that need animated lighting variation.
+ * ================================================================ */
+
+static String generate_normals_vertex(float base, float amplitude,
+                                      float frequency, float phase) {
+    String code;
+    code += "    // deformVertexes normals — perturb normals with noise\n";
+    code += "    float _nt = TIME * " + String::num(frequency, 6) + " + " +
+            String::num(phase, 6) + ";\n";
+    code += "    float _na = " + String::num(amplitude, 6) + " * 0.01;\n";
+    code += "    NORMAL.x += _na * sin(_nt * 1.5 + VERTEX.x * 0.1);\n";
+    code += "    NORMAL.y += _na * sin(_nt * 2.3 + VERTEX.y * 0.1);\n";
+    code += "    NORMAL.z += _na * sin(_nt * 3.7 + VERTEX.z * 0.1);\n";
+    code += "    NORMAL = normalize(NORMAL);\n";
+    return code;
+}
+
+/* ===================================================================
+ *  Lightglow deform — MOHAA light glow effect.
+ *
+ *  deformVertexes lightglow
+ *
+ *  Scales vertices toward/away from origin based on the dynamic light
+ *  state.  Without runtime light data, approximate as a gentle pulse.
+ * ================================================================ */
+
+static String generate_lightglow_vertex() {
+    String code;
+    code += "    // deformVertexes lightglow — gentle pulse approximation\n";
+    code += "    float _glow = 1.0 + 0.1 * sin(TIME * 3.0);\n";
+    code += "    VERTEX *= _glow;\n";
+    return code;
+}
+
+/* ===================================================================
+ *  Flap deform — MOHAA flap along S or T texture axis.
+ *
+ *  deformVertexes flap s|t <spread> <waveform> <base> <amp> <phase> <freq>
+ *
+ *  Displaces vertices along their normal based on their S or T texture
+ *  coordinate position, creating a flag/cloth flapping effect.
+ * ================================================================ */
+
+static String generate_flap_vertex(bool use_t_axis, float spread, float base,
+                                   float amplitude, float frequency, float phase) {
+    String code;
+    String axis = use_t_axis ? "UV.y" : "UV.x";
+    code += "    // deformVertexes flap " + String(use_t_axis ? "t" : "s") + "\n";
+    if (spread > 0.001f) {
+        code += "    float _flap_off = " + axis + " / " + String::num(spread, 6) + ";\n";
+    } else {
+        code += "    float _flap_off = " + axis + ";\n";
+    }
+    code += "    float _flap_t = TIME * " + String::num(frequency, 6) +
+            " + " + String::num(phase, 6) + " + _flap_off;\n";
+    code += "    float _flap = (" + String::num(base, 6) +
+            " + " + String::num(amplitude, 6) + " * sin(_flap_t * 6.283185)) / 39.37;\n";
+    code += "    VERTEX += NORMAL * _flap;\n";
+    return code;
+}
+
+/* ===================================================================
  *  Public API implementations
  * ================================================================ */
 
@@ -169,6 +236,14 @@ String Godot_Deform_GenerateVertexShader(
             return generate_autosprite_vertex();
         case DEFORM_AUTOSPRITE2:
             return generate_autosprite2_vertex();
+        case DEFORM_NORMALS:
+            return generate_normals_vertex(base, amplitude, frequency, phase);
+        case DEFORM_LIGHTGLOW:
+            return generate_lightglow_vertex();
+        case DEFORM_FLAP_S:
+            return generate_flap_vertex(false, div, base, amplitude, frequency, phase);
+        case DEFORM_FLAP_T:
+            return generate_flap_vertex(true, div, base, amplitude, frequency, phase);
         default:
             return String();
     }

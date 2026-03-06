@@ -66,6 +66,7 @@ void  Godot_RI_GetFrameInternal(void *tiki, int entityNumber, void *newFrame);
 int   Godot_RI_GetNumChannels(void *tiki);
 int   Godot_RI_GetLocalChannel(void *tiki, int globalChannel);
 int   Godot_RI_GetSkelAnimFrame(void *tiki, void *bonesOut, float *radiusOut);
+int   Godot_RI_GetMorphWeightFrame(void *skeletor, int index, float time, int *data);
 
 void  Com_DPrintf(const char *fmt, ...);
 
@@ -433,7 +434,9 @@ void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
                                const int *bone_tag,
                                const float *bone_quat,
                                float actionWeight,
-                               int *outBoneCount)
+                               int *outBoneCount,
+                               int **outMorphCache,
+                               int *outMorphCount)
 {
     if (!tikiPtr || !frameInfo) {
         Com_DPrintf("[GodotSkel] PrepareBones: NULL tikiPtr=%p frameInfo=%p entNum=%d\n",
@@ -501,6 +504,27 @@ void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
 
     free(newFrame);
     if (outBoneCount) *outBoneCount = numChannels;
+
+    /* 5. Compute morph weights if caller wants them */
+    if (outMorphCache) *outMorphCache = NULL;
+    if (outMorphCount) *outMorphCount = 0;
+
+    if (outMorphCache && outMorphCount) {
+        /* Allocate a temporary buffer large enough for morph targets.
+         * MAX_SKELMORPH (12800) is the engine's upper bound. */
+        int morphBuf[12800];
+        int added = Godot_RI_GetMorphWeightFrame(
+            skeletor, frameInfo[0].index, frameInfo[0].time, morphBuf);
+        if (added > 0) {
+            int *mc = (int *)malloc(added * sizeof(int));
+            if (mc) {
+                memcpy(mc, morphBuf, added * sizeof(int));
+                *outMorphCache = mc;
+                *outMorphCount = added;
+            }
+        }
+    }
+
     return bones;
 }
 
@@ -522,7 +546,8 @@ void *Godot_Skel_PrepareBones(void *tikiPtr, int entityNumber,
 int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
                              const void *boneCachePtr, int boneCount,
                              float *outPositions, float *outNormals,
-                             int maxVerts)
+                             int maxVerts,
+                             const int *morphCache, int morphCount)
 {
     dtiki_t *tiki = (dtiki_t *)tikiPtr;
     if (!tiki || meshIndex < 0 || meshIndex >= tiki->numMeshes)
@@ -543,15 +568,37 @@ int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
     }
     skeletorVertex_t *vert = surf->pVerts;
 
+    int hasMorph = (morphCache && morphCount > 0);
+
     for (int v = 0; v < numVerts; v++) {
         vec3_t pos = {0, 0, 0};
+        vec3_t totalmorph = {0, 0, 0};
 
         /* Skip past vertex header + morphs to reach weights */
         skelWeight_t *weight = (skelWeight_t *)((byte *)vert
             + sizeof(skeletorVertex_t)
             + sizeof(skeletorMorph_t) * vert->numMorphs);
+        skeletorMorph_t *morph = (skeletorMorph_t *)((byte *)vert
+            + sizeof(skeletorVertex_t));
 
-        /* Resolve bone index for the normal (uses first weight's bone) */
+        /* Accumulate morph offsets if morphs are active */
+        if (hasMorph && vert->numMorphs > 0) {
+            for (int m = 0; m < vert->numMorphs; m++) {
+                if (morph[m].morphIndex >= 0 && morph[m].morphIndex < morphCount) {
+                    int w = morphCache[morph[m].morphIndex];
+                    if (w) {
+                        totalmorph[0] += (float)w * morph[m].offset[0];
+                        totalmorph[1] += (float)w * morph[m].offset[1];
+                        totalmorph[2] += (float)w * morph[m].offset[2];
+                    }
+                }
+            }
+        }
+
+        /* Resolve bone index for the normal (uses first weight's bone).
+         * Note: the engine's morph-case `morph->morphIndex` after the loop
+         * aliases `weight->boneIndex` (same memory), so both paths are
+         * identical — always use the first weight's boneIndex. */
         int normalBoneIdx;
         if (meshIndex > 0) {
             int ch = skelmodel->pBones[weight->boneIndex].channel;
@@ -581,7 +628,7 @@ int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
             outNormals[v*3+2] = vert->normal[2];
         }
 
-        /* Accumulate weighted bone transforms (SkelWeightGetXyz) */
+        /* Accumulate weighted bone transforms */
         for (int w = 0; w < vert->numWeights; w++) {
             int boneIdx;
             if (meshIndex > 0) {
@@ -593,18 +640,43 @@ int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
 
             if (boneIdx >= 0 && boneIdx < boneCount) {
                 const skelBoneCache_t *bone = &bones[boneIdx];
-                pos[0] += ((weight->offset[0] * bone->matrix[0][0]
-                          + weight->offset[1] * bone->matrix[1][0]
-                          + weight->offset[2] * bone->matrix[2][0])
-                          + bone->offset[0]) * weight->boneWeight;
-                pos[1] += ((weight->offset[0] * bone->matrix[0][1]
-                          + weight->offset[1] * bone->matrix[1][1]
-                          + weight->offset[2] * bone->matrix[2][1])
-                          + bone->offset[1]) * weight->boneWeight;
-                pos[2] += ((weight->offset[0] * bone->matrix[0][2]
-                          + weight->offset[1] * bone->matrix[1][2]
-                          + weight->offset[2] * bone->matrix[2][2])
-                          + bone->offset[2]) * weight->boneWeight;
+
+                /* For the first weight with active morphs, use
+                 * SkelWeightMorphGetXyz pattern: add totalmorph to
+                 * weight->offset before bone transform. */
+                if (w == 0 && hasMorph && vert->numMorphs > 0
+                    && (totalmorph[0] != 0.0f || totalmorph[1] != 0.0f
+                        || totalmorph[2] != 0.0f))
+                {
+                    float px = totalmorph[0] + weight->offset[0];
+                    float py = totalmorph[1] + weight->offset[1];
+                    float pz = totalmorph[2] + weight->offset[2];
+                    pos[0] += ((px * bone->matrix[0][0]
+                              + py * bone->matrix[1][0]
+                              + pz * bone->matrix[2][0])
+                              + bone->offset[0]) * weight->boneWeight;
+                    pos[1] += ((px * bone->matrix[0][1]
+                              + py * bone->matrix[1][1]
+                              + pz * bone->matrix[2][1])
+                              + bone->offset[1]) * weight->boneWeight;
+                    pos[2] += ((px * bone->matrix[0][2]
+                              + py * bone->matrix[1][2]
+                              + pz * bone->matrix[2][2])
+                              + bone->offset[2]) * weight->boneWeight;
+                } else {
+                    pos[0] += ((weight->offset[0] * bone->matrix[0][0]
+                              + weight->offset[1] * bone->matrix[1][0]
+                              + weight->offset[2] * bone->matrix[2][0])
+                              + bone->offset[0]) * weight->boneWeight;
+                    pos[1] += ((weight->offset[0] * bone->matrix[0][1]
+                              + weight->offset[1] * bone->matrix[1][1]
+                              + weight->offset[2] * bone->matrix[2][1])
+                              + bone->offset[1]) * weight->boneWeight;
+                    pos[2] += ((weight->offset[0] * bone->matrix[0][2]
+                              + weight->offset[1] * bone->matrix[1][2]
+                              + weight->offset[2] * bone->matrix[2][2])
+                              + bone->offset[2]) * weight->boneWeight;
+                }
             }
 
             weight++;

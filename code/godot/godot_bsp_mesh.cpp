@@ -48,6 +48,7 @@
 #include <cmath>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <set>
 #include <string>
 
@@ -807,31 +808,19 @@ static Ref<ArrayMesh> batches_to_array_mesh(
             }
         }
 
-        /* Check whether the shader definition includes a lightmap stage.
-         * MOHAA terrain (and some surfaces) rely on the engine's rendering
-         * code to apply lightmap modulation via TMU1, so their .shader
-         * definitions don't include $lightmap or nextBundle $lightmap.
-         * If the batch has a valid lightmap but the shader doesn't reference
-         * one, skip the ShaderMaterial path and fall through to the
-         * StandardMaterial3D fallback which handles lightmaps via the
-         * detail texture mechanism. */
-        bool shader_has_lm = false;
-        if (sp) {
-            for (int si = 0; si < sp->stage_count; si++) {
-                if (sp->stages[si].isLightmap || sp->stages[si].hasNextBundleLightmap) {
-                    shader_has_lm = true;
-                    break;
-                }
-            }
-        }
-        bool batch_has_lm = !batch.nolightmap &&
-                            batch.lightmap_num >= 0 &&
-                            batch.lightmap_num < (int)s_lightmaps.size() &&
-                            s_lightmaps[batch.lightmap_num].is_valid();
-        bool skip_shader_for_lm = (sp && sp->stage_count > 0 &&
-                                   batch_has_lm && !shader_has_lm);
+        /* Engine parity: if the shader definition has explicit stages,
+         * those stages are authoritative.  The real renderer (R_FindShader)
+         * only creates implicit lightmap stages for shaders WITHOUT a text
+         * definition.  Parsed shaders that don't reference $lightmap or
+         * nextBundle $lightmap are intentionally non-lightmapped (water,
+         * effects, etc.).  Always use the ShaderMaterial path for shaders
+         * with parsed stages — the lightmap is only applied when the stages
+         * explicitly include $lightmap.  Previously this code skipped
+         * ShaderMaterial when the batch had a lightmap but the shader
+         * didn't reference one, forcing StandardMaterial3D with per-face
+         * lightmaps onto water surfaces, causing visible tile seams. */
 
-        if (sp && sp->stage_count > 0 && !skip_shader_for_lm && !batch.force_opaque) {
+        if (sp && sp->stage_count > 0 && !batch.force_opaque) {
             /* ── ShaderMaterial path (multi-stage .shader) ── */
             Ref<ShaderMaterial> smat = Godot_Shader_BuildMaterial(sp);
             if (smat.is_valid()) {
@@ -1053,10 +1042,15 @@ static Ref<ArrayMesh> batches_to_array_mesh(
             }
 
             if (batch.nolightmap) {
-                mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
                 /* Nolightmap surfaces are fullbright (sky, lava, special FX).
-                 * Revert to UNSHADED so they don't receive dynamic shadows
-                 * or respond to the directional light. */
+                 * Only use vertex colours as albedo source when no texture was
+                 * loaded — otherwise the texture is multiplied by per-vertex
+                 * BSP lighting data that varies between faces, causing visible
+                 * seams between tiles.  The real renderer uses rgbGen identity
+                 * for most nolightmap surfaces (no vertex colour modulation). */
+                if (!has_texture) {
+                    mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+                }
                 mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
             }
 
@@ -1107,7 +1101,8 @@ static bool process_surface(const bsp_surface_t *surf, int surf_idx,
                              const int32_t *indices, int num_indices,
                              const bsp_shader_t *shaders, int num_shaders,
                              std::unordered_map<int64_t, ShaderBatch> &batches,
-                             int &skipped_nodraw)
+                             int &skipped_nodraw,
+                             const std::unordered_set<int> *shader_no_lm_batch = nullptr)
 {
     // Skip unsupported surface types
     if (surf->surfaceType != MST_PLANAR &&
@@ -1140,7 +1135,15 @@ static bool process_surface(const bsp_surface_t *surf, int surf_idx,
     // Get or create batch — keyed by (shaderNum, lightmapNum) so that
     // surfaces sharing the same shader but referencing different lightmap
     // tiles get separate materials with the correct lightmap bound.
-    int64_t bkey = make_batch_key(surf->shaderNum, surf->lightmapNum);
+    // For shaders that don't use lightmaps (water, effects), use -1 to
+    // merge all faces into one batch — matches engine behaviour where
+    // parsed shaders without $lightmap stages ignore lightmap data.
+    int lm_for_key = surf->lightmapNum;
+    if (shader_no_lm_batch && surf->shaderNum >= 0 &&
+        shader_no_lm_batch->count(surf->shaderNum)) {
+        lm_for_key = -1;
+    }
+    int64_t bkey = make_batch_key(surf->shaderNum, lm_for_key);
     ShaderBatch &batch = batches[bkey];
     if (!batch.shader_name && surf->shaderNum >= 0 && surf->shaderNum < num_shaders) {
         batch.shader_name = shaders[surf->shaderNum].shader;
@@ -1379,6 +1382,43 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
     // Cluster -1 is the "always visible" fallback group.
     std::unordered_map<int, std::unordered_map<int64_t, ShaderBatch>> cluster_batches;
 
+    // Pre-compute BSP shader indices whose stages don't reference $lightmap.
+    // These shaders (water, effects, etc.) should batch by shader only,
+    // ignoring per-face lightmapNum — mirrors the engine where parsed shaders
+    // without $lightmap stages render identically regardless of lightmapIndex.
+    std::unordered_set<int> shader_no_lm_batch;
+    // Pre-compute BSP shader indices that are transparent (alpha blend,
+    // additive, etc.).  Transparent surfaces must only go into ONE cluster
+    // (cluster -1 = always visible) to prevent double-rendering when
+    // multiple PVS clusters are visible simultaneously.  The original
+    // engine uses per-surface visIndex to skip already-drawn surfaces;
+    // our pre-baked per-cluster meshes can't do that, so transparent
+    // surfaces that span multiple clusters would be drawn N times,
+    // visually compounding alpha and creating bright tile artefacts
+    // (the exact bug reported with water on mohdm4).
+    std::unordered_set<int> shader_is_transparent;
+    for (int si = 0; si < num_shaders; si++) {
+        if (shaders[si].surfaceFlags & SURF_NOLIGHTMAP) {
+            shader_no_lm_batch.insert(si);
+        }
+        const GodotShaderProps *sp = Godot_ShaderProps_Find(shaders[si].shader);
+        if (sp && sp->stage_count > 0) {
+            bool has_lm = false;
+            for (int st = 0; st < sp->stage_count; st++) {
+                if (sp->stages[st].isLightmap || sp->stages[st].hasNextBundleLightmap) {
+                    has_lm = true;
+                    break;
+                }
+            }
+            if (!has_lm) {
+                shader_no_lm_batch.insert(si);
+            }
+            if (sp->transparency != SHADER_OPAQUE) {
+                shader_is_transparent.insert(si);
+            }
+        }
+    }
+
     int skipped_nodraw = 0;
     int skipped_type   = 0;
     int skipped_bmodel = 0;
@@ -1448,7 +1488,29 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             if (process_surface(surf, s, verts, num_verts, indices, num_indices,
                                 shaders, num_shaders,
                                 cluster_batches[-1],
-                                skipped_nodraw)) {
+                                skipped_nodraw,
+                                &shader_no_lm_batch)) {
+                if (surf->surfaceType == MST_PATCH) processed_patches++;
+                processed++;
+            }
+            continue;
+        }
+
+        // Transparent surfaces (water, glass, effects) must only go into
+        // one cluster to avoid double-rendering through alpha compounding.
+        // Route them to the always-visible group (cluster -1).
+        // The original engine uses per-surface viewCount to draw each
+        // surface exactly once; our pre-baked per-cluster meshes can't
+        // deduplicate at runtime, so we prevent duplication at load time.
+        bool force_always_visible = (surf->shaderNum >= 0 &&
+            shader_is_transparent.count(surf->shaderNum));
+
+        if (force_always_visible) {
+            if (process_surface(surf, s, verts, num_verts, indices, num_indices,
+                                shaders, num_shaders,
+                                cluster_batches[-1],
+                                skipped_nodraw,
+                                &shader_no_lm_batch)) {
                 if (surf->surfaceType == MST_PATCH) processed_patches++;
                 processed++;
             }
@@ -1462,7 +1524,8 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             if (process_surface(surf, s, verts, num_verts, indices, num_indices,
                                 shaders, num_shaders,
                                 cluster_batches[batch_cluster],
-                                skipped_nodraw)) {
+                                skipped_nodraw,
+                                &shader_no_lm_batch)) {
                 processed_any = true;
             }
         }
