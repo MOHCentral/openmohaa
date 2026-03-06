@@ -262,6 +262,8 @@ extern "C" {
     int  Godot_Client_GetPlayerZoom(void);
     int  Godot_Client_GetMouseButtons(void);
     void Godot_Client_DumpInputState(void);
+    int  Godot_Client_GetPlayerHealth(void);
+    void Godot_Client_GetScreenBlend(float *r, float *g, float *b, float *a);
 
     // Save/load bridge — from godot_save_accessors.c
     void Godot_Save_QuickSave(void);
@@ -611,6 +613,19 @@ MoHAARunner::~MoHAARunner() {
 #endif
 #ifdef HAS_VFX_MODULE
     Godot_VFX_Shutdown();
+#endif
+#ifdef HAS_SCREEN_EFFECTS_MODULE
+    Godot_ScreenFX_Shutdown();
+#endif
+#ifdef HAS_WEAPON_EFFECTS_MODULE
+    Godot_WeaponEffects_Cleanup();
+#endif
+#ifdef HAS_IMPACT_EFFECTS_MODULE
+    Godot_Impact_Shutdown();
+#endif
+#ifdef HAS_EXPLOSION_EFFECTS_MODULE
+    Godot_Explosion_Shutdown();
+    Godot_CameraShake_Clear();
 #endif
 #ifdef HAS_MUSIC_MODULE
     Godot_Music_Shutdown();
@@ -1201,6 +1216,14 @@ void MoHAARunner::check_world_load() {
             s_sprite_tint_cache.clear();
             s_beam_tint_cache.clear();
             s_alpha_inv_tex_cache.clear();
+            sfx_cache.clear();                    // Free cached audio streams for previous map
+            // Free mirror SubViewports from previous map
+            for (auto &m : active_mirrors) {
+                if (m.viewport) {
+                    m.viewport->queue_free();
+                }
+            }
+            active_mirrors.clear();
 #ifdef HAS_MESH_CACHE_MODULE
             Godot_MeshCache::get().clear();
             Godot_MaterialCache::get().clear();
@@ -1223,6 +1246,14 @@ void MoHAARunner::check_world_load() {
             sky_cloud_scroll_t = 0.0f;
             sky_cloud_time = 0.0;
             Godot_VFX_Clear();  // Flush VFX caches — shader handles are invalidated by BeginRegistration
+#ifdef HAS_WEAPON_EFFECTS_MODULE
+            Godot_ShellCasing_Clear();
+#endif
+#ifdef HAS_EXPLOSION_EFFECTS_MODULE
+            Godot_Explosion_Clear();
+            Godot_CameraShake_Clear();
+#endif
+            prev_health = -1;  // Reset health tracking for screen effects
             UtilityFunctions::print("[MoHAA] BSP world unloaded.");
         }
         return;
@@ -6197,23 +6228,18 @@ void MoHAARunner::update_2d_overlay() {
 
                 // ── Apply shader stage rgbGen/alphaGen semantics to draw colour ──
                 //
-                // RE_RegisterShaderNoMip uses LIGHTMAP_NONE, so FinishShader
-                // does NOT set CGEN_GLOBAL_COLOR.  Stages keep their parsed
-                // rgbGen — typically IDENTITY_LIGHTING for shaders with no
-                // explicit rgbGen.  In the real renderer, IDENTITY_LIGHTING
-                // produces white vertex colour (texture appears as-is),
-                // regardless of the current SetColor.
+                // RE_RegisterShaderNoMip uses LIGHTMAP_2D, which makes FinishShader
+                // set CGEN_GLOBAL_COLOR.  Stages respect SetColor colour.
                 //
-                // Fonts are special: R_LoadFontShader overrides to
-                // CGEN_GLOBAL_COLOR (use SetColor).  Our accessor resolves
-                // with LIGHTMAP_NONE so fonts report IDENTITY_LIGHTING too.
-                // We detect fonts via path heuristic ("gfx/fonts/") and
-                // treat them as GLOBAL_COLOR.
+                // resolve_shader() in the accessor also uses LIGHTMAP_2D for UI
+                // shaders (path patterns: gfx/*, ui/*, loadingbar_*) to match
+                // RE_RegisterShaderNoMip parity.  Other shaders default to
+                // IDENTITY_LIGHTING (white texture, no SetColor).
                 //
                 // Summary:
-                //   IDENTITY / IDENTITY_LIGHTING (non-font) → white
-                //   GLOBAL_COLOR or font                    → SetColor
-                //   CONST                                   → explicit constant
+                //   IDENTITY / IDENTITY_LIGHTING (non-UI)        → white
+                //   GLOBAL_COLOR (LIGHTMAP_2D shaders)            → SetColor
+                //   CONST                                        → explicit constant
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
@@ -8060,6 +8086,18 @@ void MoHAARunner::_ready() {
 #ifdef HAS_VFX_MODULE
     Godot_VFX_Init(game_world);
 #endif
+#ifdef HAS_SCREEN_EFFECTS_MODULE
+    Godot_ScreenFX_Init(this);
+#endif
+#ifdef HAS_WEAPON_EFFECTS_MODULE
+    Godot_WeaponEffects_Init(game_world);
+#endif
+#ifdef HAS_IMPACT_EFFECTS_MODULE
+    Godot_Impact_Init(game_world);
+#endif
+#ifdef HAS_EXPLOSION_EFFECTS_MODULE
+    Godot_Explosion_Init(game_world);
+#endif
 #ifdef HAS_FRUSTUM_CULL_MODULE
     Godot_FrustumCull_Init();
 #endif
@@ -8540,6 +8578,32 @@ void MoHAARunner::_process(double delta) {
     // ── Update cinematic video display (Phase 11) ──
     update_cinematic();
 
+    // ── Screen effect triggers (Phase 6 — VFX integration) ──
+#ifdef HAS_SCREEN_EFFECTS_MODULE
+    {
+        // Damage flash: detect health decrease between frames
+        int cur_health = Godot_Client_GetPlayerHealth();
+        if (prev_health > 0 && cur_health > 0 && cur_health < prev_health) {
+            float damage = static_cast<float>(prev_health - cur_health);
+            // Scale intensity: 10 HP → 0.2, 50 HP → 1.0
+            float intensity = Math::clamp(damage / 50.0f, 0.1f, 1.0f);
+            Godot_ScreenFX_DamageFlash(intensity);
+        }
+        if (cur_health > 0) {
+            prev_health = cur_health;
+        }
+
+        // Screen blend from playerState_t — the engine computes this for
+        // underwater tint, pain flash, and other full-screen colour effects.
+        float br, bg, bb, ba;
+        Godot_Client_GetScreenBlend(&br, &bg, &bb, &ba);
+        // Underwater detection: blend is blue-green when submerged
+        // (blue > 0.1 and alpha > 0.05 with low red indicates underwater)
+        bool is_underwater = (ba > 0.05f && bb > 0.1f && br < 0.2f);
+        Godot_ScreenFX_UnderwaterTint(is_underwater);
+    }
+#endif
+
     // ── Module update hooks (defensive — only called if module exists) ──
 #ifdef HAS_MUSIC_MODULE
     Godot_Music_Update(delta);
@@ -8549,6 +8613,20 @@ void MoHAARunner::_process(double delta) {
 #endif
 #ifdef HAS_VFX_MODULE
     Godot_VFX_Update(delta);
+#endif
+#ifdef HAS_SCREEN_EFFECTS_MODULE
+    Godot_ScreenFX_Update(static_cast<float>(delta), camera);
+#endif
+#ifdef HAS_WEAPON_EFFECTS_MODULE
+    Godot_MuzzleFlash_Update(static_cast<float>(delta));
+    Godot_ShellCasing_Update(static_cast<float>(delta));
+#endif
+#ifdef HAS_IMPACT_EFFECTS_MODULE
+    Godot_Impact_Update(static_cast<float>(delta));
+#endif
+#ifdef HAS_EXPLOSION_EFFECTS_MODULE
+    Godot_Explosion_Update(static_cast<float>(delta));
+    Godot_CameraShake_Update(static_cast<float>(delta), camera);
 #endif
 #ifdef HAS_DEBUG_RENDER_MODULE
     Godot_DebugRender_Update(delta);
