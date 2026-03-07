@@ -201,6 +201,7 @@ private:
     Vector2 mouse_poll_prev_pos;
     std::array<bool, 10> mouse_poll_prev_buttons{};
     bool overlay_prev_frame = false;  // overlay state from end of last frame; used for pre-Com_Frame web mouse poll
+    int vid_restart_grace_frames = 0;  // skip viewport sync for N frames after vid_restart
     bool hud_visible = true;        // F9 toggles HUD overlay visibility
     bool debug_fog_off = false;     // F5 toggles fog off for debugging
     bool debug_notex = false;       // F8 toggles textures off for debugging
@@ -534,12 +535,6 @@ private:
 
     // Last applied r_fullscreen value (detects immediate console changes)
     int cached_r_fullscreen = -1;
-
-    // Grace period after vid_restart — skip pre-frame viewport sync for a
-    // few frames so Godot has time to process window_set_size.  Without this
-    // the pre-frame sync re-syncs glConfig back to the OLD viewport before
-    // Godot has applied the new window dimensions.
-    int vid_restart_grace_frames = 0;
 
 protected:
     static void _bind_methods();

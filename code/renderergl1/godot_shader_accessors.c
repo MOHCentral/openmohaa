@@ -887,6 +887,25 @@ static GodotShaderProps *shader_cache_insert(const char *name, int lightmapIndex
     return &e->props;
 }
 
+static void shader_cache_remove(const char *name, int lightmapIndex) {
+    unsigned int h = shader_cache_hash(name, lightmapIndex);
+    shader_cache_entry_t *prev = NULL;
+    shader_cache_entry_t *e = s_shaderCache[h];
+    while (e) {
+        if (e->lightmapIndex == lightmapIndex && !Q_stricmp(e->name, name)) {
+            if (prev)
+                prev->next = e->next;
+            else
+                s_shaderCache[h] = e->next;
+            /* Pool-allocated — just unlink, don't free. */
+            s_shaderCacheCount--;
+            return;
+        }
+        prev = e;
+        e = e->next;
+    }
+}
+
 /* ===================================================================
  *  Resolve a shader name → shader_t, with on-demand R_FindShader()
  * ================================================================ */
@@ -919,6 +938,70 @@ static shader_t *resolve_shader_lm(const char *name, int lightmapIndex) {
     }
 
     return NULL;
+}
+
+/* ===================================================================
+ *  Font shader override — replicate R_LoadFontShader's post-load fixup
+ *
+ *  The real renderer's R_LoadFontShader (tr_font.cpp) overrides ALL
+ *  font shader stages to CGEN_GLOBAL_COLOR + AGEN_GLOBAL_ALPHA after
+ *  loading.  This ensures SetColor colours are applied to font glyphs.
+ *  Our stub renderer must replicate this for every font it loads.
+ * ================================================================ */
+
+void Godot_ShaderAccessor_OverrideFontShader(const char *shader_name) {
+    shader_t *sh;
+    char lname[MAX_QPATH];
+    int i;
+
+    if (!shader_name || !shader_name[0])
+        return;
+
+    /* Override ALL lightmapIndex variants of this shader.
+     *
+     * GR_RegisterShaderNoMip only creates a LIGHTMAP_NONE shader_t
+     * (via Godot_ShaderProps_Find), but Find_ByHandle resolves nomip
+     * shaders via LIGHTMAP_2D.  resolve_shader_lm rejects a shader_t
+     * whose lightmapIndex doesn't match and falls through to
+     * R_FindShader(name, LIGHTMAP_2D, ...) which creates a FRESH
+     * shader_t without our override.
+     *
+     * Fix: override the existing LIGHTMAP_NONE variant AND explicitly
+     * create+override the LIGHTMAP_2D variant that Find_ByHandle will
+     * eventually resolve. */
+
+    /* 1. Override the existing variant (usually LIGHTMAP_NONE) */
+    sh = R_FindShaderByName(shader_name);
+    if (sh && sh != tr.defaultShader && !sh->defaultShader) {
+        for (i = 0; i < sh->numUnfoggedPasses; i++) {
+            if (sh->unfoggedStages[i] && sh->unfoggedStages[i]->active) {
+                sh->unfoggedStages[i]->rgbGen = CGEN_GLOBAL_COLOR;
+                sh->unfoggedStages[i]->alphaGen = AGEN_GLOBAL_ALPHA;
+            }
+        }
+    }
+
+    /* 2. Create/find the LIGHTMAP_2D variant and override it.
+     * R_FindShader has an internal (name, lightmapIndex) hash cache
+     * so this is cheap if the variant already exists. */
+    sh = R_FindShader(shader_name, LIGHTMAP_2D, qtrue, qtrue, qtrue, qtrue);
+    if (sh && sh != tr.defaultShader && !sh->defaultShader) {
+        for (i = 0; i < sh->numUnfoggedPasses; i++) {
+            if (sh->unfoggedStages[i] && sh->unfoggedStages[i]->active) {
+                sh->unfoggedStages[i]->rgbGen = CGEN_GLOBAL_COLOR;
+                sh->unfoggedStages[i]->alphaGen = AGEN_GLOBAL_ALPHA;
+            }
+        }
+    }
+
+    /* Invalidate cached GodotShaderProps so subsequent lookups
+     * re-convert from the modified shader_t data. */
+    Q_strncpyz(lname, shader_name, sizeof(lname));
+    for (char *p = lname; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') *p += 'a' - 'A';
+    }
+    shader_cache_remove(lname, LIGHTMAP_NONE);
+    shader_cache_remove(lname, LIGHTMAP_2D);
 }
 
 /* ===================================================================
@@ -1020,6 +1103,7 @@ extern int Godot_Renderer_IsShaderNoMip(int handle);
 const GodotShaderProps *Godot_ShaderProps_Find_ByHandle(int shader_handle) {
     const char *name = Godot_Renderer_GetShaderName(shader_handle);
     int lightmap_index;
+    const GodotShaderProps *result;
 
     if (!name || !name[0]) {
         return NULL;
@@ -1027,8 +1111,10 @@ const GodotShaderProps *Godot_ShaderProps_Find_ByHandle(int shader_handle) {
 
     /* Match the engine registration path:
      * RegisterShaderNoMip -> LIGHTMAP_2D, RegisterShader -> LIGHTMAP_NONE. */
-    lightmap_index = Godot_Renderer_IsShaderNoMip(shader_handle) ? LIGHTMAP_2D : LIGHTMAP_NONE;
-    return Godot_ShaderProps_Find_Lightmap(name, lightmap_index);
+    int nomip = Godot_Renderer_IsShaderNoMip(shader_handle);
+    lightmap_index = nomip ? LIGHTMAP_2D : LIGHTMAP_NONE;
+    result = Godot_ShaderProps_Find_Lightmap(name, lightmap_index);
+    return result;
 }
 
 int Godot_ShaderProps_Count(void) {

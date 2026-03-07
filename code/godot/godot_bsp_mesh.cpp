@@ -1798,6 +1798,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
         terrain_root->set_name("TerrainPatches");
         cluster_root->add_child(terrain_root);
         for (auto &tp : s_terrain_patches) {
+            if (!tp.mesh) continue;
             terrain_root->add_child(tp.mesh);
         }
         UtilityFunctions::print(String("[BSP] Created ") +

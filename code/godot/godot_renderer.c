@@ -318,39 +318,24 @@ static const gr_vidmode_t gr_vidModes[] = {
     { 1600, 1200 },  /* Mode  9: 4:3   */
     { 2048, 1536 },  /* Mode 10: 4:3   */
     {  856,  480 },  /* Mode 11: ~16:9 (legacy wide) */
+    /* 16:9 widescreen */
+    { 1280,  720 },  /* Mode 12: 16:9  (720p)  */
+    { 1366,  768 },  /* Mode 13: ~16:9         */
+    { 1600,  900 },  /* Mode 14: 16:9          */
+    { 1920, 1080 },  /* Mode 15: 16:9  (1080p) */
+    { 2560, 1440 },  /* Mode 16: 16:9  (1440p) */
+    { 3840, 2160 },  /* Mode 17: 16:9  (4K)    */
+    /* 16:10 widescreen */
+    { 1280,  800 },  /* Mode 18: 16:10         */
+    { 1440,  900 },  /* Mode 19: 16:10         */
+    { 1680, 1050 },  /* Mode 20: 16:10         */
+    { 1920, 1200 },  /* Mode 21: 16:10         */
+    { 2560, 1600 },  /* Mode 22: 16:10         */
+    /* Ultrawide 21:9 */
+    { 2560, 1080 },  /* Mode 23: 21:9          */
+    { 3440, 1440 },  /* Mode 24: 21:9          */
 };
 static const int gr_numVidModes = (int)( sizeof(gr_vidModes) / sizeof(gr_vidModes[0]) );
-
-/* Mirrors renderergl1/tr_init.c::R_GetModeInfo for GUI/video parity. */
-static qboolean GR_GetModeInfo( int *width, int *height, float *windowAspect,
-                                int mode, cvar_t *r_customw,
-                                cvar_t *r_customh, cvar_t *r_customaspect )
-{
-    if ( mode < -1 ) {
-        return qfalse;
-    }
-    if ( mode >= gr_numVidModes ) {
-        return qfalse;
-    }
-
-    if ( mode == -1 ) {
-        int w = r_customw ? r_customw->integer : 640;
-        int h = r_customh ? r_customh->integer : 480;
-        float aspect = r_customaspect ? r_customaspect->value : 0.0f;
-        if ( w <= 0 ) w = 640;
-        if ( h <= 0 ) h = 480;
-        if ( aspect <= 0.0f ) aspect = (float)w / (float)h;
-        *width = w;
-        *height = h;
-        *windowAspect = aspect;
-        return qtrue;
-    }
-
-    *width  = gr_vidModes[mode].width;
-    *height = gr_vidModes[mode].height;
-    *windowAspect = (float)(*width) / (float)(*height);
-    return qtrue;
-}
 
 /* Desktop resolution — set by MoHAARunner before Com_Init so
  * GR_BeginRegistration can resolve r_mode -2 correctly. */
@@ -375,21 +360,9 @@ static float   gr_farplane_distance = 0.0f;
 static float   gr_farplane_bias     = 0.0f;
 static float   gr_farplane_color[3] = { 0.0f, 0.0f, 0.0f };
 static qboolean gr_farplane_cull    = qfalse;
+static qboolean gr_renderTerrain    = qtrue;
 static qboolean gr_hasNewFrame     = qfalse;
 static int     gr_frameCount       = 0;
-
-/* Phase 39 parity: additional refdef_t fields */
-static int      gr_refdef_time      = 0;        /* milliseconds — shader time source */
-static int      gr_refdef_rdflags   = 0;
-static byte     gr_areamask[32]     = {0};       /* MAX_MAP_AREA_BYTES = 32 */
-static qboolean gr_sky_portal       = qfalse;
-static float    gr_sky_alpha        = 0.0f;
-static float    gr_sky_origin[3]    = {0};
-static float    gr_sky_axis[3][3]   = {{0}};
-static qboolean gr_renderTerrain    = qtrue;
-static qboolean gr_skybox_farplane  = qfalse;
-static float    gr_farclipOverride  = 0.0f;
-static float    gr_farplaneColorOverride[3] = {0};
 
 /* World map name captured by GR_LoadWorld for BSP loader */
 static char     gr_worldMapName[256] = {0};
@@ -429,12 +402,6 @@ typedef struct {
     int         bone_tag[5];         /* controller bone indices */
     float       bone_quat[5][4];     /* controller bone quaternions */
     void       *tiki;                /* dtiki_t pointer */
-
-    /* Phase 39 parity: additional refEntity_t fields */
-    int         customSkin;          /* qhandle_t — alternate skin override */
-    float       shaderTime;          /* subtracted from refdef time for effect timing */
-    float       shaderTexCoord[2];   /* tcMod entity UV offsets */
-    int         nonNormalizedAxes;   /* qboolean — axis vectors have non-unit scale */
 
     /* Per-surface state flags (32 bytes, matches MAX_MODEL_SURFACES).
      * Bit 2 (MDL_SURFACE_NODRAW = 4) = hidden surface.
@@ -726,9 +693,8 @@ static void GR_BeginRegistration( glconfig_t *config )
     {
         cvar_t *r_mode_cv       = ri.Cvar_Get( "r_mode",         "-2", 0 );
         cvar_t *r_fullscreen_cv = ri.Cvar_Get( "r_fullscreen",   "0",  0 );
-        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1600", 0 );
-        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "1024", 0 );
-        cvar_t *r_customa_cv    = ri.Cvar_Get( "r_customaspect", "1",    0 );
+        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1280", 0 );
+        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "720",  0 );
 
         /* Register r_gamma so the config value is loaded and accessible
          * from the Godot side for full-screen gamma correction. */
@@ -755,35 +721,26 @@ static void GR_BeginRegistration( glconfig_t *config )
         int mode = r_mode_cv ? r_mode_cv->integer : -2;
         int fs   = r_fullscreen_cv ? r_fullscreen_cv->integer : 0;
         int w = 640, h = 480;  /* fallback */
-        float aspect = 4.0f / 3.0f;
 
-        /* Follow OpenMoHAA mode semantics:
-         *  -2: desktop resolution
-         *  -1: r_customwidth/r_customheight/r_customaspect
-         * >=0: indexed mode table
-         * Invalid mode falls back to 640x480 (mode 3 equivalent). */
-        if ( mode == -2 ) {
+        if ( mode >= 0 && mode < gr_numVidModes ) {
+            w = gr_vidModes[mode].width;
+            h = gr_vidModes[mode].height;
+        } else if ( mode == -1 ) {
+            /* Custom mode */
+            w = r_customw_cv ? r_customw_cv->integer : 1280;
+            h = r_customh_cv ? r_customh_cv->integer : 720;
+        } else if ( mode == -2 ) {
+            /* Desktop resolution — use value set by MoHAARunner */
             w = gr_desktopWidth;
             h = gr_desktopHeight;
-            if ( w <= 0 ) w = 640;
-            if ( h <= 0 ) h = 480;
-            aspect = (float)w / (float)h;
-        } else if ( !GR_GetModeInfo( &w, &h, &aspect, mode,
-                                      r_customw_cv, r_customh_cv, r_customa_cv ) ) {
-            ri.Printf( PRINT_WARNING,
-                       "[GodotRenderer] Invalid r_mode %d, falling back to 640x480\n",
-                       mode );
-            w = 640;
-            h = 480;
-            aspect = (float)w / (float)h;
         }
 
-        /* Set glConfig to the resolved video mode.
-         * MoHAARunner applies matching Godot window/fullscreen settings
-         * after vid_restart to keep viewport and glConfig in sync. */
+        /* Set glConfig to the ACTUAL resolution (OPM parity).  The engine
+         * UI framework, SCR_AdjustFrom640(), and all draw code use these
+         * values for coordinate scaling and widget layout. */
         config->vidWidth     = w;
         config->vidHeight    = h;
-        config->windowAspect = aspect;
+        config->windowAspect = (float)w / (float)h;
         config->isFullscreen = (qboolean)( fs != 0 );
 
         gr_vidRestart_fullscreen = fs;
@@ -1046,11 +1003,6 @@ static void GR_AddRefEntityToScene( const refEntity_t *re, int parentEntityNumbe
     ge->radius        = re->radius;
     ge->rotation      = re->rotation;
     ge->shadowPlane   = re->shadowPlane;
-    ge->customSkin    = (int)re->customSkin;
-    ge->shaderTime    = re->shaderTime;
-    ge->shaderTexCoord[0] = re->shaderTexCoord[0];
-    ge->shaderTexCoord[1] = re->shaderTexCoord[1];
-    ge->nonNormalizedAxes = (int)re->nonNormalizedAxes;
 
     VectorCopy( re->lightingOrigin, ge->lightingOrigin );
 
@@ -1225,21 +1177,7 @@ static void GR_RenderScene( const refdef_t *fd )
     gr_farplane_bias = fd->farplane_bias;
     VectorCopy( fd->farplane_color, gr_farplane_color );
     gr_farplane_cull = fd->farplane_cull;
-
-    /* Phase 39 parity: capture additional refdef_t fields */
-    gr_refdef_time     = fd->time;
-    gr_refdef_rdflags  = fd->rdflags;
-    memcpy( gr_areamask, fd->areamask, sizeof(gr_areamask) );
-    gr_sky_portal      = fd->sky_portal;
-    gr_sky_alpha       = fd->sky_alpha;
-    VectorCopy( fd->sky_origin, gr_sky_origin );
-    VectorCopy( fd->sky_axis[0], gr_sky_axis[0] );
-    VectorCopy( fd->sky_axis[1], gr_sky_axis[1] );
-    VectorCopy( fd->sky_axis[2], gr_sky_axis[2] );
-    gr_renderTerrain   = fd->renderTerrain;
-    gr_skybox_farplane = fd->skybox_farplane;
-    gr_farclipOverride = fd->farclipOverride;
-    VectorCopy( fd->farplaneColorOverride, gr_farplaneColorOverride );
+    gr_renderTerrain = fd->renderTerrain;
 
     /* Set up the real renderer's backend view params so that
      * Godot_ComputeSpriteQuad() (and future engine pipeline
@@ -1899,6 +1837,12 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
 
     GR_RefreshFontHandlesIfNeeded();
 
+    /* pvVirtualScreen scaling — matches renderergl1/tr_font.cpp.
+     * The UI system calls Set2DWindow with vidWidth×vidHeight ortho,
+     * then passes pvVirtualScreen to scale from 640×480 virtual
+     * coordinates to actual screen space.  Without this, font glyphs
+     * are emitted in 640×480 space against a larger ortho projection,
+     * making text too small and mispositioned. */
     if ( pvVirtualScreen ) {
         if ( pvVirtualScreen[0] ) {
             fWidthScale = pvVirtualScreen[0];
@@ -1957,6 +1901,10 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
             gx = x;
             gy = y;
 
+            /* Scale glyph vertices when pvVirtualScreen is set.
+             * Matches renderergl1/tr_font.cpp: emitted vertices are
+             * scaled to screen space, but cursor advance stays in
+             * virtual 640×480 space. */
             if ( pvVirtualScreen ) {
                 gx *= fWidthScale;
                 gy *= fHeightScale;
@@ -1973,9 +1921,8 @@ static void GR_DrawString_sgl( fontheader_sgl_t *font, const char *text,
             /* Emit as a DrawStretchPic command */
             GR_DrawStretchPic( gx, gy, gw, gh, s1, t1, s2, t2, shader );
 
-            /* Match tr_font.cpp: cursor advance remains in virtual 640x480
-             * space; only emitted quad vertices are scaled by pvVirtualScreen.
-             * Advancing by scaled gw distorts glyph spacing at non-4:3 scales. */
+            /* Cursor advance in virtual 640×480 space (NOT scaled).
+             * Matches tr_font.cpp: x += s_fontGeneralScale * loc->size[0] * 256.0 */
             x += gr_fontGeneralScale * loc->size[0] * 256.0f;
             break;
         }
@@ -2955,69 +2902,6 @@ void Godot_Renderer_GetFarplane( float *distance, float *bias, float *color, int
     if ( cull ) *cull = (int)gr_farplane_cull;
 }
 
-/* ===================================================================
- *  Phase 39 parity: additional refdef_t field accessors
- * ================================================================ */
-
-int Godot_Renderer_GetRefdefTime( void )
-{
-    return gr_refdef_time;
-}
-
-int Godot_Renderer_GetRefdefFlags( void )
-{
-    return gr_refdef_rdflags;
-}
-
-void Godot_Renderer_GetAreamask( unsigned char *out, int maxBytes )
-{
-    int n = maxBytes < (int)sizeof(gr_areamask) ? maxBytes : (int)sizeof(gr_areamask);
-    if ( out ) memcpy( out, gr_areamask, n );
-}
-
-int Godot_Renderer_GetSkyPortal( float *origin, float *axis, float *alpha )
-{
-    if ( !gr_sky_portal ) return 0;
-    if ( origin ) VectorCopy( gr_sky_origin, origin );
-    if ( axis )   memcpy( axis, gr_sky_axis, 9 * sizeof(float) );
-    if ( alpha )  *alpha = gr_sky_alpha;
-    return 1;
-}
-
-int Godot_Renderer_GetRenderTerrain( void )
-{
-    return (int)gr_renderTerrain;
-}
-
-int Godot_Renderer_GetSkyboxFarplane( void )
-{
-    return (int)gr_skybox_farplane;
-}
-
-void Godot_Renderer_GetFarplaneOverrides( float *farclip, float *colorOverride )
-{
-    if ( farclip )       *farclip = gr_farclipOverride;
-    if ( colorOverride ) VectorCopy( gr_farplaneColorOverride, colorOverride );
-}
-
-/* Phase 39 parity: entity additional field accessors */
-void Godot_Renderer_GetEntityShaderData( int index,
-                                         float *shaderTime,
-                                         float *shaderTexCoord,  /* [2] */
-                                         int   *customSkin,
-                                         int   *nonNormalizedAxes )
-{
-    if ( index < 0 || index >= gr_numEntities ) return;
-    const gr_entity_t *ge = &gr_entities[index];
-    if ( shaderTime )         *shaderTime         = ge->shaderTime;
-    if ( shaderTexCoord ) {
-        shaderTexCoord[0] = ge->shaderTexCoord[0];
-        shaderTexCoord[1] = ge->shaderTexCoord[1];
-    }
-    if ( customSkin )         *customSkin          = ge->customSkin;
-    if ( nonNormalizedAxes )  *nonNormalizedAxes   = ge->nonNormalizedAxes;
-}
-
 /* Also expose the world map path so MoHAARunner knows what BSP to load */
 
 const char *Godot_Renderer_GetWorldMapName( void )
@@ -3028,6 +2912,11 @@ const char *Godot_Renderer_GetWorldMapName( void )
 int Godot_Renderer_IsWorldMapLoaded( void )
 {
     return (int)gr_worldMapLoaded;
+}
+
+int Godot_Renderer_GetRenderTerrain( void )
+{
+    return (int)gr_renderTerrain;
 }
 
 /* ===================================================================
@@ -3606,6 +3495,16 @@ int Godot_RI_GetLocalChannel( void *tiki, int globalChannel )
     return ri.TIKI_GetLocalChannel( (dtiki_t *)tiki, globalChannel );
 }
 
+/* ── Morph weight frame accessor ──
+ * Wraps ri.SKEL_GetMorphWeightFrame so the skel model accessor can
+ * retrieve morph target weights without including skeletor headers. */
+int Godot_RI_GetMorphWeightFrame( void *skeletor, int index, float time, int *data )
+{
+    if ( !skeletor || !data ) return 0;
+    if ( !ri.SKEL_GetMorphWeightFrame ) return 0;
+    return ri.SKEL_GetMorphWeightFrame( skeletor, index, time, data );
+}
+
 /* ── Bind-pose bone computation for static models ──
  * Wraps ri.TIKI_GetSkelAnimFrame so the skel model accessor can
  * compute pStaticXyz on-the-fly when the GL renderer hasn't done it. */
@@ -3619,17 +3518,6 @@ int Godot_RI_GetSkelAnimFrame( void *tiki, void *bonesOut, float *radiusOut )
                                &radius, &mins, &maxs );
     if ( radiusOut ) *radiusOut = radius;
     return 1;
-}
-
-/* ── Morph weight frame accessor ──
- * Wraps ri.SKEL_GetMorphWeightFrame: fills data[] with integer morph
- * weights for the current animation pose.  Returns number of morph
- * targets (entries written), or 0 if none. */
-int Godot_RI_GetMorphWeightFrame( void *skeletor, int index, float time, int *data )
-{
-    if ( !skeletor || !data ) return 0;
-    if ( !ri.SKEL_GetMorphWeightFrame ) return 0;
-    return ri.SKEL_GetMorphWeightFrame( skeletor, index, time, data );
 }
 
 /* ── Entity animation data accessor ── */
@@ -3758,10 +3646,19 @@ void Godot_Renderer_SetDesktopResolution( int w, int h )
     }
 }
 
-/* Mode table query — REMOVED.
- * Under Godot, r_mode is irrelevant (viewport resolution is fixed
- * to the Godot window).  The extended gr_vidModes[] table is kept
- * for historical reference only. */
+/* Mode table query for UI hooks and external code. */
+int Godot_Renderer_GetNumVidModes( void )
+{
+    return gr_numVidModes;
+}
+
+int Godot_Renderer_GetVidMode( int mode, int *w, int *h )
+{
+    if ( mode < 0 || mode >= gr_numVidModes ) return 0;
+    if ( w ) *w = gr_vidModes[mode].width;
+    if ( h ) *h = gr_vidModes[mode].height;
+    return 1;
+}
 
 /* Return animation data for a HUD model entity */
 int Godot_Renderer_GetHudModelAnim( int index,

@@ -1,10 +1,13 @@
 #include "MoHAARunner.h"
 
 #include <gdextension_interface.h>
+#include <cstdio>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
 
 using namespace godot;
+
+static const char *kOpenMohaaBuildMarker = "ALPHA-FIX-R4 " __DATE__ " " __TIME__;
 
 // Track whether the engine was ever initialised (set by MoHAARunner)
 extern "C" void Com_Shutdown(void);
@@ -20,6 +23,14 @@ void initialize_openmohaa_module(ModuleInitializationLevel p_level) {
     }
 
     printf("OpenMoHAA: initialize_openmohaa_module called at SCENE level.\n");
+    printf("OpenMoHAA: build marker: %s\n", kOpenMohaaBuildMarker);
+    {
+        FILE *fp = fopen("/tmp/openmohaa_build_marker.log", "a");
+        if (fp) {
+            fprintf(fp, "init %s\n", kOpenMohaaBuildMarker);
+            fclose(fp);
+        }
+    }
     ClassDB::register_class<MoHAARunner>();
 }
 
@@ -59,6 +70,14 @@ GDExtensionBool GDE_EXPORT openmohaa_library_init(GDExtensionInterfaceGetProcAdd
     init_obj.set_minimum_library_initialization_level(MODULE_INITIALIZATION_LEVEL_SCENE);
 
     printf("OpenMoHAA: openmohaa_library_init called.\n");
+    printf("OpenMoHAA: build marker: %s\n", kOpenMohaaBuildMarker);
+    {
+        FILE *fp = fopen("/tmp/openmohaa_build_marker.log", "a");
+        if (fp) {
+            fprintf(fp, "library_init %s\n", kOpenMohaaBuildMarker);
+            fclose(fp);
+        }
+    }
 
     return init_obj.init();
 }
