@@ -6308,12 +6308,24 @@ void MoHAARunner::update_2d_overlay() {
                 if (sname && sname[0]) {
                     const GodotShaderProps *sp2 = Godot_ShaderProps_Find_ByHandle(shader);
                     if (sp2) {
-                        /* Read blend from the first non-lightmap stage —
-                         * this is exactly what GL_State(pStage->stateBits)
-                         * does in the real renderer. */
+                        /* Read blend from the first real texture stage.
+                         * Skip internal engine images ($whiteimage, *white)
+                         * that serve as base fill passes in multi-stage
+                         * shaders (e.g. mohdm levelshots: stage 0 = white
+                         * fill, stage 1 = map image with inverse alpha). */
                         for (int st = 0; st < sp2->stage_count; st++) {
                             if (!sp2->stages[st].active) continue;
                             if (sp2->stages[st].isLightmap) continue;
+
+                            /* Skip internal engine images used as base
+                             * fill passes in multi-stage 2D shaders. */
+                            const char *sm = sp2->stages[st].map;
+                            if (sm[0] && (strcmp(sm, "$whiteimage") == 0 ||
+                                          strcmp(sm, "*white") == 0 ||
+                                          strcmp(sm, "$lightmap") == 0)) {
+                                continue;
+                            }
+
                             if (!sp2->stages[st].hasBlendFunc) break; /* no blend → alpha (LIGHTMAP_2D default) */
 
                             MohaaBlendFactor bs = sp2->stages[st].blendSrc;
@@ -6331,6 +6343,25 @@ void MoHAARunner::update_2d_overlay() {
                             /* All other blend combos (including SRC_ALPHA/ONE_MINUS_SRC_ALPHA)
                              * stay as BLEND_MIX — standard alpha blend. */
                             break;
+                        }
+                    }
+                }
+
+                /* Texture-alpha parity for implicit/UI shaders:
+                 * If blend resolved to MIX but the loaded texture has no
+                 * meaningful alpha, collapse to OPAQUE for exact opaque
+                 * output.  This prevents washed-out rendering of opaque
+                 * images (e.g. map preview levelshots) that get LIGHTMAP_2D's
+                 * default SRC_ALPHA/ONE_MINUS_SRC_ALPHA blend despite having
+                 * no transparency.  Conversely, if the shader says OPAQUE
+                 * but the texture does have alpha, keep MIX so cutout/soft
+                 * edges render correctly (loadingbar_border, overlays). */
+                {
+                    auto ha_it = shader_texture_has_alpha.find(shader);
+                    if (ha_it != shader_texture_has_alpha.end()) {
+                        bool tex_has_alpha = ha_it->second;
+                        if (draw_blend == BLEND_MIX && !tex_has_alpha) {
+                            draw_blend = BLEND_OPAQUE;
                         }
                     }
                 }
