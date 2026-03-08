@@ -25,6 +25,11 @@
 #include <cstdio>
 #include <cmath>
 
+/* MAX_QPATH = max length of a Quake game pathname (from q_shared.h) */
+#ifndef MAX_QPATH
+#  define MAX_QPATH 256
+#endif
+
 /* ------------------------------------------------------------------ */
 /*  C accessors (avoid engine header collisions)                      */
 /* ------------------------------------------------------------------ */
@@ -71,15 +76,15 @@ static Ref<AudioStream> load_sound_from_vfs(const char *name)
     if (!name || !name[0]) return Ref<AudioStream>();
 
     /* Try with and without "sound/" prefix */
-    char paths[2][512];
+    char paths[2][MAX_QPATH];
     int path_count = 0;
 
-    strncpy(paths[path_count], name, 511);
-    paths[path_count][511] = '\0';
+    strncpy(paths[path_count], name, MAX_QPATH - 1);
+    paths[path_count][MAX_QPATH - 1] = '\0';
     path_count++;
 
     if (strncmp(name, "sound/", 6) != 0) {
-        snprintf(paths[path_count], 512, "sound/%s", name);
+        snprintf(paths[path_count], MAX_QPATH, "sound/%s", name);
         path_count++;
     }
 
@@ -193,7 +198,7 @@ static void parse_entities(const char *text)
     if (!text) return;
 
     const char *p = text;
-    char key[256], value[256];
+    char key[MAX_QPATH], value[MAX_QPATH];
 
     while (*p) {
         /* Find opening brace */
@@ -203,11 +208,11 @@ static void parse_entities(const char *text)
 
         /* Parse key-value pairs until closing brace */
         float origin[3] = {0, 0, 0};
-        char  noise[256] = {0};
+        char  noise[MAX_QPATH] = {0};
         float wait_val = 0.0f;
         float random_val = 0.0f;
         int   has_noise = 0;
-        char  classname[256] = {0};
+        char  classname[MAX_QPATH] = {0};
         int   spawnflags = 0;
 
         while (*p && *p != '}') {

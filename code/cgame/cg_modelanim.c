@@ -1511,6 +1511,30 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     }
 
     model.reType = RT_MODEL;
+#ifdef GODOT_GDEXTENSION
+    static int s_gd_diag_calls = 0;
+    static int s_gd_diag_submitted = 0;
+    static int s_gd_diag_dontdraw = 0;
+    static int s_gd_diag_dontdraw_logged = 0;
+    s_gd_diag_calls++;
+
+    if (s1->renderfx & RF_DONTDRAW) {
+        s_gd_diag_dontdraw++;
+        if (s_gd_diag_dontdraw_logged < 24) {
+            const char *tiki_name = model.tiki ? cgi.TIKI_Name(model.tiki) : "(null)";
+            cgi.Printf(
+                "[MoHAA][CG-DONTDRAW] ent=%d modelindex=%d hModel=%d renderfx=0x%x tiki=%s\n",
+                s1->number,
+                s1->modelindex,
+                model.hModel,
+                s1->renderfx,
+                tiki_name
+            );
+            s_gd_diag_dontdraw_logged++;
+        }
+    }
+#endif
+
     if (!(s1->renderfx & RF_DONTDRAW)) {
         cgi.R_Model_GetHandle(model.hModel);
         if (VectorCompare(model.origin, vec3_origin)) {
@@ -1520,7 +1544,24 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
         // add to refresh list
         cgi.R_AddRefEntityToScene(&model, s1->parent);
+#ifdef GODOT_GDEXTENSION
+        s_gd_diag_submitted++;
+#endif
     }
+
+#ifdef GODOT_GDEXTENSION
+    if ((s_gd_diag_calls % 512) == 0) {
+        cgi.Printf(
+            "[MoHAA][CG-MODELANIM-SUM] calls=%d submitted=%d dontdraw=%d\n",
+            s_gd_diag_calls,
+            s_gd_diag_submitted,
+            s_gd_diag_dontdraw
+        );
+        s_gd_diag_calls = 0;
+        s_gd_diag_submitted = 0;
+        s_gd_diag_dontdraw = 0;
+    }
+#endif
 
     CG_UpdateEntityEmitters(s1->number, &model, cent);
 

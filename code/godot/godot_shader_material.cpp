@@ -50,14 +50,16 @@ static bool needs_gamma_to_linear_conversion() {
 /* ===================================================================
  *  Internal shader cache — avoids regenerating identical shaders
  * ================================================================ */
-static std::unordered_map<std::string, Ref<Shader>> s_shader_cache;
+static std::unordered_map<std::string, Ref<Shader>> *s_shader_cache =
+    new std::unordered_map<std::string, Ref<Shader>>();
 
 /* ===================================================================
  *  Material registry — tracks all built ShaderMaterials so
  *  bsp_shadow_darkness can be updated at runtime without rebuilding.
  * ================================================================ */
 #include <vector>
-static std::vector<Ref<ShaderMaterial>> s_mat_registry;
+static std::vector<Ref<ShaderMaterial>> *s_mat_registry =
+    new std::vector<Ref<ShaderMaterial>>();
 
 /* ===================================================================
  *  Helper: float → string with minimal decimal places
@@ -1031,8 +1033,8 @@ Ref<ShaderMaterial> Godot_Shader_BuildMaterial(const GodotShaderProps *props) {
     std::string key = make_cache_key(props);
     Ref<Shader> shader;
 
-    auto it = s_shader_cache.find(key);
-    if (it != s_shader_cache.end() && it->second.is_valid()) {
+    auto it = s_shader_cache->find(key);
+    if (it != s_shader_cache->end() && it->second.is_valid()) {
         shader = it->second;
     } else {
         /* Generate shader code */
@@ -1042,7 +1044,7 @@ Ref<ShaderMaterial> Godot_Shader_BuildMaterial(const GodotShaderProps *props) {
 
         shader.instantiate();
         shader->set_code(code);
-        s_shader_cache[key] = shader;
+        (*s_shader_cache)[key] = shader;
     }
 
     /* Create material */
@@ -1051,19 +1053,19 @@ Ref<ShaderMaterial> Godot_Shader_BuildMaterial(const GodotShaderProps *props) {
     mat->set_shader(shader);
 
     /* Register for runtime bsp_shadow_darkness updates */
-    s_mat_registry.push_back(mat);
+    s_mat_registry->push_back(mat);
 
     return mat;
 }
 
 void Godot_Shader_ClearCache() {
-    s_shader_cache.clear();
+    s_shader_cache->clear();
 }
 
 /* Clear the material registry.  Call at the start of every map load
  * to drop stale references from the previous map. */
 void Godot_Shader_ClearMaterialRegistry() {
-    s_mat_registry.clear();
+    s_mat_registry->clear();
 }
 
 /* Set the shadow darkness on every registered ShaderMaterial.
@@ -1073,7 +1075,7 @@ void Godot_Shader_ClearMaterialRegistry() {
  * Called from MoHAARunner::apply_player_shadow_mode() whenever r_shadows changes
  * and once after each BSP load to synchronise freshly-built materials. */
 void Godot_Shader_SetShadowDarkness(float darkness) {
-    for (auto &mat : s_mat_registry) {
+    for (auto &mat : *s_mat_registry) {
         if (mat.is_valid()) {
             mat->set_shader_parameter("bsp_shadow_darkness", darkness);
         }

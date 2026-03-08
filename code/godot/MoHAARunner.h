@@ -344,10 +344,13 @@ private:
         int hModel;
         int reType;
         int customShader;
-        int frame;         // beam diameter / animation frame
+        int renderfx;
+        int skinNum;
+        uint32_t surfacesHash;
         bool operator==(const EntityCacheKey &o) const {
             return hModel == o.hModel && reType == o.reType &&
-                   customShader == o.customShader && frame == o.frame;
+                   customShader == o.customShader && renderfx == o.renderfx &&
+                   skinNum == o.skinNum && surfacesHash == o.surfacesHash;
         }
     };
     std::vector<EntityCacheKey> entity_cache_keys;
@@ -367,14 +370,16 @@ private:
     // Key = (hModel << 20) | (surfIdx << 12) | quantised_rgba
     std::unordered_map<uint64_t, Ref<StandardMaterial3D>> tinted_mat_cache;
 
-    // TIKI entity material cache — keyed by (hModel | skinNum<<20); cleared on map change.
+    // TIKI entity material cache — keyed by model + skin + per-surface skin-variant bits.
+    // Using the full key prevents shader mismatches when the same model/skinNum is
+    // rendered with different surfaces[] low bits (skin slot offsets).
     // Stores per-godot-surface materials alongside the flat TIKI surface index mapping,
     // which is needed to apply MDL_SURFACE_NODRAW (per-entity per-surface visibility flags).
     struct TikiMatSet {
         std::vector<Ref<StandardMaterial3D>> mats;
         std::vector<int> flat_surf_idx; // TIKI flat surface index per godot surface slot
     };
-    std::unordered_map<int, TikiMatSet> tiki_mat_cache;
+    std::unordered_map<uint64_t, TikiMatSet> tiki_mat_cache;
 
     // 2D HUD overlay (Phase 7h)
     CanvasLayer *hud_layer = nullptr;                     // Overlay layer for 2D elements
@@ -386,6 +391,11 @@ private:
     // so that 2D elements (dropdown menus) render on top of model previews
     CanvasLayer *hud_model_canvas_layer = nullptr;
     Control *hud_model_canvas_control = nullptr;
+
+    // Per-instance nodraw material used for MDL_SURFACE_NODRAW overrides.
+    // Keep this instance-owned (not function-static) to avoid exit-time
+    // static Ref<> destructors running after Godot teardown.
+    Ref<StandardMaterial3D> nodraw_surface_material;
 
     // Blend-mode segment pool for 2D overlay draw order
     // Commands are routed to segment canvas items that preserve the engine's
@@ -476,6 +486,7 @@ private:
     float music_current_volume = 1.0f;                               // Current interpolated volume
 
     void setup_audio();                                              // Create audio player pools
+    void release_audio_resources();                                  // Stop players + drop stream refs safely
     void update_audio(double delta);                                 // Process sound events + loops
     void update_music(double delta);                                 // Process music state changes
     Ref<AudioStream> load_wav_from_vfs(int sfxHandle);                // Load WAV/MP3 via engine VFS
@@ -546,6 +557,7 @@ public:
     Ref<ImageTexture> get_shader_texture(int shader_handle); // Lazily load shader textures
 
     void _ready() override;
+    void _notification(int p_what);
     void _process(double delta) override;
     void _input(const Ref<InputEvent> &p_event) override;
     void _unhandled_input(const Ref<InputEvent> &p_event) override;

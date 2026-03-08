@@ -25,6 +25,11 @@
 #include <cstring>
 #include <cstdlib>
 
+/* MAX_QPATH = max length of a Quake game pathname (from q_shared.h) */
+#ifndef MAX_QPATH
+#  define MAX_QPATH 256
+#endif
+
 /* ── C accessor declarations (godot_skel_model_accessors.cpp + godot_renderer.c) ── */
 extern "C" {
     /* From godot_renderer.c */
@@ -72,8 +77,10 @@ static inline Vector3 id_to_godot_normal(float nx, float ny, float nz)
 /* ── Singleton ── */
 GodotSkelModelCache &GodotSkelModelCache::get()
 {
-    static GodotSkelModelCache instance;
-    return instance;
+    // Keep the singleton alive for process lifetime so Ref<> members are not
+    // destructed during atexit after Godot has torn down method bindings.
+    static GodotSkelModelCache *instance = new GodotSkelModelCache();
+    return *instance;
 }
 
 void GodotSkelModelCache::clear()
@@ -166,8 +173,8 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
                 int lodVertLimit = Godot_Skel_GetLodVertexLimit(tikiPtr, mesh, surf, lod);
 
                 int numVerts = 0, numTris = 0;
-                char surfName[64]   = {0};
-                char shaderName[64] = {0};
+                char surfName[MAX_QPATH]   = {0};
+                char shaderName[MAX_QPATH] = {0};
 
                 if (!Godot_Skel_GetSurfaceInfo(tikiPtr, mesh, surf,
                                                 &numVerts, &numTris,

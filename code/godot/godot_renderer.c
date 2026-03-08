@@ -53,7 +53,7 @@ typedef enum {
 } gr_modtype_t;
 
 typedef struct {
-    char          name[64];   /* MAX_QPATH */
+    char          name[MAX_QPATH];  /* matches model_t.name in the real renderer */
     gr_modtype_t  type;
     int           index;
     qboolean      serveronly;
@@ -73,7 +73,7 @@ static void GR_ModelInit( void )
 {
     memset( gr_models, 0, sizeof( gr_models ) );
     gr_numModels = 1;   /* slot 0 = sentinel bad model */
-    strncpy( gr_models[0].name, "** BAD MODEL **", 63 );
+    Q_strncpyz( gr_models[0].name, "** BAD MODEL **", sizeof( gr_models[0].name ) );
     gr_models[0].type = GR_MOD_BAD;
 }
 
@@ -85,7 +85,7 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
     gr_model_t *mod;
 
     if ( !name || !name[0] ) return 0;
-    if ( strlen( name ) >= 64 ) return 0;
+    if ( strlen( name ) >= MAX_QPATH ) return 0;
 
     /* ── Search existing models ── */
     /* GR_MOD_BAD slots arise when CG_ExecuteNewServerCommands' first pass
@@ -154,7 +154,7 @@ static qhandle_t GR_RegisterModelInternal( const char *name, qboolean bBeginTiki
                 "[GodotRenderer] TIKI load failed: %s\n", name );
         } else if ( !Q_stricmp( ext, "spr" ) ) {
             /* Sprites: The shader name is the sprite filename without the .spr extension. */
-            char shadername[256];
+            char shadername[MAX_QPATH];
             COM_StripExtension( name, shadername, sizeof(shadername) );
 
             mod->type = GR_MOD_SPRITE;
@@ -219,7 +219,7 @@ static int gr_fontHandlesDirty = 0;
 #define GR_MAX_SHADERS 2048
 
 typedef struct {
-    char name[64];   /* MAX_QPATH */
+    char name[MAX_QPATH];
     int  nomip;      /* 1 if registered with RegisterShaderNoMip */
 } gr_shader_t;
 
@@ -365,7 +365,7 @@ static qboolean gr_hasNewFrame     = qfalse;
 static int     gr_frameCount       = 0;
 
 /* World map name captured by GR_LoadWorld for BSP loader */
-static char     gr_worldMapName[256] = {0};
+static char     gr_worldMapName[MAX_QPATH] = {0};
 static qboolean gr_worldMapLoaded   = qfalse;
 
 /* -------------------------------------------------------------------
@@ -819,12 +819,11 @@ static qhandle_t GR_RegisterShaderNoMip( const char *name )
      * This is critical for UIBindButton which checks GetMaterial() to
      * decide whether to show a texture image or fall back to text.
      *
-     * Godot_ShaderProps_Find() calls resolve_shader() → R_FindShader()
-     * which searches the full VFS (pk3 + loose files) for both .shader
-     * definitions AND raw images (.tga/.jpg/.png).  If R_FindShader()
-     * cannot find the shader or image, it returns defaultShader, and
-     * Godot_ShaderProps_Find() returns NULL. */
-    if ( !Godot_ShaderProps_Find( name ) ) {
+     * Use Godot_ShaderProps_Find_2D() (LIGHTMAP_2D) to match the real
+     * RE_RegisterShaderNoMip which calls R_FindShader(name, LIGHTMAP_2D).
+     * This ensures the shader_t gets correct 2D stage properties
+     * (CGEN_GLOBAL_COLOR, AGEN_GLOBAL_ALPHA, SRC_ALPHA blend). */
+    if ( !Godot_ShaderProps_Find_2D( name ) ) {
         return 0;
     }
 
@@ -1267,8 +1266,8 @@ static void GR_Transform2D( float in_x, float in_y, float in_w, float in_h,
     float range_x = gr_2d_right  - gr_2d_left;
     float range_y = gr_2d_bottom - gr_2d_top;
 
-    if ( range_x <= 0.0f ) range_x = 640.0f;
-    if ( range_y <= 0.0f ) range_y = 480.0f;
+    if ( range_x <= 0.0f ) range_x = (float)SCREEN_WIDTH;
+    if ( range_y <= 0.0f ) range_y = (float)SCREEN_HEIGHT;
 
     /* Map from ortho space to viewport pixel space */
     float sx = (float)gr_2d_vp_w / range_x;
@@ -1374,8 +1373,8 @@ static void GR_TransformPoint2D( float in_x, float in_y,
     float range_x = gr_2d_right  - gr_2d_left;
     float range_y = gr_2d_bottom - gr_2d_top;
 
-    if ( range_x <= 0.0f ) range_x = 640.0f;
-    if ( range_y <= 0.0f ) range_y = 480.0f;
+    if ( range_x <= 0.0f ) range_x = (float)SCREEN_WIDTH;
+    if ( range_y <= 0.0f ) range_y = (float)SCREEN_HEIGHT;
 
     float sx = (float)gr_2d_vp_w / range_x;
     float sy = (float)gr_2d_vp_h / range_y;
@@ -1570,7 +1569,7 @@ static void GR_RefreshFontHandlesIfNeeded( void )
     if ( !gr_fontHandlesDirty ) return;
 
     for ( i = 0; i < gr_numFontsSgl; i++ ) {
-        char shaderName[128];
+        char shaderName[MAX_QPATH];
         Com_sprintf( shaderName, sizeof( shaderName ), "gfx/fonts/%s", gr_fontsgl[i].name );
         gr_fontsgl[i].trhandle = GR_RegisterShaderNoMip( shaderName );
     }
@@ -1668,7 +1667,7 @@ static fontheader_sgl_t *GR_LoadFont_sgl( const char *name )
 
     /* Register the font texture as a shader (path: gfx/fonts/<name>) */
     {
-        char shaderName[128];
+        char shaderName[MAX_QPATH];
         Com_sprintf( shaderName, sizeof(shaderName), "gfx/fonts/%s", name );
         header->trhandle = GR_RegisterShaderNoMip( shaderName );
     }

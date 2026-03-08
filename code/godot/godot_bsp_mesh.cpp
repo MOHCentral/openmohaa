@@ -54,6 +54,11 @@
 
 using namespace godot;
 
+/* MAX_QPATH = max length of a Quake game pathname (from q_shared.h) */
+#ifndef MAX_QPATH
+#  define MAX_QPATH 256
+#endif
+
 /* ===================================================================
  *  VFS accessor — extern "C" linkage to engine
  * ================================================================ */
@@ -551,22 +556,22 @@ static void tessellate_patch(const bsp_surface_t *surf,
  * ================================================================ */
 
 static std::unordered_map<std::string, Ref<ImageTexture>> s_texture_cache;
+static Ref<ImageTexture> s_white_texture;
 
 /// Return a cached 1x1 white texture — used as lightmap fallback for
 /// nolightmap surfaces so that GLSL lightmap samplers produce white
 /// (identity modulation) instead of black (unbound sampler default).
 /// This mirrors the real renderer's tr.whiteImage substitution.
 static Ref<ImageTexture> get_white_texture() {
-    static Ref<ImageTexture> s_white;
-    if (s_white.is_null()) {
+    if (s_white_texture.is_null()) {
         PackedByteArray wdata;
         wdata.resize(4);
         wdata.ptrw()[0] = 255; wdata.ptrw()[1] = 255;
         wdata.ptrw()[2] = 255; wdata.ptrw()[3] = 255;
         Ref<Image> wimg = Image::create_from_data(1, 1, false, Image::FORMAT_RGBA8, wdata);
-        s_white = ImageTexture::create_from_image(wimg);
+        s_white_texture = ImageTexture::create_from_image(wimg);
     }
-    return s_white;
+    return s_white_texture;
 }
 
 /// Load an image from the VFS and return a Godot ImageTexture.
@@ -581,7 +586,7 @@ static Ref<ImageTexture> load_texture(const char *shader_name) {
     if (it != s_texture_cache.end()) return it->second;
 
     // Strip any existing extension from the shader name
-    char base[256];
+    char base[MAX_QPATH];
     strncpy(base, shader_name, sizeof(base) - 5);
     base[sizeof(base) - 5] = '\0';
     int blen = (int)strlen(base);
@@ -1821,6 +1826,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
 
 void Godot_BSP_Unload() {
     s_texture_cache.clear();
+    s_white_texture.unref();
     s_lightmaps.clear();
     s_static_models.clear();
     s_static_model_clusters.clear();

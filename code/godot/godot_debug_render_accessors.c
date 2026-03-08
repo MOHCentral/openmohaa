@@ -69,3 +69,29 @@ int Godot_Debug_GetDrawBBox(void) {
     if (!cv) return 0;
     return cv->integer;
 }
+
+/*
+ * Godot_Debug_Dump2D — godot_dump_2d cvar.
+ *
+ * One-shot trigger: returns 1 when the cvar is set to 1, and
+ * immediately resets it to 0.  Set via console: `set godot_dump_2d 1`
+ * to dump one frame of 2D overlay commands.
+ */
+int Godot_Debug_Dump2D(void) {
+    cvar_t *cv = Cvar_Get("godot_dump_2d", "0", 0);
+    if (!cv || cv->integer == 0) return 0;
+    Cvar_Set("godot_dump_2d", "0");
+    return 1;
+}
+
+/*
+ * Godot_Debug_Dump2DPeriodic — godot_dump_2d_interval cvar.
+ *
+ * Returns the interval in seconds (0 = disabled).  When > 0, the
+ * Godot side will dump 2D commands every N seconds automatically.
+ */
+int Godot_Debug_Dump2DInterval(void) {
+    cvar_t *cv = Cvar_Get("godot_dump_2d_interval", "0", 0);
+    if (!cv) return 0;
+    return cv->integer;
+}
