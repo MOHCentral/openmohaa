@@ -38,8 +38,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <string>
-#include <unordered_map>
-#include <algorithm>
 #include <unordered_set>
 #include <setjmp.h>
 
@@ -295,6 +293,7 @@ extern "C" {
     int   Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfIndex,
                                               int iShaderNum,
                                               char *shaderName, int shaderNameLen);
+    int   Godot_Skel_SurfaceNameToNum(void *tikiPtr, const char *surfaceName);
     int   Godot_Skel_GetSurfaceVertices(void *tikiPtr, int meshIndex, int surfIndex,
                                          float *positions, float *normals, float *texcoords);
     int   Godot_Skel_GetSurfaceIndices(void *tikiPtr, int meshIndex, int surfIndex,
@@ -315,6 +314,15 @@ extern "C" {
     void  Godot_Renderer_GetEntitySurfaces(int index,
                                            unsigned char *out_surfaces,
                                            int *out_skinNum);
+
+    // TIKI animation surface state — computes cumulative NODRAW from client
+    // frame commands for the entity's current animation pose.
+    void  Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
+                                              const void *frameInfoRaw,
+                                              unsigned char *outSurfaces);
+
+    // TIKI name accessor — returns dtiki_t->name for diagnostics.
+    const char *Godot_TIKI_GetName(void *tikiPtr);
 
     // Model/Shadow accessors
     float Godot_Renderer_GetEntityShadowPlane(int index);
@@ -2981,7 +2989,30 @@ void MoHAARunner::update_entities() {
 
 
 
-        // RF_THIRD_PERSON    (0x0001): local player body — not culled here (no mirrors in our renderer)
+        // RF_THIRD_PERSON    (0x0001): local player body — invisible in the primary view (no portals).
+        // The real renderer (tr_model.cpp::R_AddSkelSurfaces) uses personalModel = RF_THIRD_PERSON &&
+        // !isPortal to skip adding surfaces for the local player body, preventing the player from
+        // seeing their own body in first-person.  We replicate this by hiding these entities here.
+        if (renderfx & 0x0001) {
+#ifndef NDEBUG
+            // One-shot diagnostic: log the first 5 RF_THIRD_PERSON entities
+            // suppressed so we can verify the fix is working.
+            {
+                static int s_tp_logged = 0;
+                if (s_tp_logged < 5) {
+                    s_tp_logged++;
+                    const char *nm = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(
+                        String("[MoHAA][RF_THIRD_PERSON] hiding ent=") + String::num_int64(entityNumber) +
+                        " hModel=" + String::num_int64(hModel) +
+                        " name=" + String(nm ? nm : "?") +
+                        " renderfx=0x" + String::num_int64(renderfx, 16));
+                }
+            }
+#endif
+            mi->set_visible(false);
+            continue;
+        }
         // RF_FIRST_PERSON   (0x0002): view weapon — route to weapon SubViewport
         // RF_DEPTHHACK      (0x0004): view weapon depth hack — route to weapon SubViewport
         // RF_LIGHTING_ORIGIN (0x0080): use refEntity->lightingOrigin for light sampling (q_shared.h)
@@ -3390,12 +3421,63 @@ void MoHAARunner::update_entities() {
         bool is_first_person = (renderfx & 0x02) != 0;  // RF_FIRST_PERSON
         bool is_depthhack    = (renderfx & 0x04) != 0;  // RF_DEPTHHACK
 
+        // ── FPS viewmodel per-frame diagnostic (temporary) ──
+        // Logs the exact code path taken for first-person entities for
+        // the first 600 frames so we can diagnose flickering.
+        static int s_fps_diag_frame = 0;
+        bool fps_diag = (is_first_person && s_fps_diag_frame < 600);
+
         int entCustomShader = 0;
         Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &entCustomShader);
 
         unsigned char ent_surfaces[32] = {};
         int ent_skinNum = 0;
         Godot_Renderer_GetEntitySurfaces(i, ent_surfaces, &ent_skinNum);
+
+        // Compute cumulative surface NODRAW from TIKI animation CLIENT-block
+        // frame commands.  Applies to ALL entity types including first-person
+        // weapon entities (which inherit RF_FIRST_PERSON from the player but
+        // still need client-block surface state for clip +nodraw etc.).
+        //
+        // Server-block surface commands are already in ent_surfaces[] from
+        // entityState_t.surfaces[] (networked from server).  This only adds
+        // client-block commands that the cgame silently drops.
+        {
+            void *tiki_for_surf = nullptr;
+            alignas(8) char fi_for_surf[256];
+            if (Godot_Renderer_GetEntityAnim(i, &tiki_for_surf, nullptr,
+                                              fi_for_surf, nullptr, nullptr,
+                                              nullptr, nullptr) && tiki_for_surf)
+            {
+                unsigned char tiki_surfaces[32] = {};
+                Godot_TIKI_ComputeAnimSurfaceState(tiki_for_surf,
+                                                    fi_for_surf, tiki_surfaces);
+
+                // TEMPORARY DIAGNOSTIC: log when surface state changes
+                // for first-person weapon entities
+                if (is_first_person || is_depthhack) {
+                    bool has_nodraw = false;
+                    for (int si = 0; si < 32; si++) {
+                        if (tiki_surfaces[si] & 4) { has_nodraw = true; break; }
+                    }
+                    static bool s_last_nodraw = false;
+                    static int s_diag_count = 0;
+                    if (has_nodraw != s_last_nodraw && s_diag_count < 50) {
+                        s_last_nodraw = has_nodraw;
+                        s_diag_count++;
+                        const char *tiki_name = Godot_TIKI_GetName(tiki_for_surf);
+                        UtilityFunctions::print(String("[SURF-DIAG] FP entity ") +
+                            String::num_int64(i) + " tiki=" +
+                            String(tiki_name ? tiki_name : "NULL") +
+                            " nodraw=" + String(has_nodraw ? "YES" : "no"));
+                    }
+                }
+
+                for (int si = 0; si < 32; si++) {
+                    ent_surfaces[si] |= tiki_surfaces[si];
+                }
+            }
+        }
 
         uint32_t surf_hash = 2166136261u;
         for (int si = 0; si < 32; si++) {
@@ -3474,6 +3556,7 @@ void MoHAARunner::update_entities() {
                 auto &entry = mat_cache[mat_key];
                 auto &mats = entry.mats;
                 auto &flat_indices = entry.flat_surf_idx;
+                auto &surf_names = entry.surf_names;
 
                 // Enumerate surfaces from TIKI with skinNum-aware shader selection.
                 // Mirrors tr_model.cpp::R_AddSkelSurfaces: shader slot = skinNum + (bsurf & 3).
@@ -3491,9 +3574,10 @@ void MoHAARunner::update_entities() {
                             int sc = Godot_Skel_GetSurfaceCount(tiki_for_mats, m);
                             for (int s = 0; s < sc; s++, flat_idx++) {
                                 int nv = 0, nt = 0;
+                                char surf_name[64] = {0};
                                 char sh[64] = {0};
                                 Godot_Skel_GetSurfaceInfo(tiki_for_mats, m, s,
-                                    &nv, &nt, nullptr, 0, nullptr, 0);
+                                    &nv, &nt, surf_name, sizeof(surf_name), nullptr, 0);
                                 if (nv > 0 && nt > 0) {
                                     // Resolve skin slot: skinNum + per-surface variant bits (0-3)
                                     int bsurf_bits = (flat_idx < 32) ? (ent_surfaces[flat_idx] & 3) : 0;
@@ -3502,6 +3586,7 @@ void MoHAARunner::update_entities() {
                                         iShaderNum, sh, sizeof(sh));
                                     surf_shader_names.push_back(String(sh));
                                     flat_indices.push_back(flat_idx);
+                                    surf_names.push_back(String(surf_name));
                                     surf_total++;
                                 }
                             }
@@ -3512,6 +3597,7 @@ void MoHAARunner::update_entities() {
                         for (int s = 0; s < surf_total; s++) {
                             surf_shader_names.push_back(cached->surfaces[s].shader_name);
                             flat_indices.push_back(s);
+                            surf_names.push_back(String());
                         }
                     }
                 }
@@ -3610,6 +3696,40 @@ void MoHAARunner::update_entities() {
 
             Ref<ArrayMesh> skinned_mesh;
 
+            // ── FPS stale cache fallback ──
+            // When has_anim is false (ge->tiki intermittently NULL) or
+            // tikiPtr is NULL, the skinning block below is skipped entirely.
+            // FPS viewmodel TIKIs are dynamically registered by cgame and
+            // never in GodotSkelModelCache (no cached bind-pose).  Without
+            // this fallback the entity hits the "no mesh" hide path and the
+            // hands flicker.  Reuse the last successfully skinned mesh from
+            // skel_mesh_cache so the player always sees their hands.
+            int fps_entNum = 0;
+            if ((!has_anim || !tikiPtr) && is_first_person) {
+                Godot_Renderer_GetEntityAnim(i, nullptr, &fps_entNum,
+                    nullptr, nullptr, nullptr, nullptr, nullptr);
+                if (fps_entNum == 0) {
+                    // Fallback: read entNum from entity buffer directly
+                    fps_entNum = entityNumber;
+                }
+                auto stale_it = skel_mesh_cache.find(fps_entNum);
+                if (stale_it != skel_mesh_cache.end() &&
+                    stale_it->second.hModel == hModel &&
+                    stale_it->second.mesh.is_valid() &&
+                    stale_it->second.mesh->get_surface_count() > 0) {
+                    skinned_mesh = stale_it->second.mesh;
+                    if (fps_diag) {
+                        s_fps_diag_frame++;
+                        UtilityFunctions::print(
+                            String("[FPS-DIAG] STALE-FALLBACK idx=") + String::num_int64(i) +
+                            " entNum=" + String::num_int64(fps_entNum) +
+                            " hasAnim=" + String(has_anim ? "Y" : "N") +
+                            " tikiPtr=" + String(tikiPtr ? "Y" : "N") +
+                            " surf=" + String::num_int64(skinned_mesh->get_surface_count()));
+                    }
+                }
+            }
+
             if (has_anim && tikiPtr) {
                 // Phase 60: Compute FNV-1a hash of animation state to
                 // skip mesh rebuild when the pose hasn't changed.
@@ -3638,6 +3758,7 @@ void MoHAARunner::update_entities() {
                 if (!skip_cache) {
                     auto cache_it = skel_mesh_cache.find(entNum);
                     if (cache_it != skel_mesh_cache.end() &&
+                        cache_it->second.hModel == hModel &&
                         cache_it->second.anim_hash == anim_hash &&
                         cache_it->second.mesh != nullptr) {
                         skinned_mesh = cache_it->second.mesh;
@@ -3857,13 +3978,16 @@ void MoHAARunner::update_entities() {
                     if (!skip_cache && skinned_mesh.is_valid() && skinned_mesh->get_surface_count() > 0) {
                         auto &entry = skel_mesh_cache[entNum];
                         entry.anim_hash = anim_hash;
+                        entry.hModel = hModel;
                         entry.mesh = skinned_mesh;
                         entry.mesh_surfaces = skinned_mesh->get_surface_count();
                     } else if (!skip_cache && (!skinned_mesh.is_valid() || skinned_mesh->get_surface_count() == 0)) {
                         // PrepareBones failed or produced empty mesh — reuse
                         // the stale cache entry rather than hiding the entity.
                         auto stale_it = skel_mesh_cache.find(entNum);
-                        if (stale_it != skel_mesh_cache.end() && stale_it->second.mesh != nullptr) {
+                        if (stale_it != skel_mesh_cache.end() &&
+                            stale_it->second.hModel == hModel &&
+                            stale_it->second.mesh != nullptr) {
                             skinned_mesh = stale_it->second.mesh;
                         }
                     }
@@ -3877,6 +4001,18 @@ void MoHAARunner::update_entities() {
                 skinned_mesh->get_surface_count() > 0) {
                 mi->set_mesh(skinned_mesh);
                 mesh_changed = true;
+
+                if (fps_diag) {
+                    s_fps_diag_frame++;
+                    const char *nm = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(
+                        String("[FPS-DIAG] SKINNED idx=") + String::num_int64(i) +
+                        " entNum=" + String::num_int64(entNum) +
+                        " hModel=" + String::num_int64(hModel) +
+                        " name=" + String(nm ? nm : "?") +
+                        " surf=" + String::num_int64(skinned_mesh->get_surface_count()) +
+                        " renderfx=0x" + String::num_int64(renderfx, 16));
+                }
 
                 static bool logged_skin = false;
                 if (!logged_skin) {
@@ -3899,59 +4035,61 @@ void MoHAARunner::update_entities() {
                     mesh_changed = true;
                 }
             } else {
-                // No mesh available — parity with OpenMOHAA: do not render
-                {
-                    static std::unordered_map<int, int> s_no_mesh_log;
-                    if (s_no_mesh_log[hModel] < 3) {
-                        s_no_mesh_log[hModel]++;
+                // No mesh available.
+                // For first-person entities: keep the existing mesh on the
+                // MeshInstance3D rather than hiding.  This prevents flickering
+                // when ge->tiki is transiently NULL (causing has_anim=false)
+                // or PrepareBones fails on a single frame.  The player must
+                // always see their hands — one frame of stale animation is
+                // imperceptible.
+                if (is_first_person && mi->get_mesh().is_valid() &&
+                    mi->get_mesh()->get_surface_count() > 0) {
+                    // Keep existing mesh visible — do NOT hide or continue.
+                    // mesh_changed stays false; materials/transform still update.
+                    if (fps_diag) {
+                        s_fps_diag_frame++;
+                        UtilityFunctions::print(
+                            String("[FPS-DIAG] KEEP-EXISTING idx=") + String::num_int64(i) +
+                            " entNum=" + String::num_int64(entNum) +
+                            " hModel=" + String::num_int64(hModel) +
+                            " hasAnim=" + String(has_anim ? "Y" : "N") +
+                            " renderfx=0x" + String::num_int64(renderfx, 16));
+                    }
+                } else {
+                    // Non-FPS entity or no existing mesh — hide as before.
+                    if (fps_diag) {
+                        s_fps_diag_frame++;
                         const char *nm = Godot_Model_GetName(hModel);
                         void *tp = Godot_Model_GetTikiPtr(hModel);
                         UtilityFunctions::print(
-                            String("[MoHAA][NO-MESH] hModel=") + String::num_int64(hModel) +
+                            String("[FPS-DIAG] NO-MESH idx=") + String::num_int64(i) +
+                            " entNum=" + String::num_int64(entNum) +
+                            " hModel=" + String::num_int64(hModel) +
                             " name=" + String(nm ? nm : "?") +
                             " hasAnim=" + String(has_anim ? "Y" : "N") +
                             " tikiPtr=" + String(tp ? "Y" : "N") +
-                            " modType=" + String::num_int64(modType) +
-                            " entNum=" + String::num_int64(entityNumber));
+                            " cached=" + String((cached && !cached->lod_meshes.empty()) ? "Y" : "N") +
+                            " renderfx=0x" + String::num_int64(renderfx, 16));
                     }
+                    {
+                        static std::unordered_map<int, int> s_no_mesh_log;
+                        if (s_no_mesh_log[hModel] < 5) {
+                            s_no_mesh_log[hModel]++;
+                            const char *nm = Godot_Model_GetName(hModel);
+                            void *tp = Godot_Model_GetTikiPtr(hModel);
+                            UtilityFunctions::print(
+                                String("[MoHAA][NO-MESH] hModel=") + String::num_int64(hModel) +
+                                " name=" + String(nm ? nm : "?") +
+                                " hasAnim=" + String(has_anim ? "Y" : "N") +
+                                " tikiPtr=" + String(tp ? "Y" : "N") +
+                                " modType=" + String::num_int64(modType) +
+                                " entNum=" + String::num_int64(entityNumber) +
+                                " renderfx=0x" + String::num_int64(renderfx, 16));
+                        }
+                    }
+                    mi->set_visible(false);
+                    continue;
                 }
-
-#ifdef GODOT_DEBUG_WHITE_ENTITIES
-                // DEBUG: show a tiny orange box at NO-MESH entity positions
-                // so we can see the entity is present even with no TIKI mesh.
-                {
-                    Ref<ArrayMesh> dbg_box;
-                    dbg_box.instantiate();
-                    float hs = 0.15f;  // half-size in metres
-                    PackedVector3Array bv;
-                    bv.resize(8);
-                    bv.set(0, Vector3(-hs,-hs,-hs)); bv.set(1, Vector3( hs,-hs,-hs));
-                    bv.set(2, Vector3(-hs, hs,-hs)); bv.set(3, Vector3( hs, hs,-hs));
-                    bv.set(4, Vector3(-hs,-hs, hs)); bv.set(5, Vector3( hs,-hs, hs));
-                    bv.set(6, Vector3(-hs, hs, hs)); bv.set(7, Vector3( hs, hs, hs));
-                    PackedInt32Array bi;
-                    bi.resize(36);
-                    int faces[36] = {0,1,3,0,3,2, 4,6,7,4,7,5,
-                                     0,4,5,0,5,1, 2,3,7,2,7,6,
-                                     0,2,6,0,6,4, 1,5,7,1,7,3};
-                    for (int bi2=0;bi2<36;bi2++) bi.set(bi2, faces[bi2]);
-                    Array barr; barr.resize(Mesh::ARRAY_MAX);
-                    barr[Mesh::ARRAY_VERTEX] = bv;
-                    barr[Mesh::ARRAY_INDEX]  = bi;
-                    dbg_box->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, barr);
-                    Ref<StandardMaterial3D> bmat; bmat.instantiate();
-                    bmat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-                    bmat->set_albedo(Color(1.0f, 0.4f, 0.0f, 1.0f));  // orange
-                    bmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-                    dbg_box->surface_set_material(0, bmat);
-                    mi->set_mesh(dbg_box);
-                    // Don't continue — fall through to apply transform and set_visible(true)
-                    mesh_changed = true;
-                }
-#else
-                mi->set_visible(false);
-                continue; // Skip material application and drawing
-#endif
             }
 
             // Apply cached materials (after set_mesh which clears overrides).
@@ -3992,11 +4130,11 @@ void MoHAARunner::update_entities() {
                 }
                 // Apply MDL_SURFACE_NODRAW (TIKI_SURF_NODRAW = bit 2) per-entity hide flag.
                 // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
-                // Skip for RF_FIRST_PERSON entities: the cgame may incorrectly set
-                // NODRAW on all FPS surfaces due to a state sync issue in our
-                // GDExtension environment (EF_UNARMED or STAT flags stuck).
-                // Zoom-based hiding is handled below via Godot_Client_GetPlayerZoom().
-                if (!is_first_person) {
+                // The NODRAW state comes from both the server's entity surfaces
+                // (networked in entityState_t.surfaces[]) and from client-side TIKI
+                // animation parsing via Godot_TIKI_ComputeAnimSurfaceState().  Both
+                // sources are merged into ent_surfaces[] before the cache key hash.
+                {
                     if (!nodraw_surface_material.is_valid()) {
                         nodraw_surface_material.instantiate();
                         nodraw_surface_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
@@ -4004,10 +4142,50 @@ void MoHAARunner::update_entities() {
                         nodraw_surface_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
                         nodraw_surface_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
                     }
+
+                    int nodraw_flagged = 0;
+                    int nodraw_total = 0;
                     for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
                         int fi = entry.flat_surf_idx[s];
+                        if (fi >= 0 && fi < 32) {
+                            nodraw_total++;
+                            if (ent_surfaces[fi] & 4) {
+                                nodraw_flagged++;
+                            }
+                        }
+                    }
+
+                    const bool fp_all_nodraw = is_first_person &&
+                        nodraw_total > 0 && nodraw_flagged == nodraw_total;
+
+                    for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
+                        int fi = entry.flat_surf_idx[s];
+                        if (fp_all_nodraw) {
+                            continue;
+                        }
                         if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
                             mi->set_surface_override_material(s, nodraw_surface_material);
+                        }
+                    }
+
+                    // First-person hand variants: enforce exact surface visibility
+                    // from entity surface flags by surface name. This avoids flat
+                    // index drift causing both "lefthand" and "garandhand" to render.
+                    if (is_first_person) {
+                        void *tiki_for_hands = Godot_Model_GetTikiPtr(hModel);
+                        int left_num = Godot_Skel_SurfaceNameToNum(tiki_for_hands, "lefthand");
+                        int garand_num = Godot_Skel_SurfaceNameToNum(tiki_for_hands, "garandhand");
+
+                        const bool left_nodraw = (left_num >= 0 && left_num < 32 && (ent_surfaces[left_num] & 4));
+                        const bool garand_nodraw = (garand_num >= 0 && garand_num < 32 && (ent_surfaces[garand_num] & 4));
+
+                        for (int s = 0; s < (int)entry.surf_names.size() && s < sc; s++) {
+                            const String &sn = entry.surf_names[s];
+                            if (sn == String("lefthand") && left_nodraw) {
+                                mi->set_surface_override_material(s, nodraw_surface_material);
+                            } else if (sn == String("garandhand") && garand_nodraw) {
+                                mi->set_surface_override_material(s, nodraw_surface_material);
+                            }
                         }
                     }
                 }
@@ -4467,172 +4645,64 @@ void MoHAARunner::update_entities() {
                 " visible=" + String::num_int64(n_visible));
 
             // ── Material + position diagnostic for non-FP TIKI entities ──
-            // Collect all TIKI entities, classify by model path, then print the
-            // nearest non-noise entries first (humans/items/etc; skip player/weapon/fx/vehicle).
+            // Dump first 5 TIKI entities' world position, light_mul and
+            // first surface albedo to help diagnose invisibility issues.
             {
                 Vector3 cam_pos = camera ? camera->get_global_position() : Vector3();
-
-                struct MatDiagEntry {
-                    float dist;
-                    int idx;
-                    int hmodel;
-                    int renderfx;
-                    bool is_player;
-                    bool is_player_american;
-                    bool is_player_other;
-                    bool is_weapon;
-                    bool is_fx;
-                    bool is_vehicle;
-                    bool is_human;
-                    String model_name;
-                };
-
-                std::vector<MatDiagEntry> diag_all;
-                diag_all.reserve(ent_count);
-
-                for (int di = 0; di < ent_count; di++) {
-                    float dor[3], dax[9], dsc = 1.0f;
-                    int dhm = 0, den = 0, drf = 0;
-                    unsigned char drgba_tmp[4] = {255,255,255,255};
-                    int drt = Godot_Renderer_GetEntity(di, dor, dax, &dsc, &dhm, &den, drgba_tmp, &drf);
-                    if (drt != 0 || dhm <= 0) continue;
-                    if (Godot_Model_GetType(dhm) != 2) continue;  // TIKI only (GR_MOD_TIKI=2)
-                    if (drf & 0x06) continue; // RF_FIRST_PERSON(0x02) | RF_DEPTHHACK(0x04)
-
-                    const char *nm = Godot_Model_GetName(dhm);
-                    String model_name = String(nm ? nm : "");
-                    bool is_player  = model_name.begins_with("models/player/");
-                    bool is_player_american = (model_name == "models/player/american_army.tik");
-                    bool is_player_other = is_player && !is_player_american;
-                    bool is_weapon  = model_name.begins_with("models/weapons/");
-                    bool is_fx      = model_name.begins_with("models/fx/");
-                    bool is_vehicle = model_name.begins_with("models/vehicles/");
-                    bool is_human   = model_name.begins_with("models/human/");
-
-                    Vector3 dpos = id_to_godot_position(dor[0], dor[1], dor[2]);
-                    MatDiagEntry e;
-                    e.dist = dpos.distance_to(cam_pos);
-                    e.idx = di;
-                    e.hmodel = dhm;
-                    e.renderfx = drf;
-                    e.is_player = is_player;
-                    e.is_player_american = is_player_american;
-                    e.is_player_other = is_player_other;
-                    e.is_weapon = is_weapon;
-                    e.is_fx = is_fx;
-                    e.is_vehicle = is_vehicle;
-                    e.is_human = is_human;
-                    e.model_name = model_name;
-                    diag_all.push_back(e);
-                }
-
-                std::sort(diag_all.begin(), diag_all.end(), [](const MatDiagEntry &a, const MatDiagEntry &b) {
-                    return a.dist < b.dist;
-                });
-
-                int count_human = 0, count_player = 0, count_player_american = 0, count_player_other = 0;
-                int count_weapon = 0, count_fx = 0, count_vehicle = 0, count_other = 0;
-                std::vector<int> focus_idxs;
-                focus_idxs.reserve(diag_all.size());
-                std::unordered_map<std::string, int> model_hist;
-                for (const MatDiagEntry &e : diag_all) {
-                    if (e.is_human) count_human++;
-                    else if (e.is_player) count_player++;
-                    else if (e.is_weapon) count_weapon++;
-                    else if (e.is_fx) count_fx++;
-                    else if (e.is_vehicle) count_vehicle++;
-                    else count_other++;
-
-                    if (e.is_player_american) count_player_american++;
-                    if (e.is_player_other) count_player_other++;
-
-                    CharString mcs = e.model_name.ascii();
-                    model_hist[std::string(mcs.get_data())]++;
-
-                    // Keep non-local player variants in focus — these are potential AI actors.
-                    if (!e.is_player_american && !e.is_weapon && !e.is_fx && !e.is_vehicle) {
-                        focus_idxs.push_back(e.idx);
-                    }
-                }
-
-                UtilityFunctions::print(
-                    String("[MoHAA][MAT-DIAG-SUM] tikiFiltered=") + String::num_int64((int)diag_all.size()) +
-                    " human=" + String::num_int64(count_human) +
-                    " player=" + String::num_int64(count_player) +
-                    " playerAmerican=" + String::num_int64(count_player_american) +
-                    " playerOther=" + String::num_int64(count_player_other) +
-                    " weapon=" + String::num_int64(count_weapon) +
-                    " fx=" + String::num_int64(count_fx) +
-                    " vehicle=" + String::num_int64(count_vehicle) +
-                    " other=" + String::num_int64(count_other));
-
-                // Emit a compact model histogram (top 8 by count) to confirm whether
-                // enemy/ally actor model paths are actually being submitted.
-                {
-                    std::vector<std::pair<std::string,int>> hist;
-                    hist.reserve(model_hist.size());
-                    for (const auto &kv : model_hist) {
-                        hist.push_back(kv);
-                    }
-                    std::sort(hist.begin(), hist.end(), [](const auto &a, const auto &b) {
-                        if (a.second != b.second) return a.second > b.second;
-                        return a.first < b.first;
-                    });
-
-                    String hist_line("[MoHAA][MAT-DIAG-MODELS]");
-                    int hist_n = (int)hist.size();
-                    if (hist_n > 8) hist_n = 8;
-                    for (int hi = 0; hi < hist_n; hi++) {
-                        hist_line += String(" ") + String(hist[hi].first.c_str()) + String("=") + String::num_int64(hist[hi].second);
-                    }
-                    UtilityFunctions::print(hist_line);
-                }
-
-                bool fallback_to_all = focus_idxs.empty();
-                if (fallback_to_all) {
-                    for (const MatDiagEntry &e : diag_all) {
-                        focus_idxs.push_back(e.idx);
-                    }
-                }
-
-                // Print nearest 10 from focus set (or full set when focus is empty)
-                int print_count = (int)focus_idxs.size();
-                if (print_count > 10) print_count = 10;
-                for (int pi = 0; pi < print_count; pi++) {
-                    int di = focus_idxs[pi];
+                int mat_diag_count = 0;
+                for (int di = 0; di < ent_count && mat_diag_count < 5; di++) {
                     float dor[3], dax[9], dsc = 1.0f;
                     int dhm = 0, den = 0, drf = 0;
                     unsigned char drgba[4] = {255,255,255,255};
-                    Godot_Renderer_GetEntity(di, dor, dax, &dsc, &dhm, &den, drgba, &drf);
+                    int drt = Godot_Renderer_GetEntity(di, dor, dax, &dsc, &dhm, &den, drgba, &drf);
+                    if (drt != 0) continue;          // RT_MODEL only
+                    if (dhm <= 0) continue;
+                    if (Godot_Model_GetType(dhm) != 2) continue;  // TIKI only (GR_MOD_TIKI=2)
+                    bool dfp = (drf & 0x02) != 0;
+                    if (dfp) continue;               // skip first-person
 
+                    mat_diag_count++;
                     const char *dnm = Godot_Model_GetName(dhm);
                     Vector3 dpos = id_to_godot_position(dor[0], dor[1], dor[2]);
                     float dist = dpos.distance_to(cam_pos);
 
-                    // Read first-surface material (albedo, transparency, depth draw)
+                    // Read first surface material override
                     Color albedo(0, 0, 0, 0);
                     bool has_mat = false;
-                    int transp_mode = -1, depth_draw = -1, surf_count = 0;
                     if (di < (int)entity_meshes.size() && entity_meshes[di]->get_mesh().is_valid()) {
-                        surf_count = entity_meshes[di]->get_mesh()->get_surface_count();
                         Ref<Material> m0 = entity_meshes[di]->get_surface_override_material(0);
-                        if (m0.is_null()) m0 = entity_meshes[di]->get_mesh()->surface_get_material(0);
+                        if (m0.is_null()) {
+                            m0 = entity_meshes[di]->get_mesh()->surface_get_material(0);
+                        }
                         Ref<StandardMaterial3D> sm0 = m0;
                         if (sm0.is_valid()) {
                             albedo = sm0->get_albedo();
-                            transp_mode = (int)sm0->get_transparency();
-                            depth_draw  = (int)sm0->get_depth_draw_mode();
                             has_mat = true;
                         }
                     }
 
+                    // Sample current light_mul for this entity
                     float dlr = 1.0f, dlg = 1.0f, dlb = 1.0f;
                     Godot_EntityGridLighting(dor, &dlr, &dlg, &dlb);
 
+                    // Also report transparency mode and depth draw mode of the material
+                    int transp_mode = -1;
+                    int depth_draw = -1;
+                    if (has_mat) {
+                        Ref<Material> m0x = entity_meshes[di]->get_surface_override_material(0);
+                        if (m0x.is_null()) m0x = entity_meshes[di]->get_mesh()->surface_get_material(0);
+                        Ref<StandardMaterial3D> sm0x = m0x;
+                        if (sm0x.is_valid()) {
+                            transp_mode = (int)sm0x->get_transparency();
+                            depth_draw  = (int)sm0x->get_depth_draw_mode();
+                        }
+                    }
                     UtilityFunctions::print(
                         String("[MoHAA][MAT-DIAG] idx=") + String::num_int64(di) +
                         " name=" + String(dnm ? dnm : "?") +
-                        " src=" + String(fallback_to_all ? "fallback-all" : "focus") +
+                        " pos=(" + String::num_real(dpos.x, 2) + "," +
+                                   String::num_real(dpos.y, 2) + "," +
+                                   String::num_real(dpos.z, 2) + ")" +
                         " dist=" + String::num_real(dist, 1) +
                         " lightMul=(" + String::num_real(dlr, 3) + "," +
                                         String::num_real(dlg, 3) + "," +
@@ -4643,7 +4713,6 @@ void MoHAARunner::update_entities() {
                                       String::num_real(albedo.a, 3) + ")" +
                         " transp=" + String::num_int64(transp_mode) +
                         " depthDraw=" + String::num_int64(depth_draw) +
-                        " surfs=" + String::num_int64(surf_count) +
                         " hasMat=" + String(has_mat ? "Y" : "N") +
                         " rgba=(" + String::num_int64(drgba[0]) + "," +
                                     String::num_int64(drgba[1]) + "," +
@@ -6941,25 +7010,6 @@ void MoHAARunner::update_2d_overlay() {
                             /* All other blend combos (including SRC_ALPHA/ONE_MINUS_SRC_ALPHA)
                              * stay as BLEND_MIX — standard alpha blend. */
                             break;
-                        }
-                    }
-                }
-
-                /* Texture-alpha parity for implicit/UI shaders:
-                 * If blend resolved to MIX but the loaded texture has no
-                 * meaningful alpha, collapse to OPAQUE for exact opaque
-                 * output.  This prevents washed-out rendering of opaque
-                 * images (e.g. map preview levelshots) that get LIGHTMAP_2D's
-                 * default SRC_ALPHA/ONE_MINUS_SRC_ALPHA blend despite having
-                 * no transparency.  Conversely, if the shader says OPAQUE
-                 * but the texture does have alpha, keep MIX so cutout/soft
-                 * edges render correctly (loadingbar_border, overlays). */
-                {
-                    auto ha_it = shader_texture_has_alpha.find(shader);
-                    if (ha_it != shader_texture_has_alpha.end()) {
-                        bool tex_has_alpha = ha_it->second;
-                        if (draw_blend == BLEND_MIX && !tex_has_alpha) {
-                            draw_blend = BLEND_OPAQUE;
                         }
                     }
                 }

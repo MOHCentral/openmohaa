@@ -15,6 +15,19 @@
 #include "../qcommon/q_shared.h"
 #include "../tiki/tiki_shared.h"
 #include "../tiki/tiki_skel.h"
+#include "../corepp/tiki.h"
+
+/* Functions used by Godot_TIKI_ComputeAnimSurfaceState — declared here
+ * to avoid pulling in headers with unresolved forward types (dloaddef_t). */
+extern "C" {
+    float    TIKI_Anim_Frametime(dtiki_t *pmdl, int animnum);
+    int      TIKI_Anim_NumFrames(dtiki_t *pmdl, int animnum);
+    int      TIKI_Surface_NameToNum(dtiki_t *pmdl, const char *name);
+    qboolean TIKI_Frame_Commands_Server(dtiki_t *pmdl, int animnum,
+                                         int framenum, tiki_cmd_t *tiki_cmd);
+    qboolean TIKI_Frame_Commands_Client(dtiki_t *pmdl, int animnum,
+                                         int framenum, tiki_cmd_t *tiki_cmd);
+}
 
 /* ── Static helper: walk the pSurfaces linked list to surface N ── */
 static skelSurfaceGame_t *GetSkelSurface(skelHeaderGame_t *skelmodel, int surfIndex)
@@ -171,6 +184,14 @@ int Godot_Skel_GetSurfaceShaderForSkin(void *tikiPtr, int meshIndex, int surfInd
         Q_strncpyz(shaderName, dsurf->shader[iShaderNum], shaderNameLen);
 
     return 1;
+}
+
+int Godot_Skel_SurfaceNameToNum(void *tikiPtr, const char *surfaceName)
+{
+    dtiki_t *tiki = (dtiki_t *)tikiPtr;
+    if (!tiki || !surfaceName || !surfaceName[0])
+        return -1;
+    return TIKI_Surface_NameToNum(tiki, surfaceName);
 }
 
 /* Copy bind-pose vertex data into caller-provided flat arrays.
@@ -767,6 +788,148 @@ int Godot_Skel_GetCollapseData(void *tikiPtr, int meshIndex, int surfIndex,
         if (outCollapseIndex) outCollapseIndex[i]  = (int)surf->pCollapseIndex[i];
     }
     return 1;
+}
+
+/* ── Compute cumulative surface NODRAW state from TIKI animation server
+ *    frame commands.  Called by MoHAARunner each frame for entities whose
+ *    server-side surface state may not have reached the renderer bridge
+ *    (e.g. first-person viewmodel weapons).
+ *
+ *    For each active animation slot (weight > 0), queries the TIKI
+ *    animation's server-block frame commands from ENTRY through the
+ *    entity's current frame.  "surface <name> +nodraw / -nodraw"
+ *    commands are applied cumulatively so the final state reflects all
+ *    commands up to the current point in the animation.
+ *
+ *    outSurfaces must point to a 32-byte buffer (MAX_MODEL_SURFACES).
+ *    Callers should OR the result with the entity's ent_surfaces[] so
+ *    both server-set and TIKI-computed NODRAW flags take effect.
+ */
+static void ApplySurfaceCmdsFromTikiFrame(dtiki_t *tiki,
+                                           const tiki_cmd_t *cmds,
+                                           unsigned char *outSurfaces)
+{
+    for (int c = 0; c < cmds->num_cmds; c++) {
+        const tiki_singlecmd_t *sc = &cmds->cmds[c];
+        if (sc->num_args < 3) continue;
+        if (Q_stricmp(sc->args[0], "surface") != 0) continue;
+
+        int surfNum = TIKI_Surface_NameToNum(tiki, sc->args[1]);
+        if (surfNum < 0 || surfNum >= MAX_MODEL_SURFACES) continue;
+
+        for (int a = 2; a < sc->num_args; a++) {
+            const char *param = sc->args[a];
+            if (!param || !param[0]) continue;
+
+            int action;
+            const char *flag;
+            if (param[0] == '+') {
+                action = 1; flag = param + 1;
+            } else if (param[0] == '-') {
+                action = 0; flag = param + 1;
+            } else {
+                action = 1; flag = param;
+            }
+
+            if (Q_stricmp(flag, "nodraw") == 0) {
+                if (action)
+                    outSurfaces[surfNum] |= MDL_SURFACE_NODRAW;
+                else
+                    outSurfaces[surfNum] &= ~MDL_SURFACE_NODRAW;
+            }
+        }
+    }
+}
+
+const char *Godot_TIKI_GetName(void *tikiPtr)
+{
+    dtiki_t *tiki = (dtiki_t *)tikiPtr;
+    if (!tiki) return NULL;
+    return tiki->name;
+}
+
+void Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
+                                         const void *frameInfoRaw,
+                                         unsigned char *outSurfaces)
+{
+    dtiki_t *tiki = (dtiki_t *)tikiPtr;
+    if (!tiki || !tiki->a || !frameInfoRaw || !outSurfaces) return;
+
+    memset(outSurfaces, 0, MAX_MODEL_SURFACES);
+
+    const frameInfo_t *fi = (const frameInfo_t *)frameInfoRaw;
+    tiki_cmd_t cmds;
+
+    /* TEMPORARY DIAGNOSTIC: log first few calls per TIKI to see
+     * if client frame commands exist at all. */
+    static int s_diag_tiki_count = 0;
+
+    for (int slot = 0; slot < MAX_FRAMEINFOS; slot++) {
+        if (fi[slot].weight <= 0.0f) continue;
+
+        int animIndex = fi[slot].index;
+        if (animIndex < 0 || animIndex >= tiki->a->num_anims) continue;
+
+        /* Calculate current frame from time / frametime */
+        float frametime = TIKI_Anim_Frametime(tiki, animIndex);
+        int numFrames   = TIKI_Anim_NumFrames(tiki, animIndex);
+        int curFrame    = 0;
+        if (frametime > 0.0f) {
+            curFrame = (int)(fi[slot].time / frametime);
+            if (curFrame >= numFrames) curFrame = numFrames - 1;
+            if (curFrame < 0) curFrame = 0;
+        }
+
+        /* DIAGNOSTIC: check if this animation has ANY client commands */
+        if (s_diag_tiki_count < 30) {
+            dtikianimdef_t *panimdef = tiki->a->animdefs[animIndex];
+            int ncc = panimdef ? panimdef->num_client_cmds : -1;
+            int nsc = panimdef ? panimdef->num_server_cmds : -1;
+            /* Only log if the anim has surface-related commands */
+            if (ncc > 0 || nsc > 0) {
+                s_diag_tiki_count++;
+                Com_Printf("[SURF-DIAG] tiki=%s anim=%d slot=%d frame=%d/%d "
+                           "time=%.3f weight=%.2f ccmds=%d scmds=%d\n",
+                           tiki->name ? tiki->name : "NULL",
+                           animIndex, slot, curFrame, numFrames,
+                           fi[slot].time, fi[slot].weight, ncc, nsc);
+                /* Dump client command names */
+                for (int ci = 0; ci < ncc && ci < 5; ci++) {
+                    dtikicmd_t *pc = &panimdef->client_cmds[ci];
+                    Com_Printf("  client_cmd[%d] frame=%d cmd=%s\n",
+                               ci, pc->frame_num,
+                               (pc->num_args > 0 && pc->args[0]) ? pc->args[0] : "?");
+                }
+                for (int si2 = 0; si2 < nsc && si2 < 5; si2++) {
+                    dtikicmd_t *ps = &panimdef->server_cmds[si2];
+                    Com_Printf("  server_cmd[%d] frame=%d cmd=%s\n",
+                               si2, ps->frame_num,
+                               (ps->num_args > 0 && ps->args[0]) ? ps->args[0] : "?");
+                }
+            }
+        }
+
+        /* Process CLIENT-block ENTRY and per-frame commands only.
+         *
+         * Server-block surface commands are handled by Entity::SurfaceCommand()
+         * on the server side and networked to the client via
+         * entityState_t.surfaces[] — those are already captured in
+         * gr_entities[].surfaces[] by the stub renderer.  We must NOT
+         * duplicate them here or the timing of server state vs our local
+         * calculation can conflict, causing out-of-sync flickering.
+         *
+         * Client-block commands (weapon clip +nodraw during reload, etc.)
+         * are dispatched by CG_ProcessEntityCommands but silently dropped
+         * because the cgame has no event handler for "surface" events.
+         * This function fills that gap. */
+        if (TIKI_Frame_Commands_Client(tiki, animIndex, TIKI_FRAME_ENTRY, &cmds))
+            ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+
+        for (int f = 0; f <= curFrame; f++) {
+            if (TIKI_Frame_Commands_Client(tiki, animIndex, f, &cmds))
+                ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+        }
+    }
 }
 
 } /* extern "C" */

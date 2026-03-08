@@ -361,6 +361,7 @@ private:
     // Phase 60: Skeletal mesh caching by entity number + animation state hash
     struct SkelMeshCacheEntry {
         uint64_t anim_hash = 0;
+        int hModel = 0;
         int mesh_surfaces = 0;             // surface count as a lightweight mesh identity
         Ref<ArrayMesh> mesh;
     };
@@ -378,6 +379,7 @@ private:
     struct TikiMatSet {
         std::vector<Ref<StandardMaterial3D>> mats;
         std::vector<int> flat_surf_idx; // TIKI flat surface index per godot surface slot
+        std::vector<String> surf_names; // TIKI surface name per godot surface slot
     };
     std::unordered_map<uint64_t, TikiMatSet> tiki_mat_cache;
 
