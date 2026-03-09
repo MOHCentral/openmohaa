@@ -1,14 +1,41 @@
 #!/usr/bin/env python
 import os
+import subprocess
 import sys
 
 env = SConscript("../godot-cpp/SConstruct")
 
-# Prevent Linux shell argv overflows when archiving very large static libs
-# (notably godot-cpp) from long workspace paths.
-if env.get("platform") == "linux" and env.get("ARCOM"):
-    env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
-    env["ARCOM"] = "${TEMPFILE(ARCOM_POSIX)}"
+# Prevent Linux host shell argv overflows when archiving very large static libs
+# (notably godot-cpp) from long workspace paths. This must also apply to
+# Linux-hosted cross-builds (e.g. platform=macos with osxcross).
+if sys.platform.startswith("linux") and env.get("ARCOM"):
+    if env.get("platform") == "macos":
+        def _archive_in_chunks(target, source, env):
+            ar = env.subst("$AR")
+            arflags = env.subst("$ARFLAGS").split()
+            ranlib = env.subst("$RANLIB")
+            out = str(target[0])
+
+            if os.path.exists(out):
+                os.remove(out)
+
+            # cctools ar (osxcross) doesn't support @response files; archive
+            # incrementally to keep each subprocess argv below ARG_MAX.
+            chunk_size = 128
+            for i in range(0, len(source), chunk_size):
+                chunk = [str(s) for s in source[i:i + chunk_size]]
+                cmd = [ar] + arflags + [out] + chunk
+                subprocess.check_call(cmd)
+
+            if ranlib:
+                subprocess.check_call([ranlib, out])
+
+            return 0
+
+        env["ARCOM"] = _archive_in_chunks
+    else:
+        env["ARCOM_POSIX"] = env["ARCOM"].replace("$TARGET", "$TARGET.posix").replace("$SOURCES", "$SOURCES.posix")
+        env["ARCOM"] = "${TEMPFILE(ARCOM_POSIX)}"
 
 # ──────────────────────────────────────────────
 #  OpenMoHAA GDExtension Build — Full Client + Server
@@ -39,7 +66,8 @@ if env.get("platform") == "linux" and env.get("ARCOM"):
 
 env["symbols_visibility"] = "visible"
 env["debug_symbols"] = True
-env.Append(LINKFLAGS=["-Wl,--export-dynamic"])
+if env.get("platform") == "linux":
+    env.Append(LINKFLAGS=["-Wl,--export-dynamic"])
 
 env.Append(CPPPATH=[
     "code",
@@ -154,7 +182,7 @@ elif env["platform"] == "windows":
     sys_sources.append("code/sys/win_localization.cpp")
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "macos":
-    env.Append(CPPDEFINES=["__APPLE__", "MACOS_X"])
+    env.Append(CPPDEFINES=["__APPLE__", "MACOS_X", "_MACOSX", "_UNIX"])
     env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
     env.Append(CXXFLAGS=["-fexceptions", "-frtti"])
     sys_sources.append("code/sys/sys_unix.c")   # macOS uses POSIX sys layer
@@ -279,6 +307,13 @@ excluded_client_basenames = {
 def should_exclude(filepath):
     fp = str(filepath).lower().replace("\\", "/")
 
+    # GameSpy platform wrappers (gsPlatformThread/Util/Socket) include their
+    # platform implementation .c files directly. Building common/linux/*.c as
+    # standalone translation units causes duplicate symbols on non-Linux
+    # targets (and is redundant on Linux too).
+    if "code/gamespy/common/linux/" in fp:
+        return True
+
     # Old parser duplicates
     if fp.endswith(("code/parser/lex.yy.cpp", "code/parser/y.tab.cpp")):
         return True
@@ -349,7 +384,7 @@ elif env["platform"] == "web":
     ])
 elif env["platform"] == "macos":
     # macOS Mach-O linker uses -undefined dynamic_lookup instead of -z muldefs
-    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup"])
+    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
 elif env["platform"] == "windows":
     # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
     env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
@@ -421,14 +456,21 @@ if env["platform"] == "linux":
     cgame_env.Append(LINKFLAGS=["-z", "muldefs"])
     cgame_env.Append(LINKFLAGS=["-Wl,-Bsymbolic-functions"])
 elif env["platform"] == "macos":
-    cgame_env.Append(CPPDEFINES=["__APPLE__", "MACOS_X"])
+    cgame_env.Append(CPPDEFINES=["__APPLE__", "MACOS_X", "_MACOSX", "_UNIX"])
+    # Reuse the macOS toolchain selected by godot-cpp (native clang or osxcross).
+    for tool_var in ("CC", "CXX", "AR", "RANLIB", "AS", "SHLINK"):
+        if env.get(tool_var):
+            cgame_env[tool_var] = env[tool_var]
+    if env.get("ENV", {}).get("PATH"):
+        cgame_env["ENV"]["PATH"] = env["ENV"]["PATH"]
+    cgame_env["SHLIBSUFFIX"] = ".dylib"
     cgame_env.Append(CCFLAGS=[
         "-fPIC", "-g", "-O2",
         "-fvisibility=hidden",
     ])
     cgame_env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
     cgame_env.Append(CXXFLAGS=["-std=c++17", "-fexceptions", "-frtti"])
-    cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup"])
+    cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
 elif env["platform"] == "windows":
     cgame_env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
     cgame_env.Append(CCFLAGS=["/EHsc", "/O2"])
