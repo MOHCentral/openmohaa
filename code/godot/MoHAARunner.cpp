@@ -3429,19 +3429,14 @@ void MoHAARunner::update_entities() {
         int ent_skinNum = 0;
         Godot_Renderer_GetEntitySurfaces(i, ent_surfaces, &ent_skinNum);
 
-        // Surface NODRAW state comes entirely from the server via
-        // entityState_t.surfaces[] → cgame memcpy → refEntity_t.surfaces[]
-        // → gr_entities[].surfaces[] → ent_surfaces[].
+        // Surface NODRAW state comes from the server via
+        // entityState_t.surfaces[] → cgame → refEntity_t.surfaces[] →
+        // gr_entities[].surfaces[] → ent_surfaces[].
         //
-        // We do NOT locally compute TIKI animation surface commands:
-        //  - Server-block "surface <name> +/-nodraw" commands are already
-        //    processed by Entity::SurfaceCommand() on the server and
-        //    networked as persistent state in entityState_t.surfaces[].
-        //  - Client-block "surface" commands are silently dropped by cgame
-        //    (no event handler) and have no effect in the real engine.
-        //  - Local frame-based TIKI command replay has timing mismatches
-        //    with the server's authoritative state, causing flickering and
-        //    wrong surface visibility.
+        // This matches the real engine: R_AddSkelSurfaces reads
+        // refEntity_t.surfaces[] directly, with no local TIKI computation.
+        // One-snapshot latency (50ms at 20fps) is inherent and identical
+        // to vanilla MOHAA.
 
         uint32_t surf_hash = 2166136261u;
         for (int si = 0; si < 32; si++) {
@@ -3669,7 +3664,7 @@ void MoHAARunner::update_entities() {
             // hands flicker.  Reuse the last successfully skinned mesh from
             // skel_mesh_cache so the player always sees their hands.
             int fps_entNum = 0;
-            if ((!has_anim || !tikiPtr) && is_first_person) {
+            if ((!has_anim || !tikiPtr) && (is_first_person || is_depthhack)) {
                 Godot_Renderer_GetEntityAnim(i, nullptr, &fps_entNum,
                     nullptr, nullptr, nullptr, nullptr, nullptr);
                 if (fps_entNum == 0) {
@@ -3682,6 +3677,20 @@ void MoHAARunner::update_entities() {
                     stale_it->second.mesh.is_valid() &&
                     stale_it->second.mesh->get_surface_count() > 0) {
                     skinned_mesh = stale_it->second.mesh;
+                }
+                // Diagnostic: log when FPS stale cache is used
+                static int s_fps_stale_log = 0;
+                s_fps_stale_log++;
+                if (s_fps_stale_log % 120 == 1) {
+                    const char *nm = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(
+                        String("[FPS-STALE] slot=") + String::num_int64(i) +
+                        " entNum=" + String::num_int64(entityNumber) +
+                        " rfx=0x" + String::num_int64(renderfx, 16) +
+                        " hasAnim=" + String(has_anim ? "Y" : "N") +
+                        " tikiPtr=" + String(tikiPtr ? "Y" : "N") +
+                        " model=" + String(nm ? nm : "?") +
+                        " gotStale=" + String(skinned_mesh.is_valid() ? "Y" : "N"));
                 }
             }
 
@@ -3985,7 +3994,7 @@ void MoHAARunner::update_entities() {
                 // or PrepareBones fails on a single frame.  The player must
                 // always see their hands — one frame of stale animation is
                 // imperceptible.
-                if (is_first_person && mi->get_mesh().is_valid() &&
+                if ((is_first_person || is_depthhack) && mi->get_mesh().is_valid() &&
                     mi->get_mesh()->get_surface_count() > 0) {
                     // Keep existing mesh visible — do NOT hide or continue.
                     // mesh_changed stays false; materials/transform still update.
@@ -4052,6 +4061,11 @@ void MoHAARunner::update_entities() {
                 // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
                 // The NODRAW state comes from the server's entity surfaces
                 // (networked in entityState_t.surfaces[]) via the stub renderer.
+                //
+                // NOTE: No fp_all_nodraw guard — when cgame sets ALL surfaces NODRAW
+                // (zoom/unarmed), the zoom check below (Godot_Client_GetPlayerZoom)
+                // hides the entire entity separately.  Skipping NODRAW here would
+                // break partial NODRAW (e.g. mp44clip during reload).
                 {
                     if (!nodraw_surface_material.is_valid()) {
                         nodraw_surface_material.instantiate();
@@ -4061,26 +4075,8 @@ void MoHAARunner::update_entities() {
                         nodraw_surface_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
                     }
 
-                    int nodraw_flagged = 0;
-                    int nodraw_total = 0;
                     for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
                         int fi = entry.flat_surf_idx[s];
-                        if (fi >= 0 && fi < 32) {
-                            nodraw_total++;
-                            if (ent_surfaces[fi] & 4) {
-                                nodraw_flagged++;
-                            }
-                        }
-                    }
-
-                    const bool fp_all_nodraw = is_first_person &&
-                        nodraw_total > 0 && nodraw_flagged == nodraw_total;
-
-                    for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
-                        int fi = entry.flat_surf_idx[s];
-                        if (fp_all_nodraw) {
-                            continue;
-                        }
                         if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
                             mi->set_surface_override_material(s, nodraw_surface_material);
                         }
@@ -4107,10 +4103,80 @@ void MoHAARunner::update_entities() {
                         }
                     }
                 }
-                // applying MDL_SURFACE_NODRAW.
+                // Restore mirror overrides after applying MDL_SURFACE_NODRAW.
                 for (auto &m : active_mirrors) {
                     if (m.mesh_instance == mi && m.override_mat.is_valid()) {
                         mi->set_surface_override_material(m.surface_idx, m.override_mat);
+                    }
+                }
+
+                // ── FPS/depthhack diagnostic: log on state change + periodic ──
+                if (is_first_person || is_depthhack) {
+                    // Track previous surface hash per entity slot for change detection
+                    static std::unordered_map<int, uint32_t> s_fps_prev_surf_hash;
+                    static int s_fps_diag_counter = 0;
+                    s_fps_diag_counter++;
+
+                    uint32_t prev_sh = 0;
+                    auto ph_it = s_fps_prev_surf_hash.find(i);
+                    if (ph_it != s_fps_prev_surf_hash.end()) prev_sh = ph_it->second;
+                    bool surf_changed = (prev_sh != surf_hash);
+                    s_fps_prev_surf_hash[i] = surf_hash;
+
+                    // Log on: first frame, surface state change, or periodic (every 120 frames)
+                    if (surf_changed || s_fps_diag_counter % 120 == 1) {
+                        const char *nm = Godot_Model_GetName(hModel);
+                        // Log ALL 32 surface bytes (not just 8)
+                        String surfStr;
+                        bool any_nonzero = false;
+                        for (int si = 0; si < 32; si++) {
+                            if (ent_surfaces[si] != 0) {
+                                if (any_nonzero) surfStr += ",";
+                                surfStr += String::num_int64(si) + "=" + String::num_int64(ent_surfaces[si]);
+                                any_nonzero = true;
+                            }
+                        }
+                        if (!any_nonzero) surfStr = "all-zero";
+
+                        String fiStr;
+                        for (int si = 0; si < (int)entry.flat_surf_idx.size(); si++) {
+                            if (si > 0) fiStr += ",";
+                            fiStr += String::num_int64(entry.flat_surf_idx[si]);
+                        }
+                        String snStr;
+                        for (int si = 0; si < (int)entry.surf_names.size(); si++) {
+                            if (si > 0) snStr += ",";
+                            snStr += entry.surf_names[si].is_empty() ? String("?") : entry.surf_names[si];
+                        }
+                        // Log which surfaces got NODRAW applied
+                        String ndStr;
+                        for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
+                            int fi = entry.flat_surf_idx[s];
+                            if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
+                                if (!ndStr.is_empty()) ndStr += ",";
+                                ndStr += String::num_int64(s) + "(" +
+                                    (s < (int)entry.surf_names.size() && !entry.surf_names[s].is_empty()
+                                     ? entry.surf_names[s] : String("?")) + ")";
+                            }
+                        }
+                        if (ndStr.is_empty()) ndStr = "none";
+
+                        UtilityFunctions::print(
+                            String("[FPS-DIAG] ") + (surf_changed ? "CHANGE " : "periodic ") +
+                            "slot=" + String::num_int64(i) +
+                            " entNum=" + String::num_int64(entityNumber) +
+                            " rfx=0x" + String::num_int64(renderfx, 16) +
+                            " FP=" + String(is_first_person ? "Y" : "N") +
+                            " DH=" + String(is_depthhack ? "Y" : "N") +
+                            " model=" + String(nm ? nm : "?") +
+                            " meshSC=" + String::num_int64(sc) +
+                            " matSC=" + String::num_int64((int64_t)entry.mats.size()) +
+                            " fiSC=" + String::num_int64((int64_t)entry.flat_surf_idx.size()) +
+                            " surfs={" + surfStr + "}" +
+                            " fi=[" + fiStr + "]" +
+                            " names=[" + snStr + "]" +
+                            " nodraw=[" + ndStr + "]" +
+                            " skinNum=" + String::num_int64(ent_skinNum));
                     }
                 }
             }
@@ -4245,6 +4311,14 @@ void MoHAARunner::update_entities() {
                     Ref<Material> base_mat = mi->get_surface_override_material(s);
                     if (base_mat.is_null())
                         base_mat = mesh->surface_get_material(s);
+
+                    // Skip tinting for NODRAW surfaces — their transparent
+                    // material must not be replaced by a cached tinted
+                    // version of the normal material.  The tint cache key
+                    // does not encode NODRAW state, so a cache hit would
+                    // return a visible tinted material and overwrite the
+                    // transparent NODRAW override.
+                    if (base_mat == nodraw_surface_material) continue;
 
                     Ref<StandardMaterial3D> smat = base_mat;
                     if (!smat.is_valid()) continue;
@@ -4388,6 +4462,100 @@ void MoHAARunner::update_entities() {
                         tinted_mat_cache[tint_key] = dup;
                         mi->set_surface_override_material(s, dup);
                     }
+                }
+            }
+        }
+
+        // ── [VIEWMODEL-VALIDATE] Post-tinting NODRAW integrity check ──
+        // After tinting runs, verify that surfaces which should have NODRAW
+        // still have the transparent material.  If not, the tinting cache
+        // overwrote it (Bug: tint_key doesn't encode NODRAW state).
+        // Also validate general FPS entity health for automated testing.
+        if (is_first_person || is_depthhack) {
+            static std::unordered_map<int, int> s_fps_validate_period;
+            auto &vp = s_fps_validate_period[i];
+            vp++;
+
+            // Recompute mat_key (same algorithm as the material cache block above,
+            // which is in a different scope).
+            uint64_t v_svh = 1469598103934665603ULL;
+            for (int si = 0; si < 32; si++) {
+                unsigned char v = (unsigned char)(ent_surfaces[si] & 3);
+                v_svh ^= (uint64_t)v;
+                v_svh *= 1099511628211ULL;
+            }
+            uint64_t v_mat_key = ((uint64_t)(uint32_t)hModel << 32)
+                               | ((uint64_t)(uint16_t)(ent_skinNum & 0xFFFF) << 16)
+                               | (v_svh & 0xFFFFULL);
+
+            auto mat_it = tiki_mat_cache.find(v_mat_key);
+            if (mat_it != tiki_mat_cache.end()) {
+                auto &ventry = mat_it->second;
+                int vsc = mi->get_mesh().is_valid()
+                        ? mi->get_mesh()->get_surface_count() : 0;
+
+                // 1. Validate mesh exists with surfaces
+                if (vsc == 0 && vp % 120 == 1) {
+                    const char *nm = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(
+                        String("[VIEWMODEL-VALIDATE] FAIL mesh_empty slot=") + String::num_int64(i) +
+                        " entNum=" + String::num_int64(entityNumber) +
+                        " model=" + String(nm ? nm : "?") +
+                        " FP=" + String(is_first_person ? "Y" : "N") +
+                        " DH=" + String(is_depthhack ? "Y" : "N"));
+                }
+
+                // 2. Validate surface count consistency
+                if (vsc > 0 && (int)ventry.mats.size() != vsc && vp % 120 == 1) {
+                    const char *nm = Godot_Model_GetName(hModel);
+                    UtilityFunctions::print(
+                        String("[VIEWMODEL-VALIDATE] WARN surf_mismatch slot=") + String::num_int64(i) +
+                        " meshSC=" + String::num_int64(vsc) +
+                        " matSC=" + String::num_int64((int64_t)ventry.mats.size()) +
+                        " fiSC=" + String::num_int64((int64_t)ventry.flat_surf_idx.size()) +
+                        " model=" + String(nm ? nm : "?"));
+                }
+
+                // 3. Validate NODRAW integrity — check every surface
+                for (int vs = 0; vs < (int)ventry.flat_surf_idx.size() && vs < vsc; vs++) {
+                    int vfi = ventry.flat_surf_idx[vs];
+                    bool should_nodraw = (vfi >= 0 && vfi < 32 && (ent_surfaces[vfi] & 4));
+                    Ref<Material> actual = mi->get_surface_override_material(vs);
+
+                    if (should_nodraw && actual != nodraw_surface_material) {
+                        // NODRAW was overwritten!  Log once per transition.
+                        const char *nm = Godot_Model_GetName(hModel);
+                        String sname = (vs < (int)ventry.surf_names.size() && !ventry.surf_names[vs].is_empty())
+                            ? ventry.surf_names[vs] : String("surf") + String::num_int64(vs);
+                        UtilityFunctions::print(
+                            String("[VIEWMODEL-VALIDATE] FAIL nodraw_overwritten slot=") + String::num_int64(i) +
+                            " surf=" + sname +
+                            " fi=" + String::num_int64(vfi) +
+                            " surfByte=" + String::num_int64(ent_surfaces[vfi]) +
+                            " model=" + String(nm ? nm : "?") +
+                            " actualMatNull=" + String(actual.is_null() ? "Y" : "N"));
+                    }
+                }
+
+                // 4. Periodic health summary for ALL FPS entities (every ~2s)
+                if (vp % 120 == 1) {
+                    const char *nm = Godot_Model_GetName(hModel);
+                    int nd_count = 0, vis_count = 0;
+                    for (int vs = 0; vs < (int)ventry.flat_surf_idx.size() && vs < vsc; vs++) {
+                        int vfi = ventry.flat_surf_idx[vs];
+                        if (vfi >= 0 && vfi < 32 && (ent_surfaces[vfi] & 4)) nd_count++;
+                        else vis_count++;
+                    }
+                    UtilityFunctions::print(
+                        String("[VIEWMODEL-VALIDATE] INFO slot=") + String::num_int64(i) +
+                        " entNum=" + String::num_int64(entityNumber) +
+                        " model=" + String(nm ? nm : "?") +
+                        " meshSC=" + String::num_int64(vsc) +
+                        " visible=" + String::num_int64(vis_count) +
+                        " nodraw=" + String::num_int64(nd_count) +
+                        " FP=" + String(is_first_person ? "Y" : "N") +
+                        " DH=" + String(is_depthhack ? "Y" : "N") +
+                        " rfx=0x" + String::num_int64(renderfx, 16));
                 }
             }
         }
