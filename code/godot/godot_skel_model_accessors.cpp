@@ -850,7 +850,8 @@ const char *Godot_TIKI_GetName(void *tikiPtr)
 
 void Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
                                          const void *frameInfoRaw,
-                                         unsigned char *outSurfaces)
+                                         unsigned char *outSurfaces,
+                                         int use_server_cmds)
 {
     dtiki_t *tiki = (dtiki_t *)tikiPtr;
     if (!tiki || !tiki->a || !frameInfoRaw || !outSurfaces) return;
@@ -859,10 +860,6 @@ void Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
 
     const frameInfo_t *fi = (const frameInfo_t *)frameInfoRaw;
     tiki_cmd_t cmds;
-
-    /* TEMPORARY DIAGNOSTIC: log first few calls per TIKI to see
-     * if client frame commands exist at all. */
-    static int s_diag_tiki_count = 0;
 
     for (int slot = 0; slot < MAX_FRAMEINFOS; slot++) {
         if (fi[slot].weight <= 0.0f) continue;
@@ -880,54 +877,32 @@ void Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
             if (curFrame < 0) curFrame = 0;
         }
 
-        /* DIAGNOSTIC: check if this animation has ANY client commands */
-        if (s_diag_tiki_count < 30) {
-            dtikianimdef_t *panimdef = tiki->a->animdefs[animIndex];
-            int ncc = panimdef ? panimdef->num_client_cmds : -1;
-            int nsc = panimdef ? panimdef->num_server_cmds : -1;
-            /* Only log if the anim has surface-related commands */
-            if (ncc > 0 || nsc > 0) {
-                s_diag_tiki_count++;
-                Com_Printf("[SURF-DIAG] tiki=%s anim=%d slot=%d frame=%d/%d "
-                           "time=%.3f weight=%.2f ccmds=%d scmds=%d\n",
-                           tiki->name ? tiki->name : "NULL",
-                           animIndex, slot, curFrame, numFrames,
-                           fi[slot].time, fi[slot].weight, ncc, nsc);
-                /* Dump client command names */
-                for (int ci = 0; ci < ncc && ci < 5; ci++) {
-                    dtikicmd_t *pc = &panimdef->client_cmds[ci];
-                    Com_Printf("  client_cmd[%d] frame=%d cmd=%s\n",
-                               ci, pc->frame_num,
-                               (pc->num_args > 0 && pc->args[0]) ? pc->args[0] : "?");
-                }
-                for (int si2 = 0; si2 < nsc && si2 < 5; si2++) {
-                    dtikicmd_t *ps = &panimdef->server_cmds[si2];
-                    Com_Printf("  server_cmd[%d] frame=%d cmd=%s\n",
-                               si2, ps->frame_num,
-                               (ps->num_args > 0 && ps->args[0]) ? ps->args[0] : "?");
-                }
-            }
-        }
-
-        /* Process CLIENT-block ENTRY and per-frame commands only.
+        /* Process ENTRY and per-frame commands from the chosen block.
          *
-         * Server-block surface commands are handled by Entity::SurfaceCommand()
-         * on the server side and networked to the client via
-         * entityState_t.surfaces[] — those are already captured in
-         * gr_entities[].surfaces[] by the stub renderer.  We must NOT
-         * duplicate them here or the timing of server state vs our local
-         * calculation can conflict, causing out-of-sync flickering.
+         * For FPS weapon entities (attached to player with
+         * RF_FIRST_PERSON): use server-block commands.  These contain
+         * "surface mp44clip +/-nodraw" etc.  The server also sets these
+         * via Entity::SurfaceCommand and networks them, but the timing
+         * of our local computation is more accurate for per-frame
+         * rendering.  The caller REPLACES ent_surfaces rather than
+         * ORing to avoid conflicts with the server-networked state.
          *
-         * Client-block commands (weapon clip +nodraw during reload, etc.)
-         * are dispatched by CG_ProcessEntityCommands but silently dropped
-         * because the cgame has no event handler for "surface" events.
-         * This function fills that gap. */
-        if (TIKI_Frame_Commands_Client(tiki, animIndex, TIKI_FRAME_ENTRY, &cmds))
-            ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
-
-        for (int f = 0; f <= curFrame; f++) {
-            if (TIKI_Frame_Commands_Client(tiki, animIndex, f, &cmds))
+         * Client-block "surface" commands are dropped by the cgame
+         * (no event handler) and have no effect in the real engine. */
+        if (use_server_cmds) {
+            if (TIKI_Frame_Commands_Server(tiki, animIndex, TIKI_FRAME_ENTRY, &cmds))
                 ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+            for (int f = 0; f <= curFrame; f++) {
+                if (TIKI_Frame_Commands_Server(tiki, animIndex, f, &cmds))
+                    ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+            }
+        } else {
+            if (TIKI_Frame_Commands_Client(tiki, animIndex, TIKI_FRAME_ENTRY, &cmds))
+                ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+            for (int f = 0; f <= curFrame; f++) {
+                if (TIKI_Frame_Commands_Client(tiki, animIndex, f, &cmds))
+                    ApplySurfaceCmdsFromTikiFrame(tiki, &cmds, outSurfaces);
+            }
         }
     }
 }

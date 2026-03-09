@@ -315,15 +315,6 @@ extern "C" {
                                            unsigned char *out_surfaces,
                                            int *out_skinNum);
 
-    // TIKI animation surface state — computes cumulative NODRAW from client
-    // frame commands for the entity's current animation pose.
-    void  Godot_TIKI_ComputeAnimSurfaceState(void *tikiPtr,
-                                              const void *frameInfoRaw,
-                                              unsigned char *outSurfaces);
-
-    // TIKI name accessor — returns dtiki_t->name for diagnostics.
-    const char *Godot_TIKI_GetName(void *tikiPtr);
-
     // Model/Shadow accessors
     float Godot_Renderer_GetEntityShadowPlane(int index);
     float Godot_Model_GetRadius(int hModel);
@@ -2730,6 +2721,16 @@ void MoHAARunner::load_sun_flare() {
         sun_flare_control = memnew(Control);
         sun_flare_control->set_anchors_and_offsets_preset(Control::PRESET_FULL_RECT);
         sun_flare_control->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
+        // Lens flare textures are additive glow sprites — using the default
+        // alpha-blend (MIX) mode causes the dark edges of each flare texture
+        // to darken the scene, producing a visible rectangular shadow box.
+        // Additive blend means dark pixels add nothing, so edges are invisible.
+        {
+            Ref<CanvasItemMaterial> flare_mat;
+            flare_mat.instantiate();
+            flare_mat->set_blend_mode(CanvasItemMaterial::BLEND_MODE_ADD);
+            sun_flare_control->set_material(flare_mat);
+        }
         sun_flare_canvas->add_child(sun_flare_control);
     }
 }
@@ -3421,12 +3422,6 @@ void MoHAARunner::update_entities() {
         bool is_first_person = (renderfx & 0x02) != 0;  // RF_FIRST_PERSON
         bool is_depthhack    = (renderfx & 0x04) != 0;  // RF_DEPTHHACK
 
-        // ── FPS viewmodel per-frame diagnostic (temporary) ──
-        // Logs the exact code path taken for first-person entities for
-        // the first 600 frames so we can diagnose flickering.
-        static int s_fps_diag_frame = 0;
-        bool fps_diag = (is_first_person && s_fps_diag_frame < 600);
-
         int entCustomShader = 0;
         Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &entCustomShader);
 
@@ -3434,50 +3429,19 @@ void MoHAARunner::update_entities() {
         int ent_skinNum = 0;
         Godot_Renderer_GetEntitySurfaces(i, ent_surfaces, &ent_skinNum);
 
-        // Compute cumulative surface NODRAW from TIKI animation CLIENT-block
-        // frame commands.  Applies to ALL entity types including first-person
-        // weapon entities (which inherit RF_FIRST_PERSON from the player but
-        // still need client-block surface state for clip +nodraw etc.).
+        // Surface NODRAW state comes entirely from the server via
+        // entityState_t.surfaces[] → cgame memcpy → refEntity_t.surfaces[]
+        // → gr_entities[].surfaces[] → ent_surfaces[].
         //
-        // Server-block surface commands are already in ent_surfaces[] from
-        // entityState_t.surfaces[] (networked from server).  This only adds
-        // client-block commands that the cgame silently drops.
-        {
-            void *tiki_for_surf = nullptr;
-            alignas(8) char fi_for_surf[256];
-            if (Godot_Renderer_GetEntityAnim(i, &tiki_for_surf, nullptr,
-                                              fi_for_surf, nullptr, nullptr,
-                                              nullptr, nullptr) && tiki_for_surf)
-            {
-                unsigned char tiki_surfaces[32] = {};
-                Godot_TIKI_ComputeAnimSurfaceState(tiki_for_surf,
-                                                    fi_for_surf, tiki_surfaces);
-
-                // TEMPORARY DIAGNOSTIC: log when surface state changes
-                // for first-person weapon entities
-                if (is_first_person || is_depthhack) {
-                    bool has_nodraw = false;
-                    for (int si = 0; si < 32; si++) {
-                        if (tiki_surfaces[si] & 4) { has_nodraw = true; break; }
-                    }
-                    static bool s_last_nodraw = false;
-                    static int s_diag_count = 0;
-                    if (has_nodraw != s_last_nodraw && s_diag_count < 50) {
-                        s_last_nodraw = has_nodraw;
-                        s_diag_count++;
-                        const char *tiki_name = Godot_TIKI_GetName(tiki_for_surf);
-                        UtilityFunctions::print(String("[SURF-DIAG] FP entity ") +
-                            String::num_int64(i) + " tiki=" +
-                            String(tiki_name ? tiki_name : "NULL") +
-                            " nodraw=" + String(has_nodraw ? "YES" : "no"));
-                    }
-                }
-
-                for (int si = 0; si < 32; si++) {
-                    ent_surfaces[si] |= tiki_surfaces[si];
-                }
-            }
-        }
+        // We do NOT locally compute TIKI animation surface commands:
+        //  - Server-block "surface <name> +/-nodraw" commands are already
+        //    processed by Entity::SurfaceCommand() on the server and
+        //    networked as persistent state in entityState_t.surfaces[].
+        //  - Client-block "surface" commands are silently dropped by cgame
+        //    (no event handler) and have no effect in the real engine.
+        //  - Local frame-based TIKI command replay has timing mismatches
+        //    with the server's authoritative state, causing flickering and
+        //    wrong surface visibility.
 
         uint32_t surf_hash = 2166136261u;
         for (int si = 0; si < 32; si++) {
@@ -3718,15 +3682,6 @@ void MoHAARunner::update_entities() {
                     stale_it->second.mesh.is_valid() &&
                     stale_it->second.mesh->get_surface_count() > 0) {
                     skinned_mesh = stale_it->second.mesh;
-                    if (fps_diag) {
-                        s_fps_diag_frame++;
-                        UtilityFunctions::print(
-                            String("[FPS-DIAG] STALE-FALLBACK idx=") + String::num_int64(i) +
-                            " entNum=" + String::num_int64(fps_entNum) +
-                            " hasAnim=" + String(has_anim ? "Y" : "N") +
-                            " tikiPtr=" + String(tikiPtr ? "Y" : "N") +
-                            " surf=" + String::num_int64(skinned_mesh->get_surface_count()));
-                    }
                 }
             }
 
@@ -4002,18 +3957,6 @@ void MoHAARunner::update_entities() {
                 mi->set_mesh(skinned_mesh);
                 mesh_changed = true;
 
-                if (fps_diag) {
-                    s_fps_diag_frame++;
-                    const char *nm = Godot_Model_GetName(hModel);
-                    UtilityFunctions::print(
-                        String("[FPS-DIAG] SKINNED idx=") + String::num_int64(i) +
-                        " entNum=" + String::num_int64(entNum) +
-                        " hModel=" + String::num_int64(hModel) +
-                        " name=" + String(nm ? nm : "?") +
-                        " surf=" + String::num_int64(skinned_mesh->get_surface_count()) +
-                        " renderfx=0x" + String::num_int64(renderfx, 16));
-                }
-
                 static bool logged_skin = false;
                 if (!logged_skin) {
                     UtilityFunctions::print(
@@ -4046,31 +3989,8 @@ void MoHAARunner::update_entities() {
                     mi->get_mesh()->get_surface_count() > 0) {
                     // Keep existing mesh visible — do NOT hide or continue.
                     // mesh_changed stays false; materials/transform still update.
-                    if (fps_diag) {
-                        s_fps_diag_frame++;
-                        UtilityFunctions::print(
-                            String("[FPS-DIAG] KEEP-EXISTING idx=") + String::num_int64(i) +
-                            " entNum=" + String::num_int64(entNum) +
-                            " hModel=" + String::num_int64(hModel) +
-                            " hasAnim=" + String(has_anim ? "Y" : "N") +
-                            " renderfx=0x" + String::num_int64(renderfx, 16));
-                    }
                 } else {
                     // Non-FPS entity or no existing mesh — hide as before.
-                    if (fps_diag) {
-                        s_fps_diag_frame++;
-                        const char *nm = Godot_Model_GetName(hModel);
-                        void *tp = Godot_Model_GetTikiPtr(hModel);
-                        UtilityFunctions::print(
-                            String("[FPS-DIAG] NO-MESH idx=") + String::num_int64(i) +
-                            " entNum=" + String::num_int64(entNum) +
-                            " hModel=" + String::num_int64(hModel) +
-                            " name=" + String(nm ? nm : "?") +
-                            " hasAnim=" + String(has_anim ? "Y" : "N") +
-                            " tikiPtr=" + String(tp ? "Y" : "N") +
-                            " cached=" + String((cached && !cached->lod_meshes.empty()) ? "Y" : "N") +
-                            " renderfx=0x" + String::num_int64(renderfx, 16));
-                    }
                     {
                         static std::unordered_map<int, int> s_no_mesh_log;
                         if (s_no_mesh_log[hModel] < 5) {
@@ -4130,10 +4050,8 @@ void MoHAARunner::update_entities() {
                 }
                 // Apply MDL_SURFACE_NODRAW (TIKI_SURF_NODRAW = bit 2) per-entity hide flag.
                 // Mirrors tr_model.cpp::R_AddSkelSurfaces: if (*bsurf & 4) continue.
-                // The NODRAW state comes from both the server's entity surfaces
-                // (networked in entityState_t.surfaces[]) and from client-side TIKI
-                // animation parsing via Godot_TIKI_ComputeAnimSurfaceState().  Both
-                // sources are merged into ent_surfaces[] before the cache key hash.
+                // The NODRAW state comes from the server's entity surfaces
+                // (networked in entityState_t.surfaces[]) via the stub renderer.
                 {
                     if (!nodraw_surface_material.is_valid()) {
                         nodraw_surface_material.instantiate();
