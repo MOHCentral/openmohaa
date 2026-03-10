@@ -30,6 +30,7 @@
 #include <godot_cpp/classes/light3d.hpp>
 #include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/window.hpp>
 #include <godot_cpp/classes/multi_mesh_instance3d.hpp>
 #include <godot_cpp/classes/multi_mesh.hpp>
 #include <godot_cpp/classes/quad_mesh.hpp>
@@ -175,6 +176,10 @@ extern "C" {
     void Godot_Renderer_SyncVidSize(int w, int h);
     void Godot_Renderer_SetViewportSize(int w, int h);
     void Godot_Renderer_GetViewportSize(int *w, int *h);
+    void Godot_Renderer_Get2DWindow(float *left, float *right,
+                                     float *top, float *bottom,
+                                     int *vp_x, int *vp_y,
+                                     int *vp_w, int *vp_h);
     /* Phase 52 remap uses Godot_Renderer_GetShaderRemap declared below */
 
     // Sound bridge (Phase 8) — from godot_sound.c
@@ -1087,14 +1092,21 @@ void MoHAARunner::setup_3d_scene() {
     // This replicates id Tech 3's RF_DEPTHHACK (depth range 0–0.3).
     bool overlay_active_now = false;
     {
-        Vector2i win_size = DisplayServer::get_singleton()->window_get_size();
-        if (win_size.x < 1 || win_size.y < 1) {
-            win_size = Vector2i(1280, 720);
+        // Use the root viewport size (which matches the engine resolution
+        // under VIEWPORT content_scale) rather than the physical window
+        // size.  This keeps the weapon SubViewport consistent with the
+        // coordinate space used for HUD drawing.
+        Vector2i vp_size = get_viewport()->get_visible_rect().size;
+        if (vp_size.x < 1 || vp_size.y < 1) {
+            // Fallback to engine resolution or default
+            int ew = 0, eh = 0;
+            Godot_Renderer_GetVidSize(&ew, &eh);
+            vp_size = (ew > 0 && eh > 0) ? Vector2i(ew, eh) : Vector2i(1280, 720);
         }
 
         // SubViewport with transparent background + own World3D
         weapon_viewport = memnew(SubViewport);
-        weapon_viewport->set_size(win_size);
+        weapon_viewport->set_size(vp_size);
         weapon_viewport->set_transparent_background(true);
         weapon_viewport->set_world_3d(Ref<World3D>(memnew(World3D)));
         weapon_viewport->set_update_mode(SubViewport::UPDATE_ALWAYS);
@@ -1125,7 +1137,7 @@ void MoHAARunner::setup_3d_scene() {
         weapon_overlay->set_mouse_filter(Control::MOUSE_FILTER_IGNORE);
         weapon_canvas_layer->add_child(weapon_overlay);
 
-        UtilityFunctions::print("[MoHAA] Weapon SubViewport created (", win_size.x, "x", win_size.y, ")");
+        UtilityFunctions::print("[MoHAA] Weapon SubViewport created (", vp_size.x, "x", vp_size.y, ")");
     }
 }
 
@@ -1230,11 +1242,13 @@ void MoHAARunner::update_camera() {
     }
 
     // ── Weapon viewport resize ──
-    // Keep the weapon SubViewport size in sync with the window.
+    // Keep the weapon SubViewport size in sync with the root viewport.
+    // Under VIEWPORT content_scale the root viewport is the engine
+    // resolution, ensuring the weapon texture composites correctly.
     if (weapon_viewport) {
-        Vector2i win_size = DisplayServer::get_singleton()->window_get_size();
-        if (win_size.x > 0 && win_size.y > 0 && weapon_viewport->get_size() != win_size) {
-            weapon_viewport->set_size(win_size);
+        Vector2i vp_size = get_viewport()->get_visible_rect().size;
+        if (vp_size.x > 0 && vp_size.y > 0 && weapon_viewport->get_size() != vp_size) {
+            weapon_viewport->set_size(vp_size);
         }
     }
 }
@@ -6640,26 +6654,30 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
 // space into that resolution.  This transform maps from the engine's resolution
 // space to the Godot viewport.
 void MoHAARunner::update_ui_transform() {
-    // Get engine's resolution (set by GR_BeginRegistration from r_mode)
+    // Use the renderer's stable engine video size (glConfig.vidWidth/vidHeight)
+    // as the source coordinate space. The transient 2D window values captured
+    // by GR_Set2DWindow can be widget-local (e.g. 64x16) and must not drive the
+    // global HUD scale.
     Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
     if (ui_vid_w < 1) ui_vid_w = 640;
     if (ui_vid_h < 1) ui_vid_h = 480;
 
-    // Get actual viewport size
+    // Read the ACTUAL Godot canvas size — this is where canvas drawing
+    // physically happens, so it must be the target for our scale factor.
+    // Using the engine-tracked gr_viewport_width would be wrong if the
+    // engine resolution differs from the window (e.g. on initial boot
+    // when r_mode resolves to a size different from the Godot window).
     Vector2 viewport_size(0, 0);
     if (hud_control) {
         viewport_size = hud_control->get_size();
     }
-
-    // Fallback chain if Control hasn't been laid out yet
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
         Rect2 visible_rect = get_viewport()->get_visible_rect();
         viewport_size = visible_rect.size;
-
-        if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
-            Vector2i win = DisplayServer::get_singleton()->window_get_size();
-            viewport_size = Vector2(win);
-        }
+    }
+    if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
+        Vector2i win = DisplayServer::get_singleton()->window_get_size();
+        viewport_size = Vector2(win);
     }
 
     // Non-uniform scaling — stretch engine resolution to fill the viewport.
@@ -6670,6 +6688,15 @@ void MoHAARunner::update_ui_transform() {
     ui_scale_y = viewport_size.y / (float)ui_vid_h;
     ui_offset_x = 0.0f;
     ui_offset_y = 0.0f;
+
+    // Diagnostic: log scale factors for first 10 frames after vid_restart
+    if (vid_restart_grace_frames > 0) {
+        UtilityFunctions::print(String("[MoHAA] ui_transform: engine=") +
+            String::num_int64(ui_vid_w) + String("x") + String::num_int64(ui_vid_h) +
+            String(" canvas=") + String::num(viewport_size.x, 0) + String("x") + String::num(viewport_size.y, 0) +
+            String(" scale=") + String::num(ui_scale_x, 3) + String("x") + String::num(ui_scale_y, 3) +
+            String(" cmds=") + String::num_int64(Godot_Renderer_Get2DCmdCount()));
+    }
 }
 
 /*
@@ -8747,6 +8774,26 @@ void MoHAARunner::_ready() {
     last_server_state = Godot_GetServerState();
     last_map_name = "";
 
+    // Set VIEWPORT content_scale to engine resolution BEFORE creating the
+    // 3D scene.  This makes the root viewport match the engine coords
+    // from the very first frame, so HUD and weapon SubViewport sizes are
+    // correct immediately — no async window_set_size race.
+    {
+        int vw = 0, vh = 0;
+        Godot_Renderer_GetVidSize(&vw, &vh);
+        if (vw > 0 && vh > 0) {
+            Window *win = get_window();
+            if (win) {
+                win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
+                win->set_content_scale_size(Vector2i(vw, vh));
+                win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
+            }
+            Godot_Renderer_SetViewportSize(vw, vh);
+            UtilityFunctions::print(String("[MoHAA] Initial VIEWPORT content_scale: ") +
+                String::num_int64(vw) + String("x") + String::num_int64(vh));
+        }
+    }
+
     // Create 3D scene nodes (Phase 7a — camera bridge)
     setup_3d_scene();
 
@@ -9059,52 +9106,69 @@ void MoHAARunner::_process(double delta) {
                     }
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
 
-                    // glConfig stays at the user's SELECTED resolution (vw×vh) —
-                    // do NOT overwrite to screen native.  The ui_scale in
-                    // update_ui_transform stretches from engine res to viewport.
-                    // Apply 3D render scaling if selected res < native monitor.
-                    int viewport_w = screen.x > 0 ? screen.x : vw;
-                    int viewport_h = screen.y > 0 ? screen.y : vh;
-                    Godot_Renderer_SetViewportSize(viewport_w, viewport_h);
-
-                    if (vw > 0 && vh > 0 && viewport_w > 0 && viewport_h > 0) {
-                        float scale_x = (float)vw / (float)viewport_w;
-                        float scale_y = (float)vh / (float)viewport_h;
-                        float render_scale = (scale_x < scale_y) ? scale_x : scale_y;
-                        if (render_scale > 1.0f) render_scale = 1.0f;
-                        if (render_scale < 0.1f) render_scale = 0.1f;
-                        get_viewport()->set_scaling_3d_scale(render_scale);
+                    // Use content_scale_mode = VIEWPORT so that BOTH 3D and 2D
+                    // (HUD) render at the user's selected engine resolution,
+                    // then Godot stretches the result to fill the screen.
+                    // This replaces the old scaling_3d_scale approach which only
+                    // affected 3D quality without changing HUD resolution.
+                    Window *win = get_window();
+                    if (win && vw > 0 && vh > 0) {
+                        win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
+                        win->set_content_scale_size(Vector2i(vw, vh));
+                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
                     }
+
+                    // Viewport tracking: with content_scale, the viewport IS
+                    // the engine resolution.
+                    Godot_Renderer_SetViewportSize(vw > 0 ? vw : (screen.x > 0 ? screen.x : 640),
+                                                   vh > 0 ? vh : (screen.y > 0 ? screen.y : 480));
                 } else {
-                    // Windowed: resize the window to the selected resolution.
-                    // glConfig matches the window size exactly.
+                    // Windowed: use VIEWPORT content_scale so the root
+                    // viewport matches the engine resolution exactly.
+                    // This avoids the async window_set_size race on
+                    // Linux — the rendered content is always at the
+                    // correct resolution regardless of actual window size.
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_WINDOWED);
                     if (vw > 0 && vh > 0) {
                         ds->window_set_size(Vector2i(vw, vh));
-                        Godot_Renderer_SetViewportSize(vw, vh);
                     }
-                    // Reset 3D render scale to full quality in windowed mode.
-                    get_viewport()->set_scaling_3d_scale(1.0f);
+                    Window *win = get_window();
+                    if (win && vw > 0 && vh > 0) {
+                        win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
+                        win->set_content_scale_size(Vector2i(vw, vh));
+                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
+                    }
 
-                    // Windowed mode: sync glConfig to window size so engine
-                    // resolution = viewport = window size (1:1 mapping).
-                    if (vw > 0 && vh > 0) {
-                        Godot_Renderer_SyncVidSize(vw, vh);
-                        Godot_Client_SyncGlConfigVidSize(vw, vh);
-                    }
-                    // Update desktop resolution to the window size for r_mode -2.
-                    Godot_Renderer_SetDesktopResolution(vw, vh);
+                    Godot_Renderer_SetViewportSize(vw > 0 ? vw : 640,
+                                                   vh > 0 ? vh : 480);
                 }
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +
-                    String::num_int64(fs) + String(" size=") +
-                    String::num_int64(vw) + String("x") + String::num_int64(vh));
+                    String::num_int64(fs) + String(" engine=") +
+                    String::num_int64(vw) + String("x") + String::num_int64(vh) +
+                    String(" window=") + String::num_int64(ds->window_get_size().x) +
+                    String("x") + String::num_int64(ds->window_get_size().y));
 
                 // Notify UI/cgame of resolution change.
                 Godot_Client_ResolutionChange();
 
-                // Give Godot a few frames to process the window resize before
-                // the pre-frame viewport sync is allowed to run again.
+                // Immediately resize weapon SubViewport to match engine
+                // resolution, so it's correct on the very next render.
+                if (weapon_viewport && vw > 0 && vh > 0) {
+                    weapon_viewport->set_size(Vector2i(vw, vh));
+                }
+
+                // Brief grace period: VIEWPORT content_scale propagates
+                // within the same frame, but give 3 frames for safety.
                 vid_restart_grace_frames = 3;
+
+                // Diagnostic: log resolution state for debugging
+                UtilityFunctions::print(String("[MoHAA] vid_restart resolution state: ") +
+                    String(" content_scale=VIEWPORT ") +
+                    String::num_int64(vw) + String("x") + String::num_int64(vh) +
+                    String(" weapon_vp=") +
+                    String::num_int64(weapon_viewport ? weapon_viewport->get_size().x : 0) +
+                    String("x") +
+                    String::num_int64(weapon_viewport ? weapon_viewport->get_size().y : 0));
             }
         }
     }
@@ -9148,42 +9212,20 @@ void MoHAARunner::_process(double delta) {
     }
 
     // ── Per-frame viewport tracking ──
-    // Always keep viewport tracking up to date.
-    // In WINDOWED mode: also sync glConfig to match the actual viewport
-    // so engine resolution = viewport = window (1:1 mapping).  This
-    // handles both manual window drag-resize and initial boot where
-    // r_mode might not match the actual window dimensions.
-    // In FULLSCREEN mode: glConfig stays at the user's selected
-    // resolution (from r_mode); only viewport tracking is updated.
-    // scaling_3d_scale handles the quality difference.
+    // The engine resolution (stored_glconfig) is authoritative and set by
+    // r_mode during BeginRegistration / vid_restart.  We do NOT sync it
+    // per-frame to the window size — that would override the user's r_mode.
+    // update_ui_transform() handles the scale from engine coords to the
+    // actual canvas size.  We only update gr_viewport_width/height for
+    // code that reads it.
     if (vid_restart_grace_frames > 0) {
         vid_restart_grace_frames--;
-    } else {
-        Vector2 vp = get_viewport()->get_visible_rect().size;
-        if (vp.x < 1.0f || vp.y < 1.0f) {
-            Vector2i win = DisplayServer::get_singleton()->window_get_size();
-            vp = Vector2(win);
-        }
-        int vp_w = (int)vp.x;
-        int vp_h = (int)vp.y;
-        if (vp_w > 0 && vp_h > 0) {
-            // Always update viewport tracking
-            Godot_Renderer_SetViewportSize(vp_w, vp_h);
-
-            DisplayServer *ds = DisplayServer::get_singleton();
-            bool is_fullscreen = ds && ds->window_get_mode() != DisplayServer::WINDOW_MODE_WINDOWED;
-
-            if (!is_fullscreen) {
-                // Windowed: sync glConfig to viewport every frame (when they differ)
-                int cur_w = 0, cur_h = 0;
-                Godot_Renderer_GetVidSize(&cur_w, &cur_h);
-                if (cur_w != vp_w || cur_h != vp_h) {
-                    Godot_Renderer_SyncVidSize(vp_w, vp_h);
-                    Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
-                    Godot_Client_ResolutionChange();
-                    Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
-                }
-            }
+    }
+    {
+        int cur_w = 0, cur_h = 0;
+        Godot_Renderer_GetVidSize(&cur_w, &cur_h);
+        if (cur_w > 0 && cur_h > 0) {
+            Godot_Renderer_SetViewportSize(cur_w, cur_h);
         }
     }
 
@@ -9880,13 +9922,17 @@ void MoHAARunner::set_audio_volume(float master, float music, float dialog) {
 }
 
 void MoHAARunner::set_video_fullscreen(bool fullscreen) {
-    // This is a Godot-side setting, not an engine cvar
     DisplayServer *ds = DisplayServer::get_singleton();
     if (!ds) return;
     if (fullscreen) {
         ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
     } else {
         ds->window_set_mode(DisplayServer::WINDOW_MODE_WINDOWED);
+    }
+    // Keep the engine's r_fullscreen cvar in sync so that vid_restart
+    // preserves the correct fullscreen state.
+    if (initialized) {
+        Cbuf_AddText(fullscreen ? "set r_fullscreen 1\n" : "set r_fullscreen 0\n");
     }
 }
 
