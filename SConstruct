@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+sys.setrecursionlimit(5000)
+
 env = SConscript("../godot-cpp/SConstruct")
 
 # Prevent Linux host shell argv overflows when archiving very large static libs
@@ -167,7 +169,7 @@ sources.extend(Glob("code/thirdparty/jpeg-9f/j*.c"))
 # ── Sys files — platform specific ──
 sys_sources = ["code/sys/sys_main.c", "code/sys/con_log.c"]
 if env["platform"] == "linux":
-    env.Append(CPPDEFINES=["_LINUX", "__linux__"])
+    env.Append(CPPDEFINES=["_LINUX", "__linux__", "_UNIX"])
     env.Append(CFLAGS=["-Wno-discarded-qualifiers", "-Wno-incompatible-pointer-types"])
     env.Append(CXXFLAGS=["-fexceptions", "-frtti"])
     sys_sources.append("code/sys/sys_unix.c")
@@ -203,8 +205,6 @@ elif env["platform"] == "macos":
     sys_sources.append("code/sys/win_localization.cpp")
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "web":
-    import sys
-    sys.setrecursionlimit(5000)
     env.Append(CPPDEFINES=["__EMSCRIPTEN__", "_LINUX", "__linux__"])
     env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
     # godot-cpp injects -fno-exceptions and -sSUPPORT_LONGJMP='wasm' by

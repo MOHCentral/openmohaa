@@ -361,7 +361,7 @@ char *Sys_DefaultHomePath(void) {
     return s_web_home_path;
 }
 
-#ifndef __APPLE__
+#ifndef _UNIX
 char *Sys_DefaultHomeConfigPath(void) {
     return s_web_home_path;
 }
@@ -442,7 +442,7 @@ FILE *Sys_Mkfifo(const char *ospath) {
     return NULL;
 }
 
-#ifndef __APPLE__
+#ifndef _UNIX
 char *Sys_Cwd(void) {
     static char cwd[MAX_OSPATH];
     char *result = getcwd(cwd, sizeof(cwd) - 1);
@@ -541,7 +541,7 @@ char **Sys_ListFiles(const char *directory, const char *extension, const char *f
     return listCopy;
 }
 
-#ifndef __APPLE__
+#ifndef _UNIX
 void Sys_FreeFileList(char **list) {
     int i;
 
@@ -580,13 +580,13 @@ char *Sys_GetCurrentUser(void) {
     return s_web_user;
 }
 
-#ifndef __APPLE__
+#ifndef _UNIX
 int Sys_PID(void) {
     return 1;
 }
 #endif
 
-#ifndef __APPLE__
+#ifndef _UNIX
 qboolean Sys_DllExtension(const char *name) {
     const char *ext;
 
@@ -670,7 +670,7 @@ void *GLimp_RendererSleep(void) {
     return NULL;
 }
 
-#ifndef __APPLE__
+#ifndef _UNIX
 void GLimp_FrontEndSleep(void) {
 }
 #endif
