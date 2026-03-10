@@ -163,7 +163,7 @@ char *Sys_GetClipboardData(void)
 Sys_PIDFileName
 =================
 */
-static char *Sys_PIDFileName( const char *gamedir )
+static const char *Sys_PIDFileName( const char *gamedir )
 {
 	const char *homeStatePath = Cvar_VariableString( "fs_homestatepath" );
 
@@ -180,7 +180,7 @@ Sys_RemovePIDFile
 */
 void Sys_RemovePIDFile( const char *gamedir )
 {
-	char *pidFile = Sys_PIDFileName( gamedir );
+	const char *pidFile = Sys_PIDFileName( gamedir );
 
 	if( pidFile != NULL )
 		remove( pidFile );
@@ -195,7 +195,7 @@ Return qtrue if there is an existing stale PID file
 */
 static qboolean Sys_WritePIDFile( const char *gamedir )
 {
-	char      *pidFile = Sys_PIDFileName( gamedir );
+	const char *pidFile = Sys_PIDFileName( gamedir );
 	FILE      *f;
 	qboolean  stale = qfalse;
 
