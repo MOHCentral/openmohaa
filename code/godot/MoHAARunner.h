@@ -466,6 +466,7 @@ private:
     std::unordered_map<int, Ref<AudioStream>> sfx_cache;              // sfxHandle → loaded audio stream (WAV or MP3)
     // Looping sound tracking (Phase 40): key = composite of sfxHandle + quantised position
     std::unordered_map<int64_t, int> active_loops;                   // loop key → 3D player index
+    std::unordered_map<int64_t, int> new_loops_64;                   // reused per-frame to avoid heap alloc
     int next_3d_player = 0;                                          // Round-robin index for 3D pool
     int next_2d_player = 0;                                          // Round-robin index for 2D pool
     static const int MAX_3D_PLAYERS = 32;
@@ -519,6 +520,7 @@ private:
     void update_2d_overlay(); // Read 2D draw commands and queue redraw
     void update_hud_models(); // Render HUD model previews (Phase 148)
     void update_scoreboard(); // Draw scoreboard overlay when TAB is held
+    void load_flares();  // Render BSP flare surfaces as billboarded MultiMesh (Phase 74)
     void load_skybox();  // Load skybox cubemap from BSP sky shader (Phase 12)
     void load_sun_flare();  // Parse sun flare data from entity string + lensflaredefs.txt
     void update_sun_flare();  // Render sun flare 2D overlay each frame

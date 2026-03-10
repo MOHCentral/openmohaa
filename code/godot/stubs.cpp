@@ -281,8 +281,10 @@ void Sys_ShutdownEx(void) {
 void Sys_ProcessBackgroundTasks(void) {
 }
 
+#ifdef __EMSCRIPTEN__
 static char s_web_home_path[] = "/userfs";
 static char s_web_install_path[] = "/";
+#endif
 static char s_web_empty_path[] = "";
 
 static constexpr int STUB_MAX_FOUND_FILES = 0x1000;
@@ -357,27 +359,80 @@ static void Godot_Sys_ListFilteredFiles(
     closedir(fdir);
 }
 
+static char s_install_path[MAX_OSPATH] = { 0 };
+
+void Sys_SetDefaultInstallPath(const char *path) {
+    if (path) {
+        Q_strncpyz(s_install_path, path, sizeof(s_install_path));
+    }
+}
+
+#ifndef __EMSCRIPTEN__
+// Native Linux/macOS: use real XDG paths from sys_unix.c (unguarded)
+// These are defined in code/sys/sys_unix.c and NOT guarded by GODOT_GDEXTENSION
+extern char *Sys_HomeConfigPath(void);
+extern char *Sys_HomeDataPath(void);
+extern char *Sys_HomeStatePath(void);
+extern char *Sys_BinaryPath(void);
+#endif
+
+#ifdef __EMSCRIPTEN__
+// Web/Emscripten: use fixed VFS paths
 char *Sys_DefaultHomePath(void) {
     return s_web_home_path;
 }
-
-#ifndef _UNIX
 char *Sys_DefaultHomeConfigPath(void) {
     return s_web_home_path;
 }
-#endif
-
 char *Sys_DefaultHomeDataPath(void) {
     return s_web_home_path;
 }
-
 char *Sys_DefaultHomeStatePath(void) {
     return s_web_home_path;
 }
-
 char *Sys_DefaultInstallPath(void) {
     return s_web_install_path;
 }
+char *Sys_DefaultAppPath(void) {
+    return s_web_install_path;
+}
+char *Sys_DefaultBasePath(void) {
+    return s_web_install_path;
+}
+#else
+// Native Linux/macOS: use real XDG paths from sys_unix.c
+
+char *Sys_DefaultHomePath(void) {
+    return Sys_HomeDataPath();
+}
+char *Sys_DefaultHomeConfigPath(void) {
+    return Sys_HomeConfigPath();
+}
+char *Sys_DefaultHomeDataPath(void) {
+    return Sys_HomeDataPath();
+}
+char *Sys_DefaultHomeStatePath(void) {
+    return Sys_HomeStatePath();
+}
+char *Sys_DefaultInstallPath(void) {
+    if (*s_install_path)
+        return s_install_path;
+    static char cwd[MAX_OSPATH];
+    if (!cwd[0]) {
+        char *result = getcwd(cwd, sizeof(cwd) - 1);
+        if (result != cwd)
+            Q_strncpyz(cwd, ".", sizeof(cwd));
+        cwd[MAX_OSPATH - 1] = 0;
+    }
+    return cwd;
+}
+char *Sys_DefaultAppPath(void) {
+    return Sys_BinaryPath();
+}
+char *Sys_DefaultBasePath(void) {
+    return Sys_DefaultInstallPath();
+}
+#endif
 
 char *Sys_SteamPath(void) {
     return s_web_empty_path;
@@ -391,24 +446,20 @@ char *Sys_MicrosoftStorePath(void) {
     return s_web_empty_path;
 }
 
-char *Sys_DefaultAppPath(void) {
-    return s_web_install_path;
-}
-
-char *Sys_DefaultBasePath(void) {
-    return s_web_install_path;
-}
-
 char *Sys_DefaultUserPath(void) {
+#ifdef __EMSCRIPTEN__
     return s_web_home_path;
+#else
+    return Sys_HomeDataPath();
+#endif
 }
 
 char *Sys_DefaultOutputPath(void) {
+#ifdef __EMSCRIPTEN__
     return s_web_home_path;
-}
-
-void Sys_SetDefaultInstallPath(const char *path) {
-    (void)path;
+#else
+    return Sys_HomeDataPath();
+#endif
 }
 
 const char *Sys_Basename(char *path) {
@@ -442,7 +493,6 @@ FILE *Sys_Mkfifo(const char *ospath) {
     return NULL;
 }
 
-#ifndef _UNIX
 char *Sys_Cwd(void) {
     static char cwd[MAX_OSPATH];
     char *result = getcwd(cwd, sizeof(cwd) - 1);
@@ -452,7 +502,6 @@ char *Sys_Cwd(void) {
     cwd[MAX_OSPATH - 1] = 0;
     return cwd;
 }
-#endif
 
 char **Sys_ListFiles(const char *directory, const char *extension, const char *filter, int *numfiles, qboolean wantsubs) {
     struct dirent *d;
@@ -541,7 +590,6 @@ char **Sys_ListFiles(const char *directory, const char *extension, const char *f
     return listCopy;
 }
 
-#ifndef _UNIX
 void Sys_FreeFileList(char **list) {
     int i;
 
@@ -558,7 +606,6 @@ void Sys_FreeFileList(char **list) {
 
 void CON_Init(void) {
 }
-#endif
 
 void CON_Shutdown(void) {
 }
@@ -580,13 +627,10 @@ char *Sys_GetCurrentUser(void) {
     return s_web_user;
 }
 
-#ifndef _UNIX
 int Sys_PID(void) {
     return 1;
 }
-#endif
 
-#ifndef _UNIX
 qboolean Sys_DllExtension(const char *name) {
     const char *ext;
 
@@ -605,9 +649,7 @@ qboolean Sys_DllExtension(const char *name) {
 
     return qfalse;
 }
-#endif
 
-#ifdef __EMSCRIPTEN__
 int Sys_Milliseconds(void) {
     static const auto base = std::chrono::steady_clock::now();
     const auto now = std::chrono::steady_clock::now();
@@ -625,7 +667,10 @@ qboolean Sys_RandomBytes(byte *string, int len) {
     }
     return qtrue;
 }
-#endif
+
+void Sys_PlatformExit(void) {
+    // No-op under Godot — platform cleanup is handled by Godot's own shutdown.
+}
 
 // Registry stubs (Windows-origin, called on all platforms in some paths)
 qboolean SaveRegistryInfo(qboolean user, const char *pszName, void *pvBuf, long lSize) {

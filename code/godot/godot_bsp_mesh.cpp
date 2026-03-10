@@ -1461,6 +1461,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
                 flare.color[2] = fv->color[2] / 255.0f;
                 memcpy(flare.shader, shaders[surf->shaderNum].shader, sizeof(flare.shader));
                 flare.shader[sizeof(flare.shader) - 1] = '\0';
+                flare.cluster = Godot_BSP_PointCluster(fv->xyz);
                 s_flares.push_back(flare);
             }
             skipped_type++;

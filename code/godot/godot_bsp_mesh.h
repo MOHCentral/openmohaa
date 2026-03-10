@@ -84,6 +84,7 @@ struct BSPFlare {
     float origin[3];        /* Flare position in Godot coordinates */
     float color[3];         /* Flare colour (RGB, 0–1) */
     char  shader[64];       /* Shader name for flare texture */
+    int   cluster;          /* PVS cluster index */
 };
 
 /// Get the number of flare surfaces parsed from the BSP.

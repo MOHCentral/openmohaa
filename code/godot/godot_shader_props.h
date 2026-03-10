@@ -270,6 +270,7 @@ typedef struct GodotShaderProps {
 
     /* Phase 66: tcMod stretch */
     bool  has_tcmod_stretch;
+    MohaaWaveFunc tcmod_stretch_func;
     float tcmod_stretch_base;
     float tcmod_stretch_amp;
     float tcmod_stretch_freq;

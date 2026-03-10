@@ -30,6 +30,9 @@
 #include <godot_cpp/classes/light3d.hpp>
 #include <godot_cpp/classes/display_server.hpp>
 #include <godot_cpp/classes/viewport.hpp>
+#include <godot_cpp/classes/multi_mesh_instance3d.hpp>
+#include <godot_cpp/classes/multi_mesh.hpp>
+#include <godot_cpp/classes/quad_mesh.hpp>
 #include <godot_cpp/classes/sub_viewport.hpp>
 #include <godot_cpp/classes/viewport_texture.hpp>
 #include <godot_cpp/classes/audio_server.hpp>
@@ -1359,6 +1362,9 @@ void MoHAARunner::check_world_load() {
         load_static_models();
         UtilityFunctions::print(String("[MoHAA] Static models loaded for: ") + new_bsp);
 
+        // Load flare surfaces (Phase 74)
+        load_flares();
+
         // Load skybox cubemap from sky shader (Phase 12)
         load_skybox();
         UtilityFunctions::print(String("[MoHAA] Loading load_skybox: ") + new_bsp);
@@ -2222,6 +2228,119 @@ void MoHAARunner::load_static_models() {
                             String::num_int64(placed) + " placed, " +
                             String::num_int64(failed) + " failed, " +
                             String::num_int64(sm_pvs_assigned) + " PVS-culled.");
+}
+
+// ──────────────────────────────────────────────
+//  Flare loading (Phase 74)
+// ──────────────────────────────────────────────
+
+void MoHAARunner::load_flares() {
+    int count = Godot_BSP_GetFlareCount();
+    if (count <= 0) return;
+
+    // Group flares by (cluster, shader_name) to batch into MultiMesh instances
+    struct FlareGroup {
+        std::vector<Transform3D> transforms;
+        std::vector<Color> colors;
+        int cluster;
+        String shader;
+    };
+    std::unordered_map<std::string, FlareGroup> groups;
+
+    for (int i = 0; i < count; i++) {
+        const BSPFlare *f = Godot_BSP_GetFlare(i);
+        if (!f) continue;
+
+        String key_str = String::num_int64(f->cluster) + "|" + String(f->shader);
+        std::string key = key_str.utf8().get_data();
+        FlareGroup &g = groups[key];
+        if (g.transforms.empty()) {
+            g.cluster = f->cluster;
+            g.shader = f->shader;
+        }
+
+        Transform3D t;
+        t.origin = Vector3(f->origin[0], f->origin[1], f->origin[2]);
+        g.transforms.push_back(t);
+        g.colors.push_back(Color(f->color[0], f->color[1], f->color[2], 1.0f));
+    }
+
+    // Create MultiMeshInstance3D nodes
+    int placed = 0;
+    Node *cluster_root = nullptr;
+    if (bsp_map_node) {
+        cluster_root = bsp_map_node->find_child("ClusterGeometry", false, false);
+    }
+
+    for (auto &kv : groups) {
+        const FlareGroup &g = kv.second;
+        if (g.transforms.empty()) continue;
+
+        MultiMeshInstance3D *mmi = memnew(MultiMeshInstance3D);
+        mmi->set_name("Flares_" + g.shader);
+
+        Ref<MultiMesh> mm;
+        mm.instantiate();
+        mm->set_transform_format(MultiMesh::TRANSFORM_3D);
+        mm->set_use_colors(true);
+        mm->set_instance_count((int)g.transforms.size());
+
+        Ref<QuadMesh> qm;
+        qm.instantiate();
+        qm->set_size(Vector2(1.0f, 1.0f));
+        mm->set_mesh(qm);
+
+        for (int i = 0; i < (int)g.transforms.size(); i++) {
+            mm->set_instance_transform(i, g.transforms[i]);
+            mm->set_instance_color(i, g.colors[i]);
+        }
+        mmi->set_multimesh(mm);
+
+        // Material: unshaded, billboard, additive by default
+        Ref<StandardMaterial3D> mat;
+        mat.instantiate();
+        mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+        mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+        mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+        mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+        mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+
+        if (!g.shader.is_empty()) {
+            CharString cs = g.shader.ascii();
+            int sh = Godot_Renderer_RegisterShader(cs.get_data());
+            if (sh > 0) {
+                Ref<ImageTexture> tex = get_shader_texture(sh);
+                if (tex.is_valid()) {
+                    mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                }
+            }
+            apply_shader_props_to_material(mat, cs.get_data());
+            // Re-enforce billboard in case shader props overwrote it
+            mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+        }
+        mmi->set_material_override(mat);
+
+        // Parent to PVS cluster node for visibility culling
+        Node *parent = nullptr;
+        if (g.cluster >= 0 && cluster_root) {
+            String cname = "Cluster_" + String::num_int64(g.cluster);
+            parent = cluster_root->find_child(cname, false, false);
+        }
+
+        if (!parent) parent = bsp_map_node;
+        if (!parent) parent = game_world;
+
+        if (parent) {
+            parent->add_child(mmi);
+            placed += (int)g.transforms.size();
+        } else {
+            memdelete(mmi);
+        }
+    }
+
+    if (placed > 0) {
+        UtilityFunctions::print(String("[MoHAA] Loaded ") + String::num_int64(placed) + " flares.");
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -5942,6 +6061,23 @@ void MoHAARunner::update_shader_animations(double delta) {
                 if (sp->tcmod_rotate != 0.0f) {
                     smat->set_uv1_offset(Vector3(offS, offT, Math::deg_to_rad((float)(sp->tcmod_rotate * shader_anim_time))));
                 }
+
+                // tcMod stretch: uniform UV scale centred at (0.5, 0.5)
+                // Replicates RB_CalcStretchTexCoords: p = 1/EvalWaveForm, scale by p, offset 0.5*(1-p)
+                if (sp->has_tcmod_stretch) {
+                    float wave_val = eval_wave(sp->tcmod_stretch_func,
+                        sp->tcmod_stretch_base, sp->tcmod_stretch_amp,
+                        sp->tcmod_stretch_phase, sp->tcmod_stretch_freq,
+                        shader_anim_time);
+                    if (wave_val != 0.0f) {
+                        float p = 1.0f / wave_val;
+                        float centre_off = 0.5f * (1.0f - p);
+                        smat->set_uv1_scale(Vector3(p, p, 1.0f));
+                        // Combine stretch offset with existing scroll/turb offset
+                        Vector3 cur = smat->get_uv1_offset();
+                        smat->set_uv1_offset(Vector3(cur.x + centre_off, cur.y + centre_off, cur.z));
+                    }
+                }
             }
 
             // Phase 55: animMap frame swap — uses cached shader_handle (O(1))
@@ -8337,7 +8473,7 @@ void MoHAARunner::update_audio(double delta) {
         int64_t posHash = ((int64_t)(qx & 0xFFF)) | ((int64_t)(qy & 0xFFF) << 12) | ((int64_t)(qz & 0xFFF) << 24);
         return ((int64_t)sfxHandle << 36) | posHash;
     };
-    std::unordered_map<int64_t, int> new_loops_64;
+    new_loops_64.clear();
 
     for (int i = 0; i < loop_count; i++) {
         float origin[3], velocity[3];
