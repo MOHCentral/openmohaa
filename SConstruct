@@ -177,9 +177,20 @@ if env["platform"] == "linux":
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "windows":
     env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
+    if env["arch"] in ["x86_64", "arm64"]:
+        env.Append(CPPDEFINES=["_WIN64"])
     env.Append(CCFLAGS=["/EHsc", "/TP"])  # C++ exceptions, treat all as C++
     sys_sources.append("code/sys/sys_win32.c")
     sys_sources.append("code/sys/con_win32.c")
+    sys_sources.append("code/sys/win_localization.cpp")
+    sys_sources.append("code/sys/win_bounds.cpp")
+elif env["platform"] == "android":
+    env.Append(CPPDEFINES=["_LINUX", "__linux__", "ANDROID"])
+    env.Append(CFLAGS=["-Wno-discarded-qualifiers", "-Wno-incompatible-pointer-types"])
+    env.Append(CXXFLAGS=["-fexceptions", "-frtti"])
+    sys_sources.append("code/sys/sys_unix.c")
+    sys_sources.append("code/sys/con_tty.c")
+    sys_sources.append("code/sys/sys_curl.c")
     sys_sources.append("code/sys/win_localization.cpp")
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "macos":

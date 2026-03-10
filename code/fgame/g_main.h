@@ -63,7 +63,9 @@ extern int sv_numpmtraces;
 
 extern usercmd_t  *current_ucmd;
 extern usereyes_t *current_eyeinfo;
+#ifdef __cplusplus
 extern Player     *g_pPlayer;
+#endif
 
 void G_ExitWithError(const char *error);
 void G_AllocGameData(void);

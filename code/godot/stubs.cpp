@@ -670,8 +670,10 @@ void *GLimp_RendererSleep(void) {
     return NULL;
 }
 
+#ifndef __APPLE__
 void GLimp_FrontEndSleep(void) {
 }
+#endif
 
 void GLimp_WakeRenderer(void *data) {
 }
