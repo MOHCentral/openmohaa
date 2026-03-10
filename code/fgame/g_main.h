@@ -27,7 +27,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "g_local.h"
 #include "gamecvars.h"
 
+#ifdef __cplusplus
 class Player;
+#endif
 
 extern qboolean      LoadingSavegame;
 extern qboolean      LoadingServer;
@@ -40,7 +42,12 @@ extern target_game_e g_target_game;
 // During library teardown, gi.Malloc/Free may be NULL (engine already shut down).
 // These safe wrappers fall back to system malloc/free to prevent SIGSEGV from
 // global C++ destructors (e.g. ScriptMaster) that allocate during cleanup.
+#ifdef __cplusplus
 #include <cstdlib>
+#else
+#include <stdlib.h>
+#endif
+
 static inline void *gi_Malloc_Safe(int size) { return gi.Malloc ? gi.Malloc(size) : malloc(size); }
 static inline void  gi_Free_Safe(void *ptr)  { if (gi.Free) gi.Free(ptr); else free(ptr); }
 #endif

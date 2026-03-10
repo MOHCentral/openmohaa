@@ -74,9 +74,12 @@ void GLimp_Shutdown( void )
 {
     Com_Printf( "[GodotInput] GLimp_Shutdown\n" );
 }
-
+#ifndef __APPLE__
 void GLimp_EndFrame( void )
 {
+}
+#endif
+
     /* No buffer swap needed — Godot handles presentation */
 }
 
@@ -86,9 +89,11 @@ void GLimp_SetGamma( unsigned char red[256], unsigned char green[256],
     /* Gamma ramp — not applicable under Godot */
 }
 
+#ifndef __APPLE__
 void GLimp_Minimize( void )
 {
 }
+#endif
 
 /* -------------------------------------------------------------------
  *  System functions that the renderer imports
@@ -104,10 +109,12 @@ void Sys_GLimpInit( void )
     /* Nothing to do — Godot owns the rendering context */
 }
 
+#ifndef __APPLE__
 qboolean Sys_LowPhysicalMemory( void )
 {
     return qfalse;
 }
+#endif
 
 /* -------------------------------------------------------------------
  *  Dialog used during abnormal-exit recovery

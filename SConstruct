@@ -8,7 +8,8 @@ env = SConscript("../godot-cpp/SConstruct")
 # Prevent Linux host shell argv overflows when archiving very large static libs
 # (notably godot-cpp) from long workspace paths. This must also apply to
 # Linux-hosted cross-builds (e.g. platform=macos with osxcross).
-if sys.platform.startswith("linux") and env.get("ARCOM"):
+# Disable for Web to avoid RecursionError during Emscripten SHLINK expansion.
+if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform") != "web":
     if env.get("platform") == "macos":
         def _archive_in_chunks(target, source, env):
             ar = env.subst("$AR")
@@ -176,7 +177,7 @@ if env["platform"] == "linux":
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "windows":
     env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
-    env.Append(CCFLAGS=["/EHsc"])  # C++ exceptions
+    env.Append(CCFLAGS=["/EHsc", "/TP"])  # C++ exceptions, treat all as C++
     sys_sources.append("code/sys/sys_win32.c")
     sys_sources.append("code/sys/con_win32.c")
     sys_sources.append("code/sys/win_localization.cpp")
@@ -191,6 +192,8 @@ elif env["platform"] == "macos":
     sys_sources.append("code/sys/win_localization.cpp")
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "web":
+    import sys
+    sys.setrecursionlimit(5000)
     env.Append(CPPDEFINES=["__EMSCRIPTEN__", "_LINUX", "__linux__"])
     env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
     # godot-cpp injects -fno-exceptions and -sSUPPORT_LONGJMP='wasm' by
@@ -384,7 +387,8 @@ elif env["platform"] == "web":
     ])
 elif env["platform"] == "macos":
     # macOS Mach-O linker uses -undefined dynamic_lookup instead of -z muldefs
-    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
+    # We add -Wl,-w to suppress duplicate symbol errors (warning instead).
+    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress", "-Wl,-w"])
 elif env["platform"] == "windows":
     # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
     env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])

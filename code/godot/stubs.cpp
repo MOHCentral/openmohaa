@@ -361,9 +361,11 @@ char *Sys_DefaultHomePath(void) {
     return s_web_home_path;
 }
 
+#ifndef __APPLE__
 char *Sys_DefaultHomeConfigPath(void) {
     return s_web_home_path;
 }
+#endif
 
 char *Sys_DefaultHomeDataPath(void) {
     return s_web_home_path;
@@ -440,6 +442,7 @@ FILE *Sys_Mkfifo(const char *ospath) {
     return NULL;
 }
 
+#ifndef __APPLE__
 char *Sys_Cwd(void) {
     static char cwd[MAX_OSPATH];
     char *result = getcwd(cwd, sizeof(cwd) - 1);
@@ -449,6 +452,7 @@ char *Sys_Cwd(void) {
     cwd[MAX_OSPATH - 1] = 0;
     return cwd;
 }
+#endif
 
 char **Sys_ListFiles(const char *directory, const char *extension, const char *filter, int *numfiles, qboolean wantsubs) {
     struct dirent *d;
@@ -537,6 +541,7 @@ char **Sys_ListFiles(const char *directory, const char *extension, const char *f
     return listCopy;
 }
 
+#ifndef __APPLE__
 void Sys_FreeFileList(char **list) {
     int i;
 
@@ -553,6 +558,7 @@ void Sys_FreeFileList(char **list) {
 
 void CON_Init(void) {
 }
+#endif
 
 void CON_Shutdown(void) {
 }
@@ -574,10 +580,13 @@ char *Sys_GetCurrentUser(void) {
     return s_web_user;
 }
 
+#ifndef __APPLE__
 int Sys_PID(void) {
     return 1;
 }
+#endif
 
+#ifndef __APPLE__
 qboolean Sys_DllExtension(const char *name) {
     const char *ext;
 
@@ -596,6 +605,7 @@ qboolean Sys_DllExtension(const char *name) {
 
     return qfalse;
 }
+#endif
 
 #ifdef __EMSCRIPTEN__
 int Sys_Milliseconds(void) {
