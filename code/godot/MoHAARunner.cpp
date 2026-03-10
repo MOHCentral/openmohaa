@@ -3164,10 +3164,13 @@ void MoHAARunner::update_entities() {
                 smat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
 
                 // If the shader was classified OPAQUE but this is a sprite,
-                // we still need transparency enabled (at minimum alpha blend)
-                // so that vertex colour alpha works.
+                // force additive blending — sprites are VFX effects (fire,
+                // flash, corona) with black backgrounds that must be invisible.
+                // Additive makes black = zero contribution.  Matches the VFX
+                // module (godot_vfx.cpp) which uses the same fallback.
                 if (smat->get_transparency() == BaseMaterial3D::TRANSPARENCY_DISABLED) {
                     smat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    smat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
                 }
 
                 static std::unordered_set<int> logged_active_sprites;
@@ -4043,6 +4046,23 @@ void MoHAARunner::update_entities() {
                         apply_shader_props_to_material(csmat, csn);
                         csmat->set_meta("shader_name", Variant(String(csn)));
                     }
+
+                    // Phase 39: customShader effect material blend-mode fallback.
+                    // customShader on RT_MODEL entities is used overwhelmingly for
+                    // VFX overlays: muzzle flashes, damage indicators, powerup
+                    // glows, etc.  These effects have dark/black backgrounds that
+                    // must be invisible.  If the shader was classified OPAQUE
+                    // (common for implicit shaders without a .shader definition),
+                    // apply additive blending so black = invisible — same logic
+                    // the VFX sprite module uses.  This fixes MP44/BAR/MG42 muzzle
+                    // flashes that reference implicit shaders.
+                    if (csmat->get_transparency() == BaseMaterial3D::TRANSPARENCY_DISABLED) {
+                        csmat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                        csmat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                        csmat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+                        csmat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+                    }
+
                     s_sprite_mat_cache[entCustomShader] = csmat;
                     cs_it = s_sprite_mat_cache.find(entCustomShader);
                 }
@@ -4228,24 +4248,63 @@ void MoHAARunner::update_entities() {
         // SubViewport with its own depth buffer, composited on top of the main
         // scene).  This prevents the viewmodel from clipping into walls.
         // All other entities stay in entity_root (main scene).
-        // Exception: entities with customShader AND RF_FIRST_PERSON/RF_DEPTHHACK
-        // must render in entity_root.  The weapon SubViewport composites via a
-        // TextureRect with alpha blending; any non-opaque content there (additive
-        // muzzle flashes, alpha-blended effects) produces opaque-black pixels
-        // where the texture is dark, because the alpha channel in the SubViewport
-        // is 1.0 even though RGB adds nothing (dark+additive=dark).  The
-        // TextureRect compositing then treats alpha=1 as fully opaque → black.
-        // Moving customShader entities to entity_root lets them blend directly
-        // against the world, which matches the original engine (no separate
-        // compositing pass for first-person effects).  The depth hack is lost
-        // for these entities, but muzzle flashes are brief and rarely clip.
+        //
+        // Exception: entities with additive blending must render in entity_root.
+        // The weapon SubViewport composites via a TextureRect with alpha blending;
+        // any additive content there produces opaque-black pixels where the
+        // texture is dark, because the alpha channel in the SubViewport is 1.0
+        // even though RGB adds nothing (dark+additive=dark).  The TextureRect
+        // compositing then treats alpha=1 as fully opaque → black.
+        //
+        // This applies to BOTH:
+        //  - entities with customShader set (effect overlays)
+        //  - entities whose own model shader is additive (e.g. muzflash.tik
+        //    uses shader 'muzmodel' with blendFunc GL_ONE GL_ONE)
+        //
+        // Moving these entities to entity_root lets them blend directly against
+        // the world, matching the original engine (no separate compositing pass).
+        // Depth hack is lost for these entities, but effects are brief and
+        // rarely clip.
         if (weapon_root) {
             bool force_main_scene = false;
             if (is_first_person || is_depthhack) {
-                int cs_check = 0;
-                Godot_Renderer_GetEntitySprite(i, nullptr, nullptr, &cs_check);
-                if (cs_check > 0) {
-                    force_main_scene = true;  // ANY customShader → main scene
+                // Check 1: customShader set → force main scene
+                if (entCustomShader > 0) {
+                    force_main_scene = true;
+                }
+
+                // Check 2: Model's own surface shader(s) are additive.
+                // Uses a per-hModel cache (computed once per model).
+                if (!force_main_scene) {
+                    static std::unordered_map<int, bool> s_model_additive_cache;
+                    auto add_it = s_model_additive_cache.find(hModel);
+                    if (add_it == s_model_additive_cache.end()) {
+                        bool is_additive = false;
+                        if (modType == 2 /* GR_MOD_TIKI */) {
+                            void *tiki = Godot_Model_GetTikiPtr(hModel);
+                            if (tiki) {
+                                int meshCount = Godot_Skel_GetMeshCount(tiki);
+                                for (int m = 0; m < meshCount && !is_additive; m++) {
+                                    int sc = Godot_Skel_GetSurfaceCount(tiki, m);
+                                    for (int sv = 0; sv < sc && !is_additive; sv++) {
+                                        char sh[64] = {0};
+                                        Godot_Skel_GetSurfaceShaderForSkin(tiki, m, sv, 0, sh, sizeof(sh));
+                                        if (sh[0]) {
+                                            int shHandle = Godot_Renderer_RegisterShader(sh);
+                                            if (is_shader_additive(shHandle)) {
+                                                is_additive = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        s_model_additive_cache[hModel] = is_additive;
+                        add_it = s_model_additive_cache.find(hModel);
+                    }
+                    if (add_it->second) {
+                        force_main_scene = true;
+                    }
                 }
             }
             Node *target_parent = (!force_main_scene && (is_first_person || is_depthhack))
