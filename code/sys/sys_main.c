@@ -54,6 +54,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static char binaryPath[ MAX_OSPATH ] = { 0 };
 static char installPath[ MAX_OSPATH ] = { 0 };
 
+#ifndef GODOT_GDEXTENSION
 /*
 =================
 Sys_SetBinaryPath
@@ -106,6 +107,7 @@ char *Sys_DefaultAppPath(void)
 {
 	return Sys_BinaryPath();
 }
+#endif
 
 /*
 =================

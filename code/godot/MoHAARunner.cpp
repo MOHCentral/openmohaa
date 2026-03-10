@@ -170,6 +170,8 @@ extern "C" {
     int  Godot_Renderer_RegisterShader(const char *name);
     void Godot_Renderer_GetVidSize(int *w, int *h);
     void Godot_Renderer_SyncVidSize(int w, int h);
+    void Godot_Renderer_SetViewportSize(int w, int h);
+    void Godot_Renderer_GetViewportSize(int *w, int *h);
     /* Phase 52 remap uses Godot_Renderer_GetShaderRemap declared below */
 
     // Sound bridge (Phase 8) — from godot_sound.c
@@ -1711,12 +1713,39 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
             break;
     }
 
-    // Force depth writes for transparent entity surfaces unless the shader
-    // explicitly says nodepthwrite.  Matches the BSP path in godot_bsp_mesh.cpp.
-    // Without this, transparent-classified surfaces (e.g. vehicle glass or
-    // improperly classified opaque panels) render without depth writes,
-    // making them appear see-through against the world geometry.
-    if (sp->transparency != SHADER_OPAQUE) {
+    // Depth write handling: match id Tech 3 per-stage rules.
+    //
+    // In the real renderer, any stage with a blendFunc does NOT write depth
+    // (GLS_DEPTHMASK_TRUE is not set) unless the shader explicitly contains
+    // a "depthWrite" directive.  This means:
+    //   - SHADER_ADDITIVE / SHADER_MULTIPLICATIVE → depth writes OFF
+    //   - SHADER_ALPHA_BLEND → depth writes OFF by engine default, but we
+    //     force them ON here (otherwise glass/fence surfaces look see-through
+    //     against world geometry in Godot's Forward+ renderer).
+    //   - Explicit "depthWrite" / "nodepthwrite" overrides everything.
+    //
+    // Getting this wrong for additive shaders (e.g. muzmodel) causes cross-
+    // shaped meshes to self-occlude, revealing the underlying geometry.
+    if (sp->transparency == SHADER_ADDITIVE
+        || sp->transparency == SHADER_MULTIPLICATIVE
+        || sp->transparency == SHADER_MULTIPLICATIVE_INV) {
+        // Additive/multiplicative: disable depth writes unless the shader
+        // explicitly requests them via "depthWrite".
+        bool has_explicit_depth = false;
+        for (int si = 0; si < sp->stage_count; si++) {
+            if (sp->stages[si].active
+                && sp->stages[si].depthWriteExplicit
+                && sp->stages[si].depthWriteEnabled) {
+                has_explicit_depth = true;
+                break;
+            }
+        }
+        if (!has_explicit_depth) {
+            mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+        }
+    } else if (sp->transparency == SHADER_ALPHA_BLEND) {
+        // Alpha-blended: force depth writes ON unless explicitly disabled.
+        // This prevents glass/fence surfaces rendering see-through.
         bool no_depth = false;
         for (int si = 0; si < sp->stage_count; si++) {
             if (sp->stages[si].active
@@ -8521,15 +8550,19 @@ void MoHAARunner::_ready() {
 
     CON_Init();
 
-    // Set desktop resolution so GR_BeginRegistration can resolve r_mode -2
+    // Set desktop resolution so GR_BeginRegistration can resolve r_mode -2.
+    // Use the current window size (not monitor size) so that windowed mode
+    // r_mode -2 doesn't try to expand the window to the full monitor.
+    // For fullscreen, the vid_restart handler updates desktop resolution
+    // to the actual screen size before going fullscreen.
     {
         DisplayServer *ds = DisplayServer::get_singleton();
         if (ds) {
-            Vector2i screen = ds->screen_get_size();
-            if (screen.x > 0 && screen.y > 0) {
-                Godot_Renderer_SetDesktopResolution(screen.x, screen.y);
-                UtilityFunctions::print(String("[MoHAA] Desktop resolution: ") +
-                    String::num_int64(screen.x) + String("x") + String::num_int64(screen.y));
+            Vector2i win = ds->window_get_size();
+            if (win.x > 0 && win.y > 0) {
+                Godot_Renderer_SetDesktopResolution(win.x, win.y);
+                UtilityFunctions::print(String("[MoHAA] Desktop resolution (window): ") +
+                    String::num_int64(win.x) + String("x") + String::num_int64(win.y));
             }
         }
     }
@@ -8882,32 +8915,56 @@ void MoHAARunner::_process(double delta) {
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
                 if (fs) {
+                    // Fullscreen: set desktop resolution to monitor size for
+                    // correct r_mode -2 resolution, then go fullscreen.
+                    Vector2i screen = ds->screen_get_size();
+                    if (screen.x > 0 && screen.y > 0) {
+                        Godot_Renderer_SetDesktopResolution(screen.x, screen.y);
+                    }
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
+
+                    // glConfig stays at the user's SELECTED resolution (vw×vh) —
+                    // do NOT overwrite to screen native.  The ui_scale in
+                    // update_ui_transform stretches from engine res to viewport.
+                    // Apply 3D render scaling if selected res < native monitor.
+                    int viewport_w = screen.x > 0 ? screen.x : vw;
+                    int viewport_h = screen.y > 0 ? screen.y : vh;
+                    Godot_Renderer_SetViewportSize(viewport_w, viewport_h);
+
+                    if (vw > 0 && vh > 0 && viewport_w > 0 && viewport_h > 0) {
+                        float scale_x = (float)vw / (float)viewport_w;
+                        float scale_y = (float)vh / (float)viewport_h;
+                        float render_scale = (scale_x < scale_y) ? scale_x : scale_y;
+                        if (render_scale > 1.0f) render_scale = 1.0f;
+                        if (render_scale < 0.1f) render_scale = 0.1f;
+                        get_viewport()->set_scaling_3d_scale(render_scale);
+                    }
                 } else {
+                    // Windowed: resize the window to the selected resolution.
+                    // glConfig matches the window size exactly.
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_WINDOWED);
                     if (vw > 0 && vh > 0) {
                         ds->window_set_size(Vector2i(vw, vh));
+                        Godot_Renderer_SetViewportSize(vw, vh);
                     }
+                    // Reset 3D render scale to full quality in windowed mode.
+                    get_viewport()->set_scaling_3d_scale(1.0f);
+
+                    // Windowed mode: sync glConfig to window size so engine
+                    // resolution = viewport = window size (1:1 mapping).
+                    if (vw > 0 && vh > 0) {
+                        Godot_Renderer_SyncVidSize(vw, vh);
+                        Godot_Client_SyncGlConfigVidSize(vw, vh);
+                    }
+                    // Update desktop resolution to the window size for r_mode -2.
+                    Godot_Renderer_SetDesktopResolution(vw, vh);
                 }
                 UtilityFunctions::print(String("[MoHAA] vid_restart: fullscreen=") +
                     String::num_int64(fs) + String(" size=") +
                     String::num_int64(vw) + String("x") + String::num_int64(vh));
 
-                // Sync engine resolution immediately to the target dimensions.
-                int sync_w, sync_h;
-                if (fs) {
-                    Vector2i screen = ds->screen_get_size();
-                    sync_w = screen.x;
-                    sync_h = screen.y;
-                } else {
-                    sync_w = vw;
-                    sync_h = vh;
-                }
-                if (sync_w > 0 && sync_h > 0) {
-                    Godot_Renderer_SyncVidSize(sync_w, sync_h);
-                    Godot_Client_SyncGlConfigVidSize(sync_w, sync_h);
-                    Godot_Client_ResolutionChange();
-                }
+                // Notify UI/cgame of resolution change.
+                Godot_Client_ResolutionChange();
 
                 // Give Godot a few frames to process the window resize before
                 // the pre-frame viewport sync is allowed to run again.
@@ -8954,8 +9011,12 @@ void MoHAARunner::_process(double delta) {
         }
     }
 
-    // ── Per-frame viewport → engine resolution sync ──
-    // After a vid_restart, skip syncing for a few frames to let Godot settle.
+    // ── Per-frame viewport tracking ──
+    // Track the actual Godot viewport size for update_ui_transform.
+    // In WINDOWED mode, the user may drag-resize the window — update
+    // glConfig to match so engine resolution = viewport (1:1).
+    // In FULLSCREEN, glConfig stays at the user's selected resolution;
+    // only the viewport tracking is updated.
     if (vid_restart_grace_frames > 0) {
         vid_restart_grace_frames--;
     } else {
@@ -8967,12 +9028,20 @@ void MoHAARunner::_process(double delta) {
         int vp_w = (int)vp.x;
         int vp_h = (int)vp.y;
         if (vp_w > 0 && vp_h > 0) {
-            int cur_w = 0, cur_h = 0;
-            Godot_Renderer_GetVidSize(&cur_w, &cur_h);
-            if (cur_w != vp_w || cur_h != vp_h) {
-                Godot_Renderer_SyncVidSize(vp_w, vp_h);
-                Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
-                Godot_Client_ResolutionChange();
+            int old_vp_w = 0, old_vp_h = 0;
+            Godot_Renderer_GetViewportSize(&old_vp_w, &old_vp_h);
+            if (old_vp_w != vp_w || old_vp_h != vp_h) {
+                Godot_Renderer_SetViewportSize(vp_w, vp_h);
+
+                // In windowed mode, manual resize → sync glConfig to match
+                DisplayServer *ds = DisplayServer::get_singleton();
+                if (ds && ds->window_get_mode() == DisplayServer::WINDOW_MODE_WINDOWED) {
+                    Godot_Renderer_SyncVidSize(vp_w, vp_h);
+                    Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
+                    Godot_Client_ResolutionChange();
+                    // Also update desktop resolution for r_mode -2
+                    Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
+                }
             }
         }
     }

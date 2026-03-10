@@ -386,7 +386,7 @@ elif env["platform"] == "web":
     # -fwasm-exceptions would import __cpp_exception WebAssembly.Tag which
     # Godot's main module does not provide.
     env.Append(LINKFLAGS=["-fexceptions"])
-    env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
+    env.Append(LINKFLAGS=["-Wl,-z,muldefs"])
     env.Append(CPPPATH=["code/thirdparty/zlib-1.3.1"])
     sources.extend([
         "code/thirdparty/zlib-1.3.1/adler32.c",
@@ -528,7 +528,7 @@ elif env["platform"] == "web":
         "-sSIDE_MODULE=2",
         "-pthread",
         "-fexceptions",
-        "-Wl,--allow-multiple-definition",
+        "-Wl,-z,muldefs",
         "-sEXPORTED_FUNCTIONS=['_GetCGameAPI']",
     ])
     # Use .wasm suffix so the web cgame artifact (bin/libcgame.wasm) cannot be

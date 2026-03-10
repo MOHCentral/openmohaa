@@ -59,6 +59,7 @@ static float Lines[13][4] = {
     {-1.0, 0.0, -1.0, 2.0}
 };
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_StreamBegin
@@ -68,7 +69,9 @@ void RB_StreamBegin(shader_t *shader)
 {
     RB_BeginSurface(shader);
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_StreamEnd
@@ -96,7 +99,9 @@ void RB_StreamEnd(void)
 
     RB_EndSurface();
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_StreamBeginDrawSurf
@@ -106,7 +111,9 @@ void RB_StreamBeginDrawSurf(void)
 {
     backEnd.dsStreamVert = tess.numVertexes;
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_StreamEndDrawSurf
@@ -130,6 +137,7 @@ void RB_StreamEndDrawSurf(void)
         tess.numIndexes += 3;
     }
 }
+#endif
 
 /*
 ===============
@@ -148,6 +156,7 @@ static void addTriangle(void)
     tess.numVertexes++;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_Vertex3fv
@@ -158,7 +167,9 @@ void RB_Vertex3fv(vec3_t v)
     VectorCopy(v, tess.xyz[tess.numVertexes]);
     addTriangle();
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ===============
 RB_Vertex3f
@@ -166,89 +177,13 @@ RB_Vertex3f
 */
 void RB_Vertex3f(vec_t x, vec_t y, vec_t z)
 {
-    tess.xyz[tess.numVertexes][0] = x;
-    tess.xyz[tess.numVertexes][1] = y;
-    tess.xyz[tess.numVertexes][2] = z;
-    addTriangle();
-}
-
-/*
-===============
-RB_Vertex2f
-===============
-*/
-void RB_Vertex2f(vec_t x, vec_t y)
-{
-    RB_Vertex3f(x, y, 0);
-}
-
-/*
-===============
-RB_Color4f
-===============
-*/
-void RB_Color4f(vec_t r, vec_t g, vec_t b, vec_t a)
-{
-    cntColor[0] = r * tr.identityLightByte;
-    cntColor[1] = g * tr.identityLightByte;
-    cntColor[2] = b * tr.identityLightByte;
-    cntColor[3] = a * 255.0;
-}
-
-/*
-===============
-RB_Color3f
-===============
-*/
-void RB_Color3f(vec_t r, vec_t g, vec_t b)
-{
-    RB_Color4f(r, g, b, 1.0);
-}
-
-/*
-===============
-RB_Color3fv
-===============
-*/
-void RB_Color3fv(vec3_t col)
-{
-    RB_Color3f(col[0], col[1], col[2]);
-}
-
-/*
-===============
-RB_Color4bv
-===============
-*/
-void RB_Color4bv(unsigned char *colors)
-{
-    cntColor[0] = colors[0];
-    cntColor[1] = colors[1];
-    cntColor[2] = colors[2];
-    cntColor[3] = colors[3];
-}
-
-/*
-===============
-RB_Texcoord2f
-===============
-*/
-void RB_Texcoord2f(float s, float t)
-{
-    cntSt[0] = s;
-    cntSt[1] = t;
-}
-
-/*
-===============
-RB_Texcoord2fv
-===============
-*/
+...
 void RB_Texcoord2fv(vec2_t st)
 {
     cntSt[0] = st[0];
     cntSt[1] = st[1];
 }
+#endif
 
 /*
 ===============

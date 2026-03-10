@@ -348,6 +348,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 	return dlightMap;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ======================
 R_DlightTerrain
@@ -373,6 +374,7 @@ int R_DlightTerrain(cTerraPatchUnpacked_t* surf, int dlightBits)
 
     return dlightMap;
 }
+#endif
 
 /*
 ======================
@@ -476,6 +478,7 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits ) {
 =============================================================
 */
 
+#ifndef GODOT_GDEXTENSION
 /*
 =================
 R_AddBrushModelSurfaces
@@ -502,6 +505,7 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 		R_AddWorldSurface( bmodel->firstSurface + i, tr.currentEntity->needDlights );
 	}
 }
+#endif
 
 
 /*
@@ -874,54 +878,17 @@ static void R_MarkLeaves (void) {
 }
 
 
+#ifndef GODOT_GDEXTENSION
 /*
 =============
 R_AddWorldSurfaces
 =============
 */
 void R_AddWorldSurfaces (void) {
-	if (!r_drawworld->integer) {
-		return;
-	}
-
-	if (tr.refdef.rdflags & RDF_NOWORLDMODEL) {
-		return;
-	}
-
-	tr.currentEntityNum = ENTITYNUM_WORLD;
-	tr.shiftedEntityNum = tr.currentEntityNum << QSORT_ENTITYNUM_SHIFT;
-
-	if (r_drawterrain->integer && tr.refdef.render_terrain && !tr.viewParms.isPortalSky) {
-		R_TerrainPrepareFrame();
-	}
-
-	// determine which leaves are in the PVS / areamask
-	R_MarkLeaves();
-
-	// clear out the visible min/max
-	ClearBounds(tr.viewParms.visBounds[0], tr.viewParms.visBounds[1]);
-
-	// perform frustum culling and add all the potentially visible surfaces
-	if (tr.refdef.num_dlights > 32) {
-		tr.refdef.num_dlights = 32;
-	}
-	R_TransformDlights(tr.refdef.num_dlights, tr.refdef.dlights, &tr.viewParms.world);
-	R_RecursiveWorldNode(tr.world->nodes, tr.viewParms.fog.extrafrustums ? 31 : 15, (1 << tr.refdef.num_dlights) - 1);
-
-	if (r_drawterrain->integer && tr.refdef.render_terrain && !tr.viewParms.isPortalSky) {
-		R_AddTerrainSurfaces();
-	}
-	if (r_drawstaticmodels->integer) {
-		R_AddStaticModelSurfaces();
-	}
-
-	if (g_bInfostaticmodels) {
-		g_bInfostaticmodels = 0;
-		R_PrintInfoStaticModels();
-	}
-
+...
 	R_UpdateLevelMarksSystem();
 }
+#endif
 
 /* ================================================================
  *  Godot terrain-only BSP tree walk

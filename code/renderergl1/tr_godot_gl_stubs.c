@@ -115,7 +115,7 @@ void R_AddSpriteSurfCmd(drawSurf_t *drawSurfs, int numDrawSurfs) {
 }
 
 /* ── GLimp stubs — no GL context to init ── */
-
+#ifndef GODOT_GDEXTENSION
 void GLimp_Init(qboolean fixedFunction) {
     (void)fixedFunction;
     /* Populate glConfig with sensible defaults so renderer code doesn't crash. */
@@ -124,13 +124,13 @@ void GLimp_Init(qboolean fixedFunction) {
     glConfig.colorBits = 32;
     glConfig.depthBits = 24;
     glConfig.stencilBits = 8;
-    glConfig.textureCompression = TC_NONE;
     glConfig.maxTextureSize = 4096;
     glConfig.numTextureUnits = 2;
     glConfig.textureEnvAddAvailable = qtrue;
     glConfig.isFullscreen = qfalse;
     glConfig.windowAspect = 1280.0f / 720.0f;
 }
+#endif
 
 void GLimp_Shutdown(void) {
 }

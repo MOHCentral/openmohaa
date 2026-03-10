@@ -225,6 +225,7 @@ void R_WorldToLocal (vec3_t world, vec3_t local) {
 	local[2] = DotProduct(world, tr.ori.axis[2]);
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==========================
 R_TransformModelToClip
@@ -251,7 +252,9 @@ void R_TransformModelToClip( const vec3_t src, const float *modelMatrix, const f
 			eye[3] * projectionMatrix[ i + 3 * 4 ];
 	}
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==========================
 R_TransformClipToWindow
@@ -270,6 +273,7 @@ void R_TransformClipToWindow( const vec4_t clip, const viewParms_t *view, vec4_t
 	window[0] = (int) ( window[0] + 0.5 );
 	window[1] = (int) ( window[1] + 0.5 );
 }
+#endif
 
 
 /*
@@ -315,6 +319,7 @@ void R_AdjustVisBoundsForSprite(refSprite_t* ent, viewParms_t* viewParms, orient
     }
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 =================
 R_RotateForEntity
@@ -383,7 +388,9 @@ void R_RotateForEntity( const trRefEntity_t *ent, const viewParms_t *viewParms,
 	ori->viewOrigin[1] = DotProduct( delta, ori->axis[1] ) * axisLength;
 	ori->viewOrigin[2] = DotProduct( delta, ori->axis[2] ) * axisLength;
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 =================
 R_RotateForStaticModel
@@ -435,7 +442,9 @@ void R_RotateForStaticModel( cStaticModelUnpacked_t *SM, const viewParms_t *view
 	ori->viewOrigin[1] = DotProduct( delta, ori->axis[1] );
 	ori->viewOrigin[2] = DotProduct( delta, ori->axis[2] );
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 =================
 R_RotateForViewer
@@ -484,6 +493,7 @@ void R_RotateForViewer (void)
 	tr.viewParms.world = tr.ori;
 
 }
+#endif
 
 /*
 ** SetFarClip
@@ -1754,6 +1764,7 @@ void R_DrawDebugStrings(void) {
 	}
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 R_RenderView
@@ -1763,46 +1774,11 @@ or a mirror / remote location
 ================
 */
 void R_RenderView (viewParms_t *parms) {
-	int		firstDrawSurf;
-	int		firstSpriteSurf;
-
-	if ( parms->viewportWidth <= 0 || parms->viewportHeight <= 0 ) {
-		return;
-	}
-
-	tr.viewCount++;
-
-	tr.viewParms = *parms;
-	tr.viewParms.frameSceneNum = tr.frameSceneNum;
-	tr.viewParms.frameCount = tr.frameCount;
-
-	firstDrawSurf = tr.refdef.numDrawSurfs;
-	firstSpriteSurf = tr.refdef.numSpriteSurfs;
-
-	tr.viewCount++;
-
-	// set viewParms.world
-	R_RotateForViewer ();
-
-	R_SetupFrustum ();
-
-	R_Sky_Reset();
-
-	R_DrawDebugStrings();
-
-	R_GenerateDrawSurfs();
-
-    R_SortDrawSurfs(
-		tr.refdef.drawSurfs + firstDrawSurf, tr.refdef.numDrawSurfs - firstDrawSurf,
-		tr.refdef.spriteSurfs + firstSpriteSurf, tr.refdef.numSpriteSurfs - firstSpriteSurf
-	);
-
-	R_DrawDebugLines();
-    R_DebugSkeleton();
-
+...
 	// draw main system development information (surface outlines, etc)
 	R_DebugGraphics();
 }
+#endif
 
 
 

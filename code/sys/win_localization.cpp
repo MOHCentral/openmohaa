@@ -44,6 +44,7 @@ void Sys_ShutLocalization()
     g_localization = NULL;
 }
 
+#ifndef GODOT_GDEXTENSION
 const char *Sys_LV_ConvertString(const char *var)
 {
     //
@@ -62,6 +63,7 @@ const char *Sys_LV_CL_ConvertString(const char *var)
 
     return g_localization->ConvertString(var);
 }
+#endif
 
 typedef char *charstar;
 

@@ -98,6 +98,7 @@ DISCRETE POLYS
 ===========================================================================
 */
 
+#ifndef GODOT_GDEXTENSION
 /*
 =====================
 R_AddPolygonSurfaces
@@ -118,6 +119,7 @@ void R_AddPolygonSurfaces( void ) {
 		R_AddDrawSurf( ( void * )poly, sh, qfalse );
 	}
 }
+#endif
 
 /*
 =====================
@@ -151,6 +153,7 @@ qboolean RE_AddPolyToScene(qhandle_t hShader, int numVerts, const polyVert_t* ve
 	return qtrue;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 =====================
 R_AddTerrainMarkSurfaces
@@ -170,6 +173,7 @@ void R_AddTerrainMarkSurfaces(void) {
         R_AddDrawSurf(&terMark->surfaceType, shader, 0);
     }
 }
+#endif
 
 /*
 =====================

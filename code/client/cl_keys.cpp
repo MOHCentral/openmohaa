@@ -963,6 +963,7 @@ void Key_CtrlBindlist_f(void)
     }
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ============
 Key_KeynameCompletion
@@ -976,6 +977,7 @@ void Key_KeynameCompletion(void (*callback)(const char *s))
         callback(keynames[i].name);
     }
 }
+#endif
 
 /*
 ===================

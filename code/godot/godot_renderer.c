@@ -342,6 +342,13 @@ static const int gr_numVidModes = (int)( sizeof(gr_vidModes) / sizeof(gr_vidMode
 static int gr_desktopWidth  = 1920;
 static int gr_desktopHeight = 1080;
 
+/* Actual Godot viewport size — tracked separately from stored_glconfig
+ * so that glConfig (engine resolution) is never clobbered by per-frame
+ * viewport sync.  MoHAARunner calls SetViewportSize each frame; the
+ * Godot-side ui_scale divides viewport by engine resolution. */
+static int gr_viewport_width  = 0;
+static int gr_viewport_height = 0;
+
 /* -------------------------------------------------------------------
  *  Camera bridge — captured refdef_t data (Phase 7a)
  *
@@ -754,6 +761,14 @@ static void GR_BeginRegistration( glconfig_t *config )
 
     /* Copy for later queries */
     stored_glconfig = *config;
+
+    /* Initialise viewport tracking to the engine resolution.
+     * MoHAARunner will overwrite with the real Godot viewport size
+     * on the first frame. */
+    if ( gr_viewport_width == 0 || gr_viewport_height == 0 ) {
+        gr_viewport_width  = config->vidWidth;
+        gr_viewport_height = config->vidHeight;
+    }
 }
 
 static void GR_EndRegistration( void )
@@ -3345,7 +3360,13 @@ void Godot_Renderer_GetVidSize( int *w, int *h )
 
 /* Sync stored_glconfig resolution with the actual Godot viewport.
  * Called by MoHAARunner each frame so that GR_Transform2D's Y-flip
- * and update_ui_transform's scaling always match the real viewport. */
+ * and update_ui_transform's scaling always match the real viewport.
+ *
+ * DEPRECATED: Do NOT call this per-frame. stored_glconfig must reflect
+ * the engine's selected resolution (from r_mode), not the viewport.
+ * Use Godot_Renderer_SetViewportSize() instead for viewport tracking.
+ * Kept only for vid_restart windowed mode where glConfig must match
+ * the window size. */
 void Godot_Renderer_SyncVidSize( int w, int h )
 {
     if ( w > 0 && h > 0 ) {
@@ -3353,6 +3374,23 @@ void Godot_Renderer_SyncVidSize( int w, int h )
         stored_glconfig.vidHeight = h;
         stored_glconfig.windowAspect = (float)w / (float)h;
     }
+}
+
+/* Set the actual Godot viewport size.  Called by MoHAARunner each frame.
+ * This does NOT touch stored_glconfig (engine resolution). */
+void Godot_Renderer_SetViewportSize( int w, int h )
+{
+    if ( w > 0 && h > 0 ) {
+        gr_viewport_width  = w;
+        gr_viewport_height = h;
+    }
+}
+
+/* Read the actual Godot viewport size. */
+void Godot_Renderer_GetViewportSize( int *w, int *h )
+{
+    if ( w ) *w = gr_viewport_width;
+    if ( h ) *h = gr_viewport_height;
 }
 
 void Godot_Renderer_Get2DWindow( float *left, float *right,

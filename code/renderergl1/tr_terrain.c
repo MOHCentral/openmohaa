@@ -1309,6 +1309,7 @@ void R_MarkTerrainPatch(cTerraPatchUnpacked_t *pPatch)
     tr.world->activeTerraPatches = pPatch;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 R_AddTerrainSurfaces
@@ -1316,173 +1317,19 @@ R_AddTerrainSurfaces
 */
 void R_AddTerrainSurfaces()
 {
-    int                    i;
-    int                    dlight;
-    cTerraPatchUnpacked_t *patch;
-
-    if (tr.world->numTerraPatches < 0) {
-        return;
-    }
-
-    if (!ter_lock->integer) {
-        R_TessellateTerrain();
-    }
-
-    if (ter_count->integer || ter_lock->integer == 2) {
-        for (i = 0; i < tr.world->numTerraPatches; i++) {
-            patch = &tr.world->terraPatches[i];
-
-            if (ter_lock->integer == 2 || patch->visCountDraw == g_terVisCount) {
-                assert(patch->shader);
-
-                dlight = R_CheckDlightTerrain(patch, (1 << (tr.refdef.num_dlights)) - 1);
-                R_AddDrawSurf((surfaceType_t *)&patch->drawinfo, patch->shader, dlight);
-            }
-
-            if (ter_count->integer && (g_nSplit || g_nMerge)) {
-                if (ter_count->integer == 1 || g_nSplit * 2 != g_nMerge) {
-                    ri.Printf(
-                        PRINT_DEVELOPER,
-                        "%5zu tris / %5zu verts / %4d splits / %4d merges\n",
-                        g_nTris - g_tri.nFree,
-                        g_nVerts - g_vert.nFree,
-                        g_nSplit,
-                        g_nMerge
-                    );
-                }
-
-                g_nSplit = 0;
-                g_nMerge = 0;
-            }
-        }
-    } else {
-        for (patch = tr.world->activeTerraPatches; patch; patch = patch->pNextActive) {
-            assert(patch->shader);
-
-            dlight = R_CheckDlightTerrain(patch, (1 << (tr.refdef.num_dlights)) - 1);
-            R_AddDrawSurf((surfaceType_t *)&patch->drawinfo, patch->shader, dlight);
-        }
+...
     }
 }
+#endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 R_TerrainHeightForPoly
-
-Calculates the height of a terrain polygon by interpolating the heights of its vertices.
-The function finds the triangle containing the given point (x, y) within the terrain patch,
-and then computes the height at each vertex of the polygon using barycentric interpolation.
-Finally, it updates the z-coordinate of each vertex to store the calculated height.
-Returns qtrue if the triangle was found and the height could be calculated and saved into its vertices.
-
-ToDo: try to use the Vector*(?) macros for the math operations below from q_shared.h and q_math.h, not sure which ones would be a good fit
-================
-*/
-qboolean R_TerrainHeightForPoly(cTerraPatchUnpacked_t *pPatch, polyVert_t *pVerts, int nVerts)
-{
-    float x0     = 0;
-    float y0     = 0;
-    float x1     = 0;
-    float y1     = 0;
-    float x2     = 0;
-    float y2     = 0;
-    float fKx[3] = {0}, fKy[3] = {0}, fKz[3] = {0}, fArea[3] = {0};
-    float fAreaTotal = 0;
-
-    float    x = pVerts->xyz[0];
-    float    y = pVerts->xyz[1];
-    terraInt iTri;
-
-    // Calculate the average of the x and y coordinates of all vertices
-    if (nVerts > 1) {
-        for (int i = 1; i < nVerts; i++) {
-            x += pVerts[i].xyz[0];
-            y += pVerts[i].xyz[1];
-        }
-
-        // Use the averaged values from this point onwards
-        x = x / nVerts;
-        y = y / nVerts;
-    }
-
-    // Get the first valid triangle in the patch
-    iTri = pPatch->drawinfo.iTriHead;
-
-    // Find a triangle that contains the point (x, y)
-    for (iTri = pPatch->drawinfo.iTriHead; iTri; iTri = g_pTris[iTri].iNext) {
-        if (g_pTris[iTri].byConstChecks & 4) {
-            // Get all three x-y coordinates of the current triangle's vertices
-            x0 = g_pVert[g_pTris[iTri].iPt[0]].xyz[0];
-            y0 = g_pVert[g_pTris[iTri].iPt[0]].xyz[1];
-            x1 = g_pVert[g_pTris[iTri].iPt[1]].xyz[0];
-            y1 = g_pVert[g_pTris[iTri].iPt[1]].xyz[1];
-            x2 = g_pVert[g_pTris[iTri].iPt[2]].xyz[0];
-            y2 = g_pVert[g_pTris[iTri].iPt[2]].xyz[1];
-
-            // Calculate the signed areas of the three sub-triangles
-            fArea[0] = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1);
-            if (fArea[0] < -0.1) {
-                // The point is outside the triangle
-                continue;
-            }
-
-            fArea[1] = (x - x2) * (y0 - y2) - (y - y2) * (x0 - x2);
-            if (fArea[1] < -0.1) {
-                // The point is outside the triangle
-                continue;
-            }
-
-            fArea[2] = (x - x0) * (y1 - y0) - (y - y0) * (x1 - x0);
-            if (fArea[2] < -0.1) {
-                // The point is outside the triangle
-                continue;
-            }
-
-            fAreaTotal = fArea[0] + fArea[1] + fArea[2];
-            if (fAreaTotal > 0.0) {
-                //
-                // Found it - the point is inside the triangle
-                // Calculate the barycentric coordinates (fKx, fKy, fKz) of the triangle
-                //
-
-                float z0 = g_pVert[g_pTris[iTri].iPt[0]].xyz[2] / fAreaTotal;
-                float z1 = g_pVert[g_pTris[iTri].iPt[1]].xyz[2] / fAreaTotal;
-                float z2 = g_pVert[g_pTris[iTri].iPt[2]].xyz[2] / fAreaTotal;
-
-                fKy[0] = z0 * (x2 - x1);
-                fKy[1] = z1 * (x0 - x2);
-                fKy[2] = z2 * (x1 - x0);
-
-                fKx[0] = z0 * (y2 - y1);
-                fKx[1] = z1 * (y0 - y2);
-                fKx[2] = z2 * (y1 - y0);
-
-                // Note: this could be done with the CrossProduct macro if everything were in a vector
-                fKz[0] = fKx[0] * x1 - y1 * fKy[0];
-                fKz[1] = fKx[1] * x2 - y2 * fKy[1];
-                fKz[2] = fKx[2] * x0 - y0 * fKy[2];
-
-                // Calculate the height for each vertex
-                for (int i = 0; i < nVerts; i++) {
-                    float fScaleX = pVerts[i].xyz[0] * (fKx[0] + fKx[1] + fKx[2]);
-                    float fScaleY = pVerts[i].xyz[1] * (fKy[0] + fKy[1] + fKy[2]);
-                    float fConstZ = fKz[0] + fKz[1] + fKz[2];
-
-                    // Write back the calculated height into the vertex
-                    pVerts[i].xyz[2] = fScaleX - fScaleY - fConstZ;
-                }
-
-                return qtrue;
-            }
-        }
-    }
-
-    assert(
-        !pPatch->drawinfo.iTriHead
-        && va("R_TerrainHeightForPoly: point(%f %f) not in patch(%f %f %f)\n", x, y, pPatch->x0, pPatch->y0, pPatch->z0)
-    );
+...
     return qfalse;
 }
+#endif
 
 /*
 ================
@@ -1683,6 +1530,7 @@ void R_TerrainFree()
     }
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ====================
 R_SwapTerraPatch
@@ -1692,31 +1540,10 @@ Swaps the patch on big-endian
 */
 void R_SwapTerraPatch(cTerraPatch_t *pPatch)
 {
-#ifdef Q3_BIG_ENDIAN
-    int i;
-
-    pPatch->texCoord[0][0][0] = LittleFloat(pPatch->texCoord[0][0][0]);
-    pPatch->texCoord[0][0][1] = LittleFloat(pPatch->texCoord[0][0][1]);
-    pPatch->texCoord[0][1][0] = LittleFloat(pPatch->texCoord[0][1][0]);
-    pPatch->texCoord[0][1][1] = LittleFloat(pPatch->texCoord[0][1][1]);
-    pPatch->texCoord[1][0][0] = LittleFloat(pPatch->texCoord[1][0][0]);
-    pPatch->texCoord[1][0][1] = LittleFloat(pPatch->texCoord[1][0][1]);
-    pPatch->texCoord[1][1][0] = LittleFloat(pPatch->texCoord[1][1][0]);
-    pPatch->texCoord[1][1][1] = LittleFloat(pPatch->texCoord[1][1][1]);
-    pPatch->iBaseHeight       = LittleShort(pPatch->iBaseHeight);
-    pPatch->iShader           = LittleUnsignedShort(pPatch->iShader);
-    pPatch->iLightMap         = LittleUnsignedShort(pPatch->iLightMap);
-    pPatch->iNorth            = LittleShort(pPatch->iNorth);
-    pPatch->iEast             = LittleShort(pPatch->iEast);
-    pPatch->iSouth            = LittleShort(pPatch->iSouth);
-    pPatch->iWest             = LittleShort(pPatch->iWest);
-
-    for (i = 0; i < MAX_TERRAIN_VARNODES; i++) {
-        pPatch->varTree[0][i].flags = LittleUnsignedShort(pPatch->varTree[0][i].flags);
-        pPatch->varTree[1][i].flags = LittleUnsignedShort(pPatch->varTree[1][i].flags);
-    }
+...
 #endif
 }
+#endif
 
 /* ================================================================
  *  Godot terrain visibility accessors

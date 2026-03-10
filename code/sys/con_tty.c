@@ -161,6 +161,7 @@ static void CON_Show( void )
 	}
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 CON_Shutdown
@@ -179,6 +180,7 @@ void CON_Shutdown( void )
 	// Restore blocking to stdin reads
 	fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) & ~O_NONBLOCK);
 }
+#endif
 
 /*
 ==================
@@ -325,6 +327,7 @@ void CON_Init( void )
 	CON_Show();
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 CON_Input
@@ -332,169 +335,10 @@ CON_Input
 */
 char *CON_Input( void )
 {
-	// we use this when sending back commands
-	static char text[MAX_EDIT_LINE];
-	int avail;
-	char key;
-	field_t *history;
-	size_t Q_UNUSED_VAR size;
-
-	if(ttycon_on)
-	{
-		avail = read(STDIN_FILENO, &key, 1);
-		if (avail != -1)
-		{
-			// we have something
-			// backspace?
-			// NOTE TTimo testing a lot of values .. seems it's the only way to get it to work everywhere
-			if ((key == TTY_erase) || (key == 127) || (key == 8))
-			{
-				if (TTY_con.cursor > 0)
-				{
-					TTY_con.cursor--;
-					TTY_con.buffer[TTY_con.cursor] = '\0';
-					CON_Back();
-				}
-				return NULL;
-			}
-			// check if this is a control char
-			if ((key) && (key) < ' ')
-			{
-				if (key == '\n')
-				{
-#ifndef DEDICATED
-					// if not in the game explicitly prepend a slash if needed
-					if (clc.state != CA_ACTIVE && con_autochat->integer && TTY_con.cursor &&
-						TTY_con.buffer[0] != '/' && TTY_con.buffer[0] != '\\')
-					{
-						memmove(TTY_con.buffer + 1, TTY_con.buffer, sizeof(TTY_con.buffer) - 1);
-						TTY_con.buffer[0] = '\\';
-						TTY_con.cursor++;
-					}
-
-					if (TTY_con.buffer[0] == '/' || TTY_con.buffer[0] == '\\') {
-						Q_strncpyz(text, TTY_con.buffer + 1, sizeof(text));
-					} else if (TTY_con.cursor) {
-						if (con_autochat->integer) {
-							Com_sprintf(text, sizeof(text), "cmd say %s", TTY_con.buffer);
-						} else {
-							Q_strncpyz(text, TTY_con.buffer, sizeof(text));
-						}
-					} else {
-						text[0] = '\0';
-					}
-
-					// push it in history
-					Hist_Add(&TTY_con);
-					CON_Hide();
-					Com_Printf("%s%s\n", TTY_CONSOLE_PROMPT, TTY_con.buffer);
-					Field_Clear(&TTY_con);
-					CON_Show();
-#else
-					// push it in history
-					Hist_Add(&TTY_con);
-					Q_strncpyz(text, TTY_con.buffer, sizeof(text));
-					Field_Clear(&TTY_con);
-					key = '\n';
-					size = write(STDOUT_FILENO, &key, 1);
-					size = write(STDOUT_FILENO, TTY_CONSOLE_PROMPT, strlen(TTY_CONSOLE_PROMPT));
-#endif
-					return text;
-				}
-				if (key == '\t')
-				{
-					CON_Hide();
-					Field_AutoComplete( &TTY_con );
-					CON_Show();
-					return NULL;
-				}
-				avail = read(STDIN_FILENO, &key, 1);
-				if (avail != -1)
-				{
-					// VT 100 keys
-					if (key == '[' || key == 'O')
-					{
-						avail = read(STDIN_FILENO, &key, 1);
-						if (avail != -1)
-						{
-							switch (key)
-							{
-								case 'A':
-									history = Hist_Prev();
-									if (history)
-									{
-										CON_Hide();
-										TTY_con = *history;
-										CON_Show();
-									}
-									tcflush(STDIN_FILENO, TCIFLUSH);
-									return NULL;
-									break;
-								case 'B':
-									history = Hist_Next();
-									CON_Hide();
-									if (history)
-									{
-										TTY_con = *history;
-									} else
-									{
-										Field_Clear(&TTY_con);
-									}
-									CON_Show();
-									tcflush(STDIN_FILENO, TCIFLUSH);
-									return NULL;
-									break;
-								case 'C':
-									return NULL;
-								case 'D':
-									return NULL;
-							}
-						}
-					}
-				}
-				Com_DPrintf("droping ISCTL sequence: %d, TTY_erase: %d\n", key, TTY_erase);
-				tcflush(STDIN_FILENO, TCIFLUSH);
-				return NULL;
-			}
-			if (TTY_con.cursor >= sizeof(text) - 1)
-				return NULL;
-			// push regular character
-			TTY_con.buffer[TTY_con.cursor] = key;
-			TTY_con.cursor++; // next char will always be '\0'
-			// print the current line (this is differential)
-			size = write(STDOUT_FILENO, &key, 1);
-		}
-
-		return NULL;
-	}
-	else if (stdin_active)
-	{
-		int     len;
-		fd_set  fdset;
-		struct timeval timeout;
-
-		FD_ZERO(&fdset);
-		FD_SET(STDIN_FILENO, &fdset); // stdin
-		timeout.tv_sec = 0;
-		timeout.tv_usec = 0;
-		if(select (STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout) == -1 || !FD_ISSET(STDIN_FILENO, &fdset))
-			return NULL;
-
-		len = read(STDIN_FILENO, text, sizeof(text));
-		if (len == 0)
-		{ // eof!
-			stdin_active = qfalse;
-			return NULL;
-		}
-
-		if (len < 1)
-			return NULL;
-		text[len-1] = 0;    // rip off the /n and terminate
-
-		return text;
-	}
+...
 	return NULL;
 }
+#endif
 
 /*
 ==================
