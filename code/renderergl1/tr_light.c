@@ -122,7 +122,6 @@ static int R_RecursiveDlightPatch(patchLightBlock_t *plb)
     return R_RecursiveDlightPatch(cut) + added;
 }
 
-#ifndef GODOT_GDEXTENSION
 /*
 ===============
 R_RealDlightPatch
@@ -287,9 +286,7 @@ int R_RealDlightPatch(srfGridMesh_t *srf, int dlightBits)
     srf->dlightMap[tr.smpFrame] = dli.dlightMap + 1;
     return srf->dlightMap[tr.smpFrame];
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ===============
 R_RealDlightFace
@@ -384,9 +381,7 @@ int R_RealDlightFace(srfSurfaceFace_t *srf, int dlightBits)
     srf->dlightMap[tr.smpFrame] = dli.dlightMap + 1;
     return srf->dlightMap[tr.smpFrame];
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ===============
 R_RealDlightTerrain
@@ -394,11 +389,271 @@ R_RealDlightTerrain
 */
 int R_RealDlightTerrain(cTerraPatchUnpacked_t *srf, int dlightBits)
 {
-...
+    dlight_t *dl;
+    int       x, y;
+    byte     *dst, *src;
+    vec3_t    vec;
+    float     delta, dist;
+    float    *origin;
+    int       i, j, k;
+    int       di, dj;
+    qboolean  added;
+    float     lmScale;
+    int       lumelsPerHeight;
+    float     heightPerLumelSquared;
+    float     z00, z01;
+    float     z10, z11;
+
+    dli.numLights = 0;
+
+    for (i = 0; i < tr.refdef.num_dlights; i++) {
+        dl = &tr.refdef.dlights[i];
+
+        if (dl->radius < srf->x0 - dl->transformed[0] || -512.f - dl->radius > srf->x0 - dl->transformed[0]
+            || -512.f - dl->radius > srf->y0 - dl->transformed[1] || dl->radius < srf->y0 - dl->transformed[1]) {
+            continue;
+        }
+
+        if (dl->radius > 128.f) {
+            dist = 0.f;
+
+            delta = dl->transformed[0] - srf->x0;
+            if (delta <= 0.f) {
+                dist += delta * delta;
+            } else {
+                delta -= 512.f;
+                if (delta > 0.f) {
+                    dist += delta * delta;
+                }
+            }
+
+            delta = dl->transformed[1] - srf->y0;
+            if (delta <= 0.f) {
+                dist += delta * delta;
+            } else {
+                delta -= 512.f;
+                if (delta > 0.f) {
+                    dist += delta * delta;
+                }
+            }
+
+            delta = dl->transformed[2] - srf->z0;
+            if (delta <= 0.f) {
+                dist += delta * delta;
+            } else {
+                delta -= srf->zmax;
+                if (delta > 0.f) {
+                    dist += delta * delta;
+                }
+            }
+
+            if (dl->radius * dl->radius < dist) {
+                continue;
+            }
+        }
+
+        VectorCopy(dl->origin, dli.lights[dli.numLights].origin);
+        dli.lights[dli.numLights].dl    = dl;
+        dli.lights[dli.numLights].power = 1.f / dl->radius;
+        dli.numLights++;
+    }
+
+    if (!dli.numLights) {
+        srf->drawinfo.dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
+
+    if (!R_AllocLMBlock(srf->drawinfo.lmapSize, srf->drawinfo.lmapSize, &x, &y)) {
+        srf->drawinfo.dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
+
+    src = srf->drawinfo.lmData;
+    dst = &dli.lightmap_buffer[y * 4 * LIGHTMAP_SIZE + x * 4];
+
+    srf->drawinfo.lmapX = x / (float)LIGHTMAP_SIZE;
+    srf->drawinfo.lmapY = y / (float)LIGHTMAP_SIZE;
+
+    tr.pc.c_dlightSurfaces++;
+    tr.pc.c_dlightTexels += srf->drawinfo.lmapSize * srf->drawinfo.lmapSize;
+
+    added = qfalse;
+
+    lumelsPerHeight = 64.f / srf->drawinfo.lmapStep;
+    if (lumelsPerHeight == 1) {
+        vec[1] = srf->y0;
+
+        for (i = 0; i < 9; i++) {
+            vec[0] = srf->x0;
+
+            for (j = 0; j < 9; j++) {
+                vec[2] = srf->z0 + (int)(srf->heightmap[0] << 1);
+                added |= R_DlightSample(src, vec, dst);
+                src += 3;
+                dst += 4;
+                vec[0] += srf->drawinfo.lmapStep;
+            }
+
+            src += (LIGHTMAP_SIZE - 9) * 3;
+            dst += (LIGHTMAP_SIZE - 9) * 4;
+            vec[1] += srf->drawinfo.lmapStep;
+        }
+    } else if (lumelsPerHeight == 2) {
+        vec[1] = srf->y0;
+
+        k = 0;
+
+        for (j = 0; j < 8; j++) {
+            vec[0] = srf->x0;
+
+            for (i = 0; i < 8; i++) {
+                z00    = (int)srf->heightmap[k];
+                vec[2] = srf->z0 + z00 + z00;
+                added |= R_DlightSample(src, vec, dst);
+                src += 3;
+                dst += 4;
+                // increase lightmap step
+                vec[0] += srf->drawinfo.lmapStep;
+                k++;
+
+                z01    = (int)srf->heightmap[k];
+                vec[2] = srf->z0 + z00 + z01;
+                added |= R_DlightSample(src, vec, dst);
+                src += 3;
+                dst += 4;
+                vec[0] += srf->drawinfo.lmapStep;
+            }
+
+            vec[2] = srf->z0 + z01 + z01;
+            added |= R_DlightSample(src, vec, dst);
+            src += (LIGHTMAP_SIZE - 16) * 3;
+            dst += (LIGHTMAP_SIZE - 16) * 4;
+            k -= 8;
+
+            vec[0] = srf->x0;
+            vec[1] += srf->drawinfo.lmapStep;
+
+            for (i = 0; i < 8; i++) {
+                z00    = (int)srf->heightmap[k] + (int)srf->heightmap[k + 9];
+                vec[2] = srf->z0 + z00;
+                added |= R_DlightSample(src, vec, dst);
+                src += 3;
+                dst += 4;
+                k++;
+                vec[0] += srf->drawinfo.lmapStep;
+
+                z01    = (int)srf->heightmap[k] + (int)srf->heightmap[k + 9];
+                vec[2] = srf->z0 + (z00 + z01) * 0.5f;
+                added |= R_DlightSample(src, vec, dst);
+                src += 3;
+                dst += 4;
+                vec[0] += srf->drawinfo.lmapStep;
+            }
+
+            vec[2] = srf->z0 + z01;
+            added |= R_DlightSample(src, vec, dst);
+            src += (LIGHTMAP_SIZE - 16) * 3;
+            dst += (LIGHTMAP_SIZE - 16) * 4;
+            k++;
+            vec[0] += srf->drawinfo.lmapStep;
+            vec[1] += srf->drawinfo.lmapStep;
+        }
+
+        vec[0] = srf->x0;
+
+        for (i = 0; i < 8; i++) {
+            z00    = (int)srf->heightmap[k];
+            vec[2] = srf->z0 + z00 + z00;
+            k++;
+            added |= R_DlightSample(src, vec, dst);
+            src += 3;
+            dst += 4;
+            vec[0] += srf->drawinfo.lmapStep;
+
+            z01    = (int)srf->heightmap[k];
+            vec[2] = srf->z0 + z00 + z01;
+            added |= R_DlightSample(src, vec, dst);
+            src += 3;
+            dst += 4;
+            vec[0] += srf->drawinfo.lmapStep;
+        }
+
+        vec[2] = srf->z0 + z01 + z01;
+        added |= R_DlightSample(src, vec, dst);
+        vec[0] += srf->drawinfo.lmapStep;
+        vec[1] += srf->drawinfo.lmapStep;
+    } else {
+        vec[1] = srf->y0;
+
+        for (j = 0; j < 8; j++) {
+            dj = 0;
+
+            for (;;) {
+                if (j == 7) {
+                    if (dj >= lumelsPerHeight + 1) {
+                        break;
+                    }
+                } else if (dj >= lumelsPerHeight) {
+                    break;
+                }
+
+                vec[0] = srf->x0;
+
+                for (i = 0; i < 8; i++) {
+                    for (;;) {
+                        if (i == 7) {
+                            if (di >= lumelsPerHeight + 1) {
+                                break;
+                            }
+                        } else if (dj >= lumelsPerHeight) {
+                            break;
+                        }
+
+                        di  = 0;
+                        z00 = (int)srf->heightmap[9 * j + i];
+                        z01 = (int)srf->heightmap[9 * (j + 1) + i];
+                        z10 = (int)srf->heightmap[9 * j + (i + 1)];
+                        z11 = (int)srf->heightmap[9 * (j + 1) + (i + 1)];
+
+                        heightPerLumelSquared = 2.f / (lumelsPerHeight * lumelsPerHeight);
+
+                        vec[2] =
+                            srf->z0
+                            + (dj * (di * z11) + (lumelsPerHeight - dj) * (z10 * di) + z01 * (lumelsPerHeight - di) * dj
+                               + z00 * (lumelsPerHeight - di) * (lumelsPerHeight - dj))
+                                  * heightPerLumelSquared;
+
+                        added |= R_DlightSample(src, vec, dst);
+                        src += 3;
+                        dst += 4;
+
+                        vec[0] += srf->drawinfo.lmapStep;
+                    }
+                }
+
+                src += (LIGHTMAP_SIZE - 1 - (8 * lumelsPerHeight)) * 3;
+                dst += (LIGHTMAP_SIZE - 1 - (8 * lumelsPerHeight)) * 4;
+                vec[1] += srf->drawinfo.lmapStep;
+            }
+        }
+    }
+
+    if (!added) {
+        srf->drawinfo.dlightMap[tr.smpFrame] = 0;
+        return 0;
+    }
+
+    for (i = 0; i < srf->drawinfo.lmapSize; i++) {
+        dli.allocated[x + i] = srf->drawinfo.lmapSize + y;
+    }
+
+    lmScale = (1.0 / LIGHTMAP_SIZE) / srf->drawinfo.lmapStep;
+    srf->drawinfo.lmapX -= (srf->x0 * lmScale - (0.5 / LIGHTMAP_SIZE));
+    srf->drawinfo.lmapY -= (srf->y0 * lmScale - (0.5 / LIGHTMAP_SIZE));
+
     srf->drawinfo.dlightMap[tr.smpFrame] = dli.dlightMap + 1;
     return srf->drawinfo.dlightMap[tr.smpFrame];
 }
-#endif
 
 /*
 ===============

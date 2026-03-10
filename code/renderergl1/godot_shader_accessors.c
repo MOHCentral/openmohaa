@@ -669,6 +669,7 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
                         break;
                     case TMOD_STRETCH:
                         out->has_tcmod_stretch = 1;
+                        out->tcmod_stretch_func  = convert_genfunc(tm->wave.func);
                         out->tcmod_stretch_base  = tm->wave.base;
                         out->tcmod_stretch_amp   = tm->wave.amplitude;
                         out->tcmod_stretch_freq  = tm->wave.frequency;

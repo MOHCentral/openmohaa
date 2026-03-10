@@ -9148,11 +9148,14 @@ void MoHAARunner::_process(double delta) {
     }
 
     // ── Per-frame viewport tracking ──
-    // Track the actual Godot viewport size for update_ui_transform.
-    // In WINDOWED mode, the user may drag-resize the window — update
-    // glConfig to match so engine resolution = viewport (1:1).
-    // In FULLSCREEN, glConfig stays at the user's selected resolution;
-    // only the viewport tracking is updated.
+    // Always keep viewport tracking up to date.
+    // In WINDOWED mode: also sync glConfig to match the actual viewport
+    // so engine resolution = viewport = window (1:1 mapping).  This
+    // handles both manual window drag-resize and initial boot where
+    // r_mode might not match the actual window dimensions.
+    // In FULLSCREEN mode: glConfig stays at the user's selected
+    // resolution (from r_mode); only viewport tracking is updated.
+    // scaling_3d_scale handles the quality difference.
     if (vid_restart_grace_frames > 0) {
         vid_restart_grace_frames--;
     } else {
@@ -9164,18 +9167,20 @@ void MoHAARunner::_process(double delta) {
         int vp_w = (int)vp.x;
         int vp_h = (int)vp.y;
         if (vp_w > 0 && vp_h > 0) {
-            int old_vp_w = 0, old_vp_h = 0;
-            Godot_Renderer_GetViewportSize(&old_vp_w, &old_vp_h);
-            if (old_vp_w != vp_w || old_vp_h != vp_h) {
-                Godot_Renderer_SetViewportSize(vp_w, vp_h);
+            // Always update viewport tracking
+            Godot_Renderer_SetViewportSize(vp_w, vp_h);
 
-                // In windowed mode, manual resize → sync glConfig to match
-                DisplayServer *ds = DisplayServer::get_singleton();
-                if (ds && ds->window_get_mode() == DisplayServer::WINDOW_MODE_WINDOWED) {
+            DisplayServer *ds = DisplayServer::get_singleton();
+            bool is_fullscreen = ds && ds->window_get_mode() != DisplayServer::WINDOW_MODE_WINDOWED;
+
+            if (!is_fullscreen) {
+                // Windowed: sync glConfig to viewport every frame (when they differ)
+                int cur_w = 0, cur_h = 0;
+                Godot_Renderer_GetVidSize(&cur_w, &cur_h);
+                if (cur_w != vp_w || cur_h != vp_h) {
                     Godot_Renderer_SyncVidSize(vp_w, vp_h);
                     Godot_Client_SyncGlConfigVidSize(vp_w, vp_h);
                     Godot_Client_ResolutionChange();
-                    // Also update desktop resolution for r_mode -2
                     Godot_Renderer_SetDesktopResolution(vp_w, vp_h);
                 }
             }

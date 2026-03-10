@@ -144,9 +144,11 @@ static char *Sys_DefaultHomePath(void)
 	return homePath;
 }
 
+#ifndef GODOT_GDEXTENSION
 char *Sys_DefaultHomeConfigPath(void) { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeDataPath(void)   { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeStatePath(void)  { return Sys_DefaultHomePath(); }
+#endif /* !GODOT_GDEXTENSION */
 
 #else // __APPLE__
 
@@ -478,11 +480,10 @@ char *Sys_DefaultHomeStatePath(void)
 
 	return Sys_HomeStatePath( );
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
 
 #endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_SteamPath
@@ -505,6 +506,7 @@ char *Sys_GogPath( void )
 	return "";
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_MicrosoftStorePath
@@ -515,10 +517,9 @@ char* Sys_MicrosoftStorePath(void)
 	// Microsoft Store doesn't exist on Mac/Linux
 	return "";
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
 
 
-#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_Milliseconds
@@ -533,6 +534,8 @@ unsigned long sys_timeBase = 0;
      0x7fffffff ms - ~24 days
    although timeval:tv_usec is an int, I'm not sure whether it is actually used as an unsigned int
      (which would affect the wrap period) */
+
+#ifndef GODOT_GDEXTENSION
 int curtime;
 int Sys_Milliseconds (void)
 {
@@ -550,7 +553,7 @@ int Sys_Milliseconds (void)
 
 	return curtime;
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
 
 #ifndef GODOT_GDEXTENSION
 /*
@@ -577,9 +580,7 @@ qboolean Sys_RandomBytes( byte *string, int len )
 	fclose( fp );
 	return qtrue;
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_GetCurrentUser
@@ -594,7 +595,7 @@ char *Sys_GetCurrentUser( void )
 	}
 	return p->pw_name;
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
 
 #define MEM_THRESHOLD 96*1024*1024
 
@@ -610,7 +611,6 @@ qboolean Sys_LowPhysicalMemory( void )
 	return qfalse;
 }
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Basename
@@ -621,6 +621,7 @@ const char *Sys_Basename( char *path )
 	return basename( path );
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Dirname
@@ -630,9 +631,7 @@ const char *Sys_Dirname( char *path )
 {
 	return dirname( path );
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_FOpen
@@ -647,9 +646,7 @@ FILE *Sys_FOpen( const char *ospath, const char *mode ) {
 
 	return fopen( ospath, mode );
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Mkdir
@@ -664,9 +661,7 @@ qboolean Sys_Mkdir( const char *path )
 
 	return qtrue;
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Mkfifo
@@ -696,9 +691,7 @@ FILE *Sys_Mkfifo( const char *ospath )
 
 	return fifo;
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Cwd
@@ -716,7 +709,112 @@ char *Sys_Cwd( void )
 
 	return cwd;
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
+
+/*
+==================
+Sys_BinaryPathRelative
+==================
+*/
+char *Sys_BinaryPathRelative(const char *relative)
+{
+	static char resolved[MAX_OSPATH];
+	char combined[MAX_OSPATH];
+
+	snprintf(combined, sizeof(combined), "%s/%s", Sys_BinaryPath(), relative);
+
+	if (!realpath(combined, resolved))
+		return NULL;
+
+	return resolved;
+}
+
+/*
+==============================================================
+
+DIRECTORY SCANNING
+
+==============================================================
+*/
+
+#define MAX_FOUND_FILES 0x1000
+
+/*
+==================
+Sys_ListFilteredFiles
+==================
+*/
+void Sys_ListFilteredFiles(
+    const char *basedir, char *subdirs, char *filter, qboolean wantsubs, char **list, int *numfiles
+)
+{
+    char           search[MAX_OSPATH], newsubdirs[MAX_OSPATH];
+    char           filename[MAX_OSPATH];
+    DIR           *fdir;
+    struct dirent *d;
+    struct stat    st;
+
+    if (*numfiles >= MAX_FOUND_FILES - 1) {
+        return;
+    }
+
+    if (basedir[0] == '\0') {
+        return;
+    }
+
+    if (strlen(subdirs)) {
+        Com_sprintf(search, sizeof(search), "%s/%s", basedir, subdirs);
+    } else {
+        Com_sprintf(search, sizeof(search), "%s", basedir);
+    }
+
+    if ((fdir = opendir(search)) == NULL) {
+        return;
+    }
+
+    while ((d = readdir(fdir)) != NULL) {
+        // Fixed in OPM:
+        // don't show current and parent dir entries twice
+        if (!(Q_stricmp(d->d_name, ".") && Q_stricmp(d->d_name, "..")) && Q_stricmp(d->d_name, "cvs")) {
+            continue;
+        }
+
+        Com_sprintf(filename, sizeof(filename), "%s/%s", search, d->d_name);
+        if (stat(filename, &st) == -1) {
+            continue;
+        }
+
+        if ((st.st_mode & S_IFDIR) != 0 && wantsubs) {
+            if (strlen(subdirs)) {
+                Com_sprintf(newsubdirs, sizeof(newsubdirs), "%s/%s", subdirs, d->d_name);
+            } else {
+                Com_sprintf(newsubdirs, sizeof(newsubdirs), "%s", d->d_name);
+            }
+
+            // recursively iterate into subdirectory
+            Sys_ListFilteredFiles(basedir, newsubdirs, filter, wantsubs, list, numfiles);
+        }
+
+        if (*numfiles >= MAX_FOUND_FILES - 1) {
+            break;
+        }
+
+        if (strlen(subdirs)) {
+            Com_sprintf(filename, sizeof(filename), "%s/%s", subdirs, d->d_name);
+        } else {
+            Q_strncpyz(filename, d->d_name, sizeof(filename));
+        }
+
+        if (!Com_FilterPath(filter, filename, qfalse)) {
+            continue;
+        }
+
+        list[*numfiles] = CopyString(filename);
+        (*numfiles)++;
+    }
+
+    closedir(fdir);
+}
 
 #ifndef GODOT_GDEXTENSION
 /*
@@ -725,12 +823,106 @@ Sys_ListFiles
 ==================
 */
 char **Sys_ListFiles(const char *directory, const char *extension, const char *filter, int *numfiles, qboolean wantsubs)
-...
+{
+    struct dirent *d;
+    DIR           *fdir;
+    char           search[MAX_OSPATH];
+    int            nfiles;
+    char         **listCopy;
+    char          *list[MAX_FOUND_FILES];
+    int            i;
+    struct stat    st;
+    char           buffer[64];
+
+    if (directory[0] == '\0') {
+        *numfiles = 0;
+        return NULL;
+    }
+
+    if (!extension) {
+        extension = "";
+    }
+
+    // passing a slash as extension will find directories,
+    // anything else looks only for files with that extension
+    if (!filter && (extension[0] != '/' || extension[1])) {
+        Q_snprintf(buffer, sizeof(buffer), "*%s", extension);
+        filter = buffer;
+    }
+
+    if (filter) {
+        nfiles = 0;
+        Sys_ListFilteredFiles(directory, "", filter, wantsubs, list, &nfiles);
+
+        list[nfiles] = NULL;
+        *numfiles    = nfiles;
+        if (!nfiles) {
+            return NULL;
+        }
+
+        listCopy = Z_Malloc((nfiles + 1) * sizeof(*listCopy));
+        for (i = 0; i < nfiles; i++) {
+            listCopy[i] = list[i];
+        }
+        listCopy[i] = NULL;
+
+        return listCopy;
+    }
+
+    // only enumerate directories from this point onward
+
+    // search
+    nfiles = 0;
+
+    if ((fdir = opendir(directory)) == NULL) {
+        *numfiles = 0;
+        return NULL;
+    }
+
+    while ((d = readdir(fdir)) != NULL) {
+        Com_sprintf(search, sizeof(search), "%s/%s", directory, d->d_name);
+        if (stat(search, &st) == -1) {
+            continue;
+        }
+
+        // Fixed in OPM:
+        // don't show current and parent dir entries twice
+        if (!(Q_stricmp(d->d_name, ".") && Q_stricmp(d->d_name, "..") && Q_stricmp(d->d_name, "cvs"))) {
+            continue;
+        }
+
+        if ((st.st_mode & S_IFDIR) == 0) {
+            continue;
+        }
+
+        if (nfiles == MAX_FOUND_FILES - 1) {
+            break;
+        }
+
+        list[nfiles] = CopyString(d->d_name);
+        nfiles++;
+    }
+
+    list[nfiles] = NULL;
+
+    closedir(fdir);
+
+    // return a copy of the list
+    *numfiles = nfiles;
+
+    if (!nfiles) {
+        return NULL;
+    }
+
+    listCopy = Z_Malloc((nfiles + 1) * sizeof(*listCopy));
+    for (i = 0; i < nfiles; i++) {
+        listCopy[i] = list[i];
+    }
+    listCopy[i] = NULL;
+
     return listCopy;
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_FreeFileList
@@ -750,9 +942,269 @@ void Sys_FreeFileList( char **list )
 
 	Z_Free( list );
 }
+#endif /* !GODOT_GDEXTENSION */
+
+/*
+==================
+Sys_Sleep
+
+Block execution for msec or until input is received.
+==================
+*/
+void Sys_Sleep( int msec )
+{
+	if( msec == 0 )
+		return;
+
+	if( stdinIsATTY )
+	{
+		fd_set fdset;
+
+		FD_ZERO(&fdset);
+		FD_SET(STDIN_FILENO, &fdset);
+		if( msec < 0 )
+		{
+			select(STDIN_FILENO + 1, &fdset, NULL, NULL, NULL);
+		}
+		else
+		{
+			struct timeval timeout;
+
+			timeout.tv_sec = msec/1000;
+			timeout.tv_usec = (msec%1000)*1000;
+			select(STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout);
+		}
+	}
+	else
+	{
+		struct timespec req;
+
+		// With nothing to select() on, we can't wait indefinitely
+		if( msec < 0 )
+			msec = 10;
+
+		req.tv_sec = msec/1000;
+		req.tv_nsec = (msec%1000)*1000000;
+		nanosleep(&req, NULL);
+	}
+}
+
+/*
+==============
+Sys_ErrorDialog
+
+Display an error message
+==============
+*/
+void Sys_ErrorDialog( const char *error )
+{
+	char buffer[ 1024 ];
+	unsigned int size;
+	int f = -1;
+	const char *homedatapath = Cvar_VariableString( "fs_homedatapath" );
+	const char *gamedir = Cvar_VariableString( "fs_game" );
+	const char *fileName = "crashlog.txt";
+	char *ospath = FS_BuildOSPath( homedatapath, gamedir, fileName );
+
+	Sys_Print( va( "%s\n", error ) );
+
+#ifndef DEDICATED
+	Sys_Dialog( DT_ERROR, va( "%s. See \"%s\" for details.", error, ospath ), "Error" );
 #endif
 
-#ifndef GODOT_GDEXTENSION
+	// Make sure the write path for the crashlog exists...
+	if( FS_CreatePath( homedatapath ) )
+	{
+		Com_Printf("ERROR: couldn't create path '%s' for crash log.\n", ospath);
+		return;
+	}
+
+	// We might be crashing because we maxed out the Quake MAX_FILE_HANDLES,
+	// which will come through here, so we don't want to recurse forever by
+	// calling FS_FOpenFileWrite()...use the Unix system APIs instead.
+	f = open( ospath, O_CREAT | O_TRUNC | O_WRONLY, 0640 );
+	if( f == -1 )
+	{
+		Com_Printf( "ERROR: couldn't open %s\n", fileName );
+		return;
+	}
+
+	// We're crashing, so we don't care much if write() or close() fails.
+	while( ( size = CON_LogRead( buffer, sizeof( buffer ) ) ) > 0 ) {
+		if( write( f, buffer, size ) != size ) {
+			Com_Printf( "ERROR: couldn't fully write to %s\n", fileName );
+			break;
+		}
+	}
+
+	close( f );
+}
+
+#ifndef __APPLE__
+/*
+==============
+Sys_ZenityCommand
+==============
+*/
+static void Sys_ZenityCommand( dialogType_t type, const char *message, const char *title )
+{
+	Sys_ClearExecBuffer( );
+	Sys_AppendToExecBuffer( "zenity" );
+
+	switch( type )
+	{
+		default:
+		case DT_INFO:      Sys_AppendToExecBuffer( "--info" ); break;
+		case DT_WARNING:   Sys_AppendToExecBuffer( "--warning" ); break;
+		case DT_ERROR:     Sys_AppendToExecBuffer( "--error" ); break;
+		case DT_YES_NO:
+			Sys_AppendToExecBuffer( "--question" );
+			Sys_AppendToExecBuffer( "--ok-label=Yes" );
+			Sys_AppendToExecBuffer( "--cancel-label=No" );
+			break;
+
+		case DT_OK_CANCEL:
+			Sys_AppendToExecBuffer( "--question" );
+			Sys_AppendToExecBuffer( "--ok-label=OK" );
+			Sys_AppendToExecBuffer( "--cancel-label=Cancel" );
+			break;
+	}
+
+	Sys_AppendToExecBuffer( va( "--text=%s", message ) );
+	Sys_AppendToExecBuffer( va( "--title=%s", title ) );
+}
+
+/*
+==============
+Sys_KdialogCommand
+==============
+*/
+static void Sys_KdialogCommand( dialogType_t type, const char *message, const char *title )
+{
+	Sys_ClearExecBuffer( );
+	Sys_AppendToExecBuffer( "kdialog" );
+
+	switch( type )
+	{
+		default:
+		case DT_INFO:      Sys_AppendToExecBuffer( "--msgbox" ); break;
+		case DT_WARNING:   Sys_AppendToExecBuffer( "--sorry" ); break;
+		case DT_ERROR:     Sys_AppendToExecBuffer( "--error" ); break;
+		case DT_YES_NO:    Sys_AppendToExecBuffer( "--warningyesno" ); break;
+		case DT_OK_CANCEL: Sys_AppendToExecBuffer( "--warningcontinuecancel" ); break;
+	}
+
+	Sys_AppendToExecBuffer( message );
+	Sys_AppendToExecBuffer( va( "--title=%s", title ) );
+}
+
+/*
+==============
+Sys_XmessageCommand
+==============
+*/
+static void Sys_XmessageCommand( dialogType_t type, const char *message, const char *title )
+{
+	Sys_ClearExecBuffer( );
+	Sys_AppendToExecBuffer( "xmessage" );
+	Sys_AppendToExecBuffer( "-buttons" );
+
+	switch( type )
+	{
+		default:           Sys_AppendToExecBuffer( "OK:0" ); break;
+		case DT_YES_NO:    Sys_AppendToExecBuffer( "Yes:0,No:1" ); break;
+		case DT_OK_CANCEL: Sys_AppendToExecBuffer( "OK:0,Cancel:1" ); break;
+	}
+
+	Sys_AppendToExecBuffer( "-center" );
+	Sys_AppendToExecBuffer( message );
+}
+
+/*
+==============
+Sys_Dialog
+
+Display a *nix dialog box
+==============
+*/
+dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *title )
+{
+	typedef enum
+	{
+		NONE = 0,
+		ZENITY,
+		KDIALOG,
+		XMESSAGE,
+		NUM_DIALOG_PROGRAMS
+	} dialogCommandType_t;
+	typedef void (*dialogCommandBuilder_t)( dialogType_t, const char *, const char * );
+
+	const char              *session = getenv( "DESKTOP_SESSION" );
+	qboolean                tried[ NUM_DIALOG_PROGRAMS ] = { qfalse };
+	dialogCommandBuilder_t  commands[ NUM_DIALOG_PROGRAMS ] = { NULL };
+	dialogCommandType_t     preferredCommandType = NONE;
+	int                     i;
+
+	commands[ ZENITY ] = &Sys_ZenityCommand;
+	commands[ KDIALOG ] = &Sys_KdialogCommand;
+	commands[ XMESSAGE ] = &Sys_XmessageCommand;
+
+	// This may not be the best way
+	if( !Q_stricmp( session, "gnome" ) )
+		preferredCommandType = ZENITY;
+	else if( !Q_stricmp( session, "kde" ) )
+		preferredCommandType = KDIALOG;
+
+	for( i = NONE + 1; i < NUM_DIALOG_PROGRAMS; i++ )
+	{
+		if( preferredCommandType != NONE && preferredCommandType != i )
+			continue;
+
+		if( !tried[ i ] )
+		{
+			int exitCode;
+
+			commands[ i ]( type, message, title );
+			exitCode = Sys_Exec( );
+
+			if( exitCode >= 0 )
+			{
+				switch( type )
+				{
+					case DT_YES_NO:    return exitCode ? DR_NO : DR_YES;
+					case DT_OK_CANCEL: return exitCode ? DR_CANCEL : DR_OK;
+					default:           return DR_OK;
+				}
+			}
+
+			tried[ i ] = qtrue;
+
+			// The preference failed, so start again in order
+			if( preferredCommandType != NONE )
+			{
+				preferredCommandType = NONE;
+				i = NONE + 1;
+			}
+		}
+	}
+
+	Com_DPrintf( S_COLOR_YELLOW "WARNING: failed to show a dialog\n" );
+	return DR_OK;
+}
+#endif
+
+/*
+==============
+Sys_GLimpSafeInit
+
+Unix specific "safe" GL implementation initialisation
+==============
+*/
+void Sys_GLimpSafeInit( void )
+{
+	// NOP
+}
+
 /*
 ==============
 Sys_GLimpInit
@@ -764,7 +1216,6 @@ void Sys_GLimpInit( void )
 {
 	// NOP
 }
-#endif
 
 void Sys_SetFloatEnv(void)
 {
@@ -795,7 +1246,18 @@ void Sys_PlatformInit( void )
 	stdinIsATTY = isatty( STDIN_FILENO ) &&
 		!( term && ( !strcmp( term, "raw" ) || !strcmp( term, "dumb" ) ) );
 }
-#endif
+#endif /* !GODOT_GDEXTENSION */
+
+/*
+==============
+Sys_PlatformExit
+
+Unix specific deinitialisation
+==============
+*/
+void Sys_PlatformExit( void )
+{
+}
 
 #ifndef GODOT_GDEXTENSION
 /*
@@ -813,9 +1275,7 @@ void Sys_SetEnv(const char *name, const char *value)
 	else
 		unsetenv(name);
 }
-#endif
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_PID
@@ -825,7 +1285,6 @@ int Sys_PID( void )
 {
 	return getpid( );
 }
-#endif
 
 /*
 ==============
@@ -837,7 +1296,6 @@ qboolean Sys_PIDIsRunning( int pid )
 	return kill( pid, 0 ) == 0;
 }
 
-#ifndef GODOT_GDEXTENSION
 /*
 =================
 Sys_DllExtension
@@ -846,11 +1304,47 @@ Check if filename should be allowed to be loaded as a DLL.
 =================
 */
 qboolean Sys_DllExtension( const char *name ) {
-...
-	return qfalse;
-}
+	const char *p;
+	char c = 0;
+
+	if ( COM_CompareExtension( name, DLL_EXT ) ) {
+		return qtrue;
+	}
+
+#ifdef __APPLE__
+	// Allow system frameworks without dylib extensions
+	// i.e., /System/Library/Frameworks/OpenAL.framework/OpenAL
+	if ( strncmp( name, "/System/Library/Frameworks/", 27 ) == 0 ) {
+		return qtrue;
+	}
 #endif
 
+	// Check for format of filename.so.1.2.3
+	p = strstr( name, DLL_EXT "." );
+
+	if ( p ) {
+		p += strlen( DLL_EXT );
+
+		// Check if .so is only followed for periods and numbers.
+		while ( *p ) {
+			c = *p;
+
+			if ( !isdigit( c ) && c != '.' ) {
+				return qfalse;
+			}
+
+			p++;
+		}
+
+		// Don't allow filename to end in a period. file.so., file.so.0., etc
+		if ( c != '.' ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==============

@@ -631,6 +631,11 @@ int Sys_PID(void) {
     return 1;
 }
 
+qboolean Sys_PIDIsRunning(int pid) {
+    (void)pid;
+    return qfalse;
+}
+
 qboolean Sys_DllExtension(const char *name) {
     const char *ext;
 
