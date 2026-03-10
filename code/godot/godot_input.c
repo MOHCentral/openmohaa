@@ -77,11 +77,9 @@ void GLimp_Shutdown( void )
 #ifndef __APPLE__
 void GLimp_EndFrame( void )
 {
-}
-#endif
-
     /* No buffer swap needed — Godot handles presentation */
 }
+#endif
 
 void GLimp_SetGamma( unsigned char red[256], unsigned char green[256],
                      unsigned char blue[256] )
