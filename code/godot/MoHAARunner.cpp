@@ -37,6 +37,7 @@
 #include <godot_cpp/classes/sub_viewport.hpp>
 #include <godot_cpp/classes/viewport_texture.hpp>
 #include <godot_cpp/classes/audio_server.hpp>
+#include <godot_cpp/classes/os.hpp>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -639,6 +640,10 @@ MoHAARunner::~MoHAARunner() {
     Godot_Music_Shutdown();
 #endif
 
+    // PREDELETE should already release streams, but keep a destructor
+    // fallback for shutdown paths where PREDELETE is skipped.
+    release_audio_resources();
+
     // Player nodes may already be in predelete order here.
     sfx_players_3d.clear();
     sfx_players_2d.clear();
@@ -723,27 +728,69 @@ MoHAARunner::~MoHAARunner() {
 
 void MoHAARunner::_notification(int p_what) {
     if (p_what == NOTIFICATION_PREDELETE) {
+#ifdef HAS_MUSIC_MODULE
+        Godot_Music_Shutdown();
+#endif
         release_audio_resources();
     }
 }
 
 void MoHAARunner::release_audio_resources() {
-    // Run before child teardown so stream refs can be released cleanly.
+    bool had_audio_players = false;
+
+    // Run before child teardown so stream refs and playback objects are
+    // released before ObjectDB cleanup.
     for (auto *p : sfx_players_3d) {
         if (!p) continue;
+        had_audio_players = true;
         if (p->is_playing()) p->stop();
         p->set_stream(Ref<AudioStream>());
     }
     for (auto *p : sfx_players_2d) {
         if (!p) continue;
+        had_audio_players = true;
         if (p->is_playing()) p->stop();
         p->set_stream(Ref<AudioStream>());
     }
     if (music_player) {
+        had_audio_players = true;
         if (music_player->is_playing()) music_player->stop();
         music_player->set_stream(Ref<AudioStream>());
     }
 
+    // Let the audio thread consume the stop + stream-null updates before
+    // player nodes are deleted during shutdown.
+    if (had_audio_players) {
+        OS *os = OS::get_singleton();
+        if (os) {
+            os->delay_usec(50000);
+        }
+    }
+
+    for (auto *p : sfx_players_3d) {
+        if (!p) continue;
+        if (p->get_parent()) {
+            p->get_parent()->remove_child(p);
+        }
+        memdelete(p);
+    }
+    for (auto *p : sfx_players_2d) {
+        if (!p) continue;
+        if (p->get_parent()) {
+            p->get_parent()->remove_child(p);
+        }
+        memdelete(p);
+    }
+    if (music_player) {
+        if (music_player->get_parent()) {
+            music_player->get_parent()->remove_child(music_player);
+        }
+        memdelete(music_player);
+        music_player = nullptr;
+    }
+
+    sfx_players_3d.clear();
+    sfx_players_2d.clear();
     active_loops.clear();
     sfx_cache.clear();
 }
@@ -8535,8 +8582,13 @@ void MoHAARunner::update_audio(double delta) {
             Ref<AudioStreamWAV> wav_ref = wav;
             Ref<AudioStreamMP3> mp3_ref = wav;
             if (wav_ref.is_valid()) {
-                Ref<AudioStreamWAV> loop_wav = wav_ref->duplicate();
+                Ref<AudioStreamWAV> loop_wav;
+                loop_wav.instantiate();
                 if (loop_wav.is_valid()) {
+                    loop_wav->set_data(wav_ref->get_data());
+                    loop_wav->set_format(wav_ref->get_format());
+                    loop_wav->set_mix_rate(wav_ref->get_mix_rate());
+                    loop_wav->set_stereo(wav_ref->is_stereo());
                     loop_wav->set_loop_mode(AudioStreamWAV::LOOP_FORWARD);
                     loop_wav->set_loop_begin(0);
                     int total_samples = 0;
