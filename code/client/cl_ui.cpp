@@ -1901,6 +1901,10 @@ void UI_Update(void)
             Key_SetCatcher(Key_GetCatcher() & ~KEYCATCH_UI);
             IN_MouseOff();
         }
+        /* The fast path skips the normal menu-close branch that calls
+         * Com_FakeUnpause().  Clear any residual fake-pause (paused==2)
+         * so SP gameplay resumes when the escape menu is dismissed. */
+        Com_FakeUnpause();
 #else
     if (cls.no_menus && clc.state == CA_ACTIVE) {
 #endif
@@ -2395,19 +2399,6 @@ godot_hud_update:
         //
         str ammo = "hud_ammo_";
         ammo += CL_ConfigString(CS_WEAPONS + cl.snap.ps.activeItems[ITEM_WEAPON]);
-
-#ifdef GODOT_GDEXTENSION
-        {
-            static str last_logged_ammo;
-            if (ammo != last_logged_ammo) {
-                last_logged_ammo = ammo;
-                Menu *found = menuManager.FindMenu(ammo);
-                Com_Printf("[MoHAA][HUD-AMMO] weapon='%s' menu=%s hud_ammo=%s\n",
-                    ammo.c_str(), found ? "FOUND" : "NOT_FOUND",
-                    hud_ammo ? hud_ammo->m_name.c_str() : "NULL");
-            }
-        }
-#endif
 
         if (!hud_ammo || hud_ammo->m_name.icmp(ammo)) {
             Menu *ammoMenu = menuManager.FindMenu(ammo);

@@ -258,13 +258,10 @@ void UILayout::Load(const char *filename, bool bFullLoad)
 
         if (fallback[0] && strcmp(fallback, filename) != 0) {
             m_script->LoadFile(fallback);
-            if (m_script->isValid()) {
-                Com_Printf("[MoHAA][UI] Fallback loaded '%s' as '%s'\n", filename, fallback);
-            }
         }
 
         if (!m_script->isValid()) {
-            Com_Printf("[MoHAA][UI] Failed to load layout/include '%s'\n", filename);
+            Com_Printf("WARNING: Failed to load layout/include '%s'\n", filename);
         }
     }
 #endif

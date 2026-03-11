@@ -155,9 +155,14 @@ void *Sys_GetCGameAPI(void *parms) {
 
         // Fallback: try dlopen on known VFS paths (cgame.so is preloaded into
         // the Emscripten virtual FS by the pk3 preloader in build-web.sh).
+        // Search expansion dirs (mainta, maintt) as well as base (main).
         const char *web_paths[] = {
             "/main/cgame.so",
             "main/cgame.so",
+            "/mainta/cgame.so",
+            "mainta/cgame.so",
+            "/maintt/cgame.so",
+            "maintt/cgame.so",
             "/cgame.so",
             NULL,
         };
@@ -232,24 +237,41 @@ void *Sys_GetCGameAPI(void *parms) {
 #endif
 
         if (!cgame_library) {
+            /* Search order for cgame: fs_game dir (mods), then fs_basegame
+               dir (expansion packs: "mainta" for SH, "maintt" for BT),
+               then "main" (base game). This ensures SH/BT find cgame even
+               when fs_game is empty. */
             const char *gameDir = Cvar_VariableString("fs_game");
-            const char *paths[3];
-            int i;
+            const char *baseGameDir = Cvar_VariableString("fs_basegame");
+            const char *gameDirs[3];
+            int numGameDirs = 0;
 
-            if (!gameDir || !*gameDir) gameDir = "main";
+            /* Build list of unique game directories to search. */
+            if (gameDir && *gameDir) {
+                gameDirs[numGameDirs++] = gameDir;
+            }
+            if (baseGameDir && *baseGameDir) {
+                gameDirs[numGameDirs++] = baseGameDir;
+            }
+            gameDirs[numGameDirs++] = "main";
+
+            const char *paths[3];
+            int i, g;
 
             paths[0] = Cvar_VariableString("fs_homedatapath");
             paths[1] = Cvar_VariableString("fs_basepath");
             paths[2] = Cvar_VariableString("fs_homepath");
 
-            for (i = 0; i < 3 && !cgame_library; i++) {
-                if (paths[i] && *paths[i]) {
-                    Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDir, cgame_gamename);
-                    Com_Printf("GDExtension: trying cgame at \"%s\"...\n", libPath);
-                    cgame_library = Sys_LoadLibrary(libPath);
-                    if (!cgame_library) {
-                        const char *dlErr = Sys_LibraryError();
-                        Com_Printf("GDExtension: library load failed: %s\n", dlErr ? dlErr : "(null)");
+            for (g = 0; g < numGameDirs && !cgame_library; g++) {
+                for (i = 0; i < 3 && !cgame_library; i++) {
+                    if (paths[i] && *paths[i]) {
+                        Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDirs[g], cgame_gamename);
+                        Com_Printf("GDExtension: trying cgame at \"%s\"...\n", libPath);
+                        cgame_library = Sys_LoadLibrary(libPath);
+                        if (!cgame_library) {
+                            const char *dlErr = Sys_LibraryError();
+                            Com_Printf("GDExtension: library load failed: %s\n", dlErr ? dlErr : "(null)");
+                        }
                     }
                 }
             }
