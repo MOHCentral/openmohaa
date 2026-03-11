@@ -460,6 +460,8 @@ elif env["platform"] == "windows":
         "code/thirdparty/zlib-1.3.1/zutil.c",
     ])
     env.Append(LIBS=["ws2_32", "winmm", "shell32", "advapi32", "user32", "kernel32", "psapi", "crypt32"])  # winsock, multimedia timer, SHGetFolderPath, registry/crypt, MessageBox, OS basics, process info, crypto
+    # gdextension expects "openmohaa.dll" (no lib prefix).
+    env["SHLIBPREFIX"] = ""
 
 # ── Build the shared library ──
 library = env.SharedLibrary(
@@ -561,6 +563,10 @@ elif env["platform"] == "windows":
     else:
         cgame_env.Append(CCFLAGS=["/EHsc", "/O2"])
         cgame_env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
+    # cgame_env is a bare Environment() so it defaults to Linux naming.
+    # Force Windows output: cgame.dll (no lib prefix).
+    cgame_env["SHLIBPREFIX"] = ""
+    cgame_env["SHLIBSUFFIX"] = ".dll"
 elif env["platform"] == "web":
     # cgame for web: compiled as Emscripten WASM SIDE_MODULE so that
     # Sys_GetCGameAPI / Sys_LoadLibrary (dlopen) can load it at runtime
