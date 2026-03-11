@@ -61,9 +61,18 @@ qboolean CL_FinishedIntro(void);
 extern "C" {
 #endif
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build these are owned by fgame/gamecvars.cpp.
+ * Keep only extern references here to avoid duplicate global storage on PE/COFF.
+ */
+extern cvar_t *sv_scriptfiles;
+extern cvar_t *g_scriptcheck;
+extern cvar_t *g_showopcodes;
+#else
 cvar_t *sv_scriptfiles;
 cvar_t *g_scriptcheck;
 cvar_t *g_showopcodes;
+#endif
 
 int demo_protocols[] =
 { 0, 0 }; // the first value of the array will be replaced by com_protocol
@@ -86,7 +95,12 @@ cvar_t	*paused;
 cvar_t	*config;
 cvar_t	*fps;
 cvar_t	*com_speeds;
+#ifdef GODOT_GDEXTENSION
+/* In monolithic builds these cvar pointers are owned by fgame/gamecvars.cpp. */
+extern cvar_t *developer;
+#else
 cvar_t	*developer;
+#endif
 cvar_t	*com_dedicated;
 cvar_t	*com_timescale;
 cvar_t	*com_fixedtime;
@@ -105,8 +119,13 @@ cvar_t	*com_showtrace;
 cvar_t	*com_shortversion;
 cvar_t	*com_version;
 cvar_t	*autopaused;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *deathmatch;
+extern cvar_t *com_blood;
+#else
 cvar_t	*deathmatch;
 cvar_t	*com_blood;
+#endif
 cvar_t	*com_buildScript;	// for automated data building scripts
 cvar_t	*com_radar_range;
 cvar_t	*console_spam_filter;
@@ -133,7 +152,11 @@ cvar_t	*com_busyWait;
 cvar_t  *con_autochat;
 #endif
 
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *precache;
+#else
 cvar_t	*precache;
+#endif
 
 cvar_t	*com_target_game;
 cvar_t	*com_target_shortversion;

@@ -28,11 +28,14 @@ if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform")
             # like object.o (src/core/ vs gen/src/classes/) would silently
             # replace each other with 'r', losing symbols.
             # 'P' stores full path names so MinGW ar treats them as distinct
-            # members even with the same basename.
+            # members even with the same basename.  cctools ar (macOS/osxcross)
+            # does NOT support 'P', so omit it for macOS.
+            plat = env.get("platform", "")
+            use_P = "P" if plat != "macos" else ""
             chunk_size = 128
             for i in range(0, len(source), chunk_size):
                 chunk = [str(s) for s in source[i:i + chunk_size]]
-                flags = "qcSP" if i == 0 else "qSP"
+                flags = ("qcS" if i == 0 else "qS") + use_P
                 cmd = [ar, flags, out] + chunk
                 subprocess.check_call(cmd)
 
@@ -423,9 +426,14 @@ elif env["platform"] == "web":
         "code/thirdparty/zlib-1.3.1/zutil.c",
     ])
 elif env["platform"] == "macos":
-    # macOS Mach-O linker uses -undefined dynamic_lookup instead of -z muldefs
-    # We add -Wl,-w to suppress duplicate symbol errors (warning instead).
-    env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress", "-Wl,-w"])
+    # macOS ld64 does not support -multiply_defined suppress for dylibs.
+    # Duplicates are resolved in a pre-link step via llvm-objcopy (see below).
+    # -fcommon merges tentative C globals automatically.
+    env.Append(CFLAGS=["-fcommon"])
+    env.Append(LINKFLAGS=[
+        "-Wl,-undefined,dynamic_lookup",
+        "-Wl,-w",
+    ])
 elif env["platform"] == "windows":
     # Detect MinGW vs MSVC — MinGW uses GCC-style flags, MSVC uses /FORCE etc.
     _is_mingw = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower() or env.get("tools", [""])[0] == "mingw"
@@ -447,6 +455,9 @@ if env["platform"] == "linux":
     env.Append(LIBS=["z", "dl"])  # zlib, dlopen
 elif env["platform"] == "macos":
     env.Append(LIBS=["z", "dl"])  # zlib, dlopen
+    # Cross-compiling from Linux: SCons defaults SHLIBSUFFIX to ".so".
+    # macOS convention (and .gdextension expects) ".dylib".
+    env["SHLIBSUFFIX"] = ".dylib"
 elif env["platform"] == "windows":
     # Embed zlib sources instead of linking a system library (CI runners
     # and cross-compilation environments may not have a pre-built zlib).
@@ -468,6 +479,66 @@ library = env.SharedLibrary(
     target="bin/openmohaa",
     source=sources,
 )
+
+# ── macOS pre-link: resolve duplicate symbols ──
+# macOS ld64 does not support -z muldefs / -multiply_defined suppress for
+# dylibs.  Instead we use llvm-objcopy --localize-symbol on later .os files
+# to hide duplicate definitions, matching Linux -z muldefs first-wins order.
+# NOTE: llvm-nm on fat (universal) Mach-O reports symbols from BOTH arch
+# slices — we must only count cross-file duplicates (same sym, different file).
+if env["platform"] == "macos":
+    def _macos_localize_dups(target, source, env):
+        import subprocess
+
+        nm = "llvm-nm"
+        objcopy = "llvm-objcopy"
+
+        seen = {}          # symbol -> first .os file path
+        to_localize = {}   # filepath -> list of symbols to localize
+
+        for src in source:
+            path = str(src)
+            try:
+                out = subprocess.check_output(
+                    [nm, "-g", "--defined-only", "--format=posix", path],
+                    stderr=subprocess.DEVNULL, text=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                continue
+
+            for line in out.strip().split("\n"):
+                if not line:
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                sym = parts[0]
+                stype = parts[1]
+                # T=text, D=data, B=bss, S=section — skip C (common, handled
+                # by -fcommon) and other minor types.
+                if stype not in ("T", "D", "B", "S"):
+                    continue
+                if sym in seen:
+                    # Fat Mach-O: nm reports each arch's symbols separately.
+                    # Only localize if the duplicate is in a DIFFERENT file.
+                    if seen[sym] != path:
+                        to_localize.setdefault(path, []).append(sym)
+                else:
+                    seen[sym] = path
+
+        total = sum(len(s) for s in to_localize.values())
+        if total:
+            print("  macOS: localizing %d duplicate symbol(s) across %d object file(s)" % (total, len(to_localize)))
+        for path, syms in to_localize.items():
+            cmd = [objcopy]
+            for sym in syms:
+                cmd.extend(["--localize-symbol", sym])
+            cmd.append(path)
+            subprocess.check_call(cmd)
+
+        return None
+
+    env.AddPreAction(library, env.Action(_macos_localize_dups, "Resolving macOS duplicate symbols..."))
 
 Default(library)
 
@@ -535,6 +606,17 @@ elif env["platform"] == "macos":
             cgame_env[tool_var] = env[tool_var]
     if env.get("ENV", {}).get("PATH"):
         cgame_env["ENV"]["PATH"] = env["ENV"]["PATH"]
+    # Propagate architecture flags from main env (universal: -arch x86_64 -arch arm64)
+    _arch_flags = [str(f) for f in env.get("CCFLAGS", []) if str(f) in ("-arch",) or str(f) in ("x86_64", "arm64", "universal")]
+    # Rebuild -arch pairs from the main env's CCFLAGS list
+    _main_ccflags = [str(f) for f in env.get("CCFLAGS", [])]
+    _arch_pairs = []
+    for i, f in enumerate(_main_ccflags):
+        if f == "-arch" and i + 1 < len(_main_ccflags):
+            _arch_pairs.extend(["-arch", _main_ccflags[i + 1]])
+    if _arch_pairs:
+        cgame_env.Append(CCFLAGS=_arch_pairs)
+        cgame_env.Append(LINKFLAGS=_arch_pairs)
     cgame_env["SHLIBSUFFIX"] = ".dylib"
     cgame_env.Append(CCFLAGS=[
         "-fPIC", "-g", "-O2",
@@ -542,7 +624,7 @@ elif env["platform"] == "macos":
     ])
     cgame_env.Append(CFLAGS=["-Wno-incompatible-pointer-types"])
     cgame_env.Append(CXXFLAGS=["-std=c++17", "-fexceptions", "-frtti"])
-    cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
+    cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-w"])
 elif env["platform"] == "windows":
     cgame_env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS", "_USE_MATH_DEFINES"])
     # Detect MinGW vs MSVC for cgame build.
@@ -667,6 +749,10 @@ cgame_lib = cgame_env.SharedLibrary(
     target="bin/cgame",
     source=cgame_sources,
 )
+
+# macOS pre-link for cgame: same duplicate-symbol resolution as main library
+if env["platform"] == "macos":
+    cgame_env.AddPreAction(cgame_lib, env.Action(_macos_localize_dups, "Resolving macOS cgame duplicate symbols..."))
 
 # Build cgame alongside the main library
 Default(cgame_lib)

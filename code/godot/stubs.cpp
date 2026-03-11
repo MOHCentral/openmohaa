@@ -809,22 +809,13 @@ void VM_Forced_Unload_Start(void) {
 void VM_Forced_Unload_Done(void) {
 }
 
-// Renderer-thread stubs (SMP rendering not used under Godot)
-qboolean GLimp_SpawnRenderThread(void (*function)(void)) {
-    return qfalse;
-}
-
-void *GLimp_RendererSleep(void) {
-    return NULL;
-}
+// GLimp_SpawnRenderThread, GLimp_RendererSleep, GLimp_WakeRenderer
+// are defined in renderergl1/tr_godot_gl_stubs.c — do not duplicate here.
 
 #ifndef _UNIX
 void GLimp_FrontEndSleep(void) {
 }
 #endif
-
-void GLimp_WakeRenderer(void *data) {
-}
 
 // Clipboard — use a static buffer for Get since the engine expects the
 // pointer to remain valid until the next call.
