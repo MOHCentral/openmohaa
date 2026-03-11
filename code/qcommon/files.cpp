@@ -38,6 +38,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #   include <sys/stat.h>
 #   include <errno.h>
 #   include <dirent.h>
+#elif defined(GODOT_GDEXTENSION) && (defined(__MINGW32__) || defined(__MINGW64__))
+// MinGW defines _WIN32 but has POSIX headers — needed for struct stat, etc.
+#   include <sys/types.h>
+#   include <sys/stat.h>
+#   include <errno.h>
+#   include <dirent.h>
 #endif
 
 #ifdef _MSC_VER

@@ -18,17 +18,22 @@ if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform")
         # archive incrementally to keep each subprocess argv below ARG_MAX.
         def _archive_in_chunks(target, source, env):
             ar = env.subst("$AR")
-            arflags = env.subst("$ARFLAGS").split()
             ranlib = env.subst("$RANLIB")
             out = str(target[0])
 
             if os.path.exists(out):
                 os.remove(out)
 
+            # Use 'q' (quick append) NOT 'r' (replace) — duplicate basenames
+            # like object.o (src/core/ vs gen/src/classes/) would silently
+            # replace each other with 'r', losing symbols.
+            # 'P' stores full path names so MinGW ar treats them as distinct
+            # members even with the same basename.
             chunk_size = 128
             for i in range(0, len(source), chunk_size):
                 chunk = [str(s) for s in source[i:i + chunk_size]]
-                cmd = [ar] + arflags + [out] + chunk
+                flags = "qcSP" if i == 0 else "qSP"
+                cmd = [ar, flags, out] + chunk
                 subprocess.check_call(cmd)
 
             if ranlib:
@@ -78,11 +83,9 @@ env.Append(CPPPATH=[
     "code/botlib",
     "code/cgame",
     "code/client",
-    # NOTE: code/fgame is intentionally NOT in global CPPPATH.
-    # It contains a "windows.h" (WindowObject class) that shadows the
-    # system <windows.h> on Windows builds.  All non-fgame files that need
-    # fgame headers use relative includes (e.g. "../fgame/g_local.h"), and
-    # fgame source files resolve their own headers via same-directory lookup.
+    # code/fgame is added conditionally below — on Windows it uses -iquote
+    # to prevent code/fgame/windows.h (a game entity class) from shadowing
+    # the system <windows.h>.
     "code/gamespy",
     "code/qcommon",
     "code/renderercommon",
@@ -97,6 +100,16 @@ env.Append(CPPPATH=[
     "code/corepp",
     "generated",
 ])
+
+# code/fgame/ contains a "windows.h" header (WindowObject entity class) that
+# shadows the system <windows.h> on Windows when added via -I.  On Windows we
+# use -iquote instead, which is only searched for #include "file" (quoted),
+# NOT for #include <file> (angled).  sys_loadlib.h uses #include <windows.h>
+# so the system header is found correctly.
+if env.get("platform") == "windows":
+    env.Append(CCFLAGS=["-iquote", "code/fgame"])
+else:
+    env.Append(CPPPATH=["code/fgame"])
 
 env.Append(CPPDEFINES=[
     # DEDICATED stays defined to keep SDL code in sys files inactive.
@@ -133,10 +146,7 @@ src_dirs = [
     "code/skeletor",
 
     # ── Bot AI ──
-    # NOTE: code/botlib is compiled separately below with code/fgame in its
-    # CPPPATH (botlib sources #include "botlib.h" which lives in code/fgame/).
-    # It is NOT in the global CPPPATH to avoid code/fgame/windows.h shadowing
-    # the system <windows.h> on Windows builds.
+    "code/botlib",
 
     # ── Client ──
     "code/client",
@@ -186,7 +196,7 @@ if env["platform"] == "linux":
     sys_sources.append("code/sys/win_localization.cpp")
     sys_sources.append("code/sys/win_bounds.cpp")
 elif env["platform"] == "windows":
-    env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
+    env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS", "_USE_MATH_DEFINES"])
     if env["arch"] in ["x86_64", "arm64"]:
         env.Append(CPPDEFINES=["_WIN64"])
     # Detect MinGW vs MSVC to use the right compiler flags.
@@ -248,23 +258,6 @@ def add_sources(directory):
 
 for d in src_dirs:
     add_sources(d)
-
-# ── Bot AI (separate env — needs code/fgame for botlib.h) ──
-# botlib sources #include "botlib.h" which lives in code/fgame/.  We must
-# NOT add code/fgame to the global CPPPATH because code/fgame/windows.h
-# (a WindowObject game entity class) shadows the system <windows.h> on
-# Windows builds.  Instead, compile botlib in an env that adds code/fgame.
-botlib_env = env.Clone()
-botlib_env.Append(CPPPATH=["code/fgame"])
-botlib_sources = []
-for root, dirs, files in os.walk("code/botlib"):
-    for f in files:
-        if f.endswith((".c", ".cpp")):
-            botlib_sources.append(os.path.join(root, f))
-botlib_objects = [botlib_env.SharedObject(
-    target=os.path.join("build", s.replace(".c", ".os").replace(".cpp", ".os")),
-    source=s,
-) for s in botlib_sources]
 
 # ── Renderer data modules (selective — GL draw-path files excluded) ──
 # These provide real shader parsing, image loading, BSP loading, model
@@ -441,6 +434,10 @@ elif env["platform"] == "windows":
         _is_mingw = True
     if _is_mingw:
         env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
+        # godot-cpp's windows.py adds --no-undefined, but GDExtension symbols
+        # (godot::internal::*) are resolved at runtime by the Godot engine.
+        # Strip it so the monolithic link succeeds.
+        env["LINKFLAGS"] = [f for f in env.get("LINKFLAGS", []) if "--no-undefined" not in str(f)]
     else:
         # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
         env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
@@ -462,12 +459,12 @@ elif env["platform"] == "windows":
         "code/thirdparty/zlib-1.3.1/inftrees.c",
         "code/thirdparty/zlib-1.3.1/zutil.c",
     ])
-    env.Append(LIBS=["ws2_32", "winmm"])  # winsock, multimedia timer
+    env.Append(LIBS=["ws2_32", "winmm", "shell32", "advapi32", "user32", "kernel32", "psapi", "crypt32"])  # winsock, multimedia timer, SHGetFolderPath, registry/crypt, MessageBox, OS basics, process info, crypto
 
 # ── Build the shared library ──
 library = env.SharedLibrary(
     target="bin/openmohaa",
-    source=sources + botlib_objects,
+    source=sources,
 )
 
 Default(library)
@@ -488,7 +485,7 @@ cgame_env.Append(CPPPATH=[
     "code",
     "code/cgame",
     "code/client",
-    "code/fgame",
+    # code/fgame added conditionally below (iquote on Windows)
     "code/qcommon",
     "code/renderercommon",
     "code/server",
@@ -498,6 +495,12 @@ cgame_env.Append(CPPPATH=[
     "code/corepp",
     "generated",
 ])
+
+# Same -iquote treatment as main env — see comment in global CPPPATH block.
+if env.get("platform") == "windows":
+    cgame_env.Append(CCFLAGS=["-iquote", "code/fgame"])
+else:
+    cgame_env.Append(CPPPATH=["code/fgame"])
 
 cgame_env.Append(CPPDEFINES=[
     "CGAME_DLL",
@@ -539,7 +542,7 @@ elif env["platform"] == "macos":
     cgame_env.Append(CXXFLAGS=["-std=c++17", "-fexceptions", "-frtti"])
     cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
 elif env["platform"] == "windows":
-    cgame_env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
+    cgame_env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS", "_USE_MATH_DEFINES"])
     # Detect MinGW vs MSVC for cgame build.
     _cgame_mingw = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower()
     if not _cgame_mingw and os.name != "nt":

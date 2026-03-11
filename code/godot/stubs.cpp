@@ -858,6 +858,12 @@ void Sys_DebugPrint(const char *msg) {
 void Sys_PrintBackTrace(void) {
 }
 
+/* sys_win32.c::Sys_PlatformInit calls Sys_PlatformInit_New (defined in
+   sys/new/sys_win32_new.c which is not compiled). The real function
+   only enables MSVC CRT debug heap, so a no-op stub is correct. */
+void Sys_PlatformInit_New(void) {
+}
+
 /* Real signature: const char *Sys_LV_CL_ConvertString(const char *var)
  * Localisation passthrough — returns the input string unchanged. */
 const char *Sys_LV_CL_ConvertString(const char *var) {
