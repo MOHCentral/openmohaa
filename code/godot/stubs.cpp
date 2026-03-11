@@ -32,12 +32,22 @@ extern "C" {
 #include <cstring>
 #include <chrono>
 #include <random>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <errno.h>
-#include <unistd.h>
-#include <libgen.h>
-#include <dlfcn.h>
+
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <direct.h>   // _getcwd, _mkdir
+#  include <sys/stat.h>
+#else
+#  include <dirent.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#  include <libgen.h>
+#  include <dlfcn.h>
+#endif
 
 // ──────────────────────────────────────────────
 //  UpdateChecker stubs — the real implementation in sys_update_checker.cpp
@@ -95,12 +105,18 @@ extern game_export_t *GetGameAPI(game_import_t *import);
 // Returning NULL makes the client skip cgame initialisation for now.
 // A future phase will compile cgame separately or provide real stubs.
 
-// cgame is compiled as a separate .so because it shares corepp/ with fgame
-// but needs CGAME_DLL.  We load it via the engine's Sys_LoadDll (dlopen).
+// cgame is compiled as a separate shared library because it shares corepp/
+// with fgame but needs CGAME_DLL.  We load it via the engine's Sys_LoadDll.
 static void *cgame_library = NULL;
-// When true, final shutdown is in progress — do NOT dlclose cgame.so
+// When true, final shutdown is in progress — do NOT unload cgame
 // because atexit/static-destructor handlers may reference its code pages.
 static qboolean cgame_shutting_down = qfalse;
+
+#ifdef _WIN32
+static const char *cgame_gamename = "cgame.dll";
+#else
+static const char *cgame_gamename = "cgame.so";
+#endif
 
 void Sys_CGameFinalShutdown(void) {
     cgame_shutting_down = qtrue;
@@ -117,7 +133,6 @@ void Sys_UnloadGame(void) {
 void *Sys_GetCGameAPI(void *parms) {
     typedef void *(*GetCGameAPI_t)(void);
     GetCGameAPI_t getCGameAPI = NULL;
-    const char *gamename = "cgame.so";
 
     if (cgame_library) {
         Com_Printf("GDExtension: Sys_GetCGameAPI — already loaded\n");
@@ -164,26 +179,57 @@ void *Sys_GetCGameAPI(void *parms) {
     }
 #else
 
-    /* Try next to the GDExtension .so first (e.g. project/bin/cgame.so),
+    /* Try next to the GDExtension library first (e.g. project/bin/cgame.dll),
        then fall back to fs_homedatapath/game/, fs_basepath/game/, fs_homepath/game/.
        This keeps the main/ game directory free of build artifacts. */
     {
         char libPath[1024];
-        Dl_info dlInfo;
 
-        /* Locate the directory containing the GDExtension library itself. */
-        if (dladdr((void *)Sys_GetCGameAPI, &dlInfo) && dlInfo.dli_fname) {
-            char pathBuf[1024];
-            Q_strncpyz(pathBuf, dlInfo.dli_fname, sizeof(pathBuf));
-            char *dir = dirname(pathBuf);
-            Com_sprintf(libPath, sizeof(libPath), "%s/%s", dir, gamename);
-            Com_Printf("GDExtension: trying cgame next to library at \"%s\"...\n", libPath);
-            cgame_library = Sys_LoadLibrary(libPath);
-            if (!cgame_library) {
-                const char *dlErr = Sys_LibraryError();
-                Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+#ifdef _WIN32
+        /* On Windows, use GetModuleHandleEx + GetModuleFileName to locate
+           the directory containing the GDExtension DLL itself. */
+        {
+            HMODULE hModule = NULL;
+            if (GetModuleHandleExA(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                    GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    (LPCSTR)Sys_GetCGameAPI, &hModule) && hModule) {
+                char pathBuf[1024];
+                DWORD len = GetModuleFileNameA(hModule, pathBuf, sizeof(pathBuf));
+                if (len > 0 && len < sizeof(pathBuf)) {
+                    /* Strip the filename to get the directory. */
+                    char *lastSlash = strrchr(pathBuf, '\\');
+                    char *lastFwd   = strrchr(pathBuf, '/');
+                    char *sep = lastSlash > lastFwd ? lastSlash : lastFwd;
+                    if (sep) *sep = '\0';
+                    Com_sprintf(libPath, sizeof(libPath), "%s\\%s", pathBuf, cgame_gamename);
+                    Com_Printf("GDExtension: trying cgame next to library at \"%s\"...\n", libPath);
+                    cgame_library = Sys_LoadLibrary(libPath);
+                    if (!cgame_library) {
+                        const char *dlErr = Sys_LibraryError();
+                        Com_Printf("GDExtension: LoadLibrary failed: %s\n", dlErr ? dlErr : "(null)");
+                    }
+                }
             }
         }
+#else
+        /* On POSIX, use dladdr to locate the directory containing our .so. */
+        {
+            Dl_info dlInfo;
+            if (dladdr((void *)Sys_GetCGameAPI, &dlInfo) && dlInfo.dli_fname) {
+                char pathBuf[1024];
+                Q_strncpyz(pathBuf, dlInfo.dli_fname, sizeof(pathBuf));
+                char *dir = dirname(pathBuf);
+                Com_sprintf(libPath, sizeof(libPath), "%s/%s", dir, cgame_gamename);
+                Com_Printf("GDExtension: trying cgame next to library at \"%s\"...\n", libPath);
+                cgame_library = Sys_LoadLibrary(libPath);
+                if (!cgame_library) {
+                    const char *dlErr = Sys_LibraryError();
+                    Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+                }
+            }
+        }
+#endif
 
         if (!cgame_library) {
             const char *gameDir = Cvar_VariableString("fs_game");
@@ -198,12 +244,12 @@ void *Sys_GetCGameAPI(void *parms) {
 
             for (i = 0; i < 3 && !cgame_library; i++) {
                 if (paths[i] && *paths[i]) {
-                    Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDir, gamename);
+                    Com_sprintf(libPath, sizeof(libPath), "%s/%s/%s", paths[i], gameDir, cgame_gamename);
                     Com_Printf("GDExtension: trying cgame at \"%s\"...\n", libPath);
                     cgame_library = Sys_LoadLibrary(libPath);
                     if (!cgame_library) {
                         const char *dlErr = Sys_LibraryError();
-                        Com_Printf("GDExtension: dlopen failed: %s\n", dlErr ? dlErr : "(null)");
+                        Com_Printf("GDExtension: library load failed: %s\n", dlErr ? dlErr : "(null)");
                     }
                 }
             }
@@ -212,19 +258,19 @@ void *Sys_GetCGameAPI(void *parms) {
 #endif
 
     if (!cgame_library) {
-        cgame_library = Sys_LoadDll(gamename, 0);
+        cgame_library = Sys_LoadDll(cgame_gamename, 0);
     }
 
     if (!cgame_library) {
-        Com_Printf("GDExtension: Sys_GetCGameAPI — could not load %s, running without cgame\n", gamename);
+        Com_Printf("GDExtension: Sys_GetCGameAPI — could not load %s, running without cgame\n", cgame_gamename);
         return NULL;
     }
 
-    Com_Printf("GDExtension: Sys_GetCGameAPI(%s) — loaded OK\n", gamename);
+    Com_Printf("GDExtension: Sys_GetCGameAPI(%s) — loaded OK\n", cgame_gamename);
 
     getCGameAPI = (GetCGameAPI_t)Sys_LoadFunction(cgame_library, "GetCGameAPI");
     if (!getCGameAPI) {
-        Com_Printf("GDExtension: GetCGameAPI symbol not found in %s\n", gamename);
+        Com_Printf("GDExtension: GetCGameAPI symbol not found in %s\n", cgame_gamename);
         Sys_UnloadLibrary(cgame_library);
         cgame_library = NULL;
         return NULL;
@@ -236,17 +282,15 @@ void *Sys_GetCGameAPI(void *parms) {
 void Sys_UnloadCGame(void) {
     if (cgame_library) {
         if (cgame_shutting_down) {
-            // Final shutdown — do NOT dlclose cgame.so.  C++ static
-            // destructors inside cgame.so may have registered atexit
-            // handlers; closing the library would unmap those code pages
-            // and crash when the handlers run at process exit.
-            Com_Printf("GDExtension: Sys_UnloadCGame — keeping cgame.so mapped (final shutdown)\n");
+            // Final shutdown — do NOT unload the cgame library.  C++ static
+            // destructors inside it may have registered atexit handlers;
+            // closing the library would unmap those code pages and crash
+            // when the handlers run at process exit.
+            Com_Printf("GDExtension: Sys_UnloadCGame — keeping cgame mapped (final shutdown)\n");
         } else {
-            // Map reload — dlclose so that the next Sys_GetCGameAPI
+            // Map reload — unload so that the next Sys_GetCGameAPI
             // re-opens a fresh copy with all static data reinitialised.
-            // This is safe because cgame.so uses -fvisibility=hidden,
-            // so no ELF symbol interposition from the main .so occurs.
-            Com_Printf("GDExtension: Sys_UnloadCGame — closing cgame.so (map reload)\n");
+            Com_Printf("GDExtension: Sys_UnloadCGame — closing cgame (map reload)\n");
             Sys_UnloadLibrary(cgame_library);
         }
         cgame_library = NULL;
@@ -281,11 +325,166 @@ void Sys_ShutdownEx(void) {
 void Sys_ProcessBackgroundTasks(void) {
 }
 
+// ── Platform path / file-system stubs ──
+// On Windows, sys_win32.c + con_win32.c provide most platform functions
+// (Sys_ListFiles, Sys_Cwd, Sys_Mkdir, CON_Init, etc.).  On Emscripten,
+// we use fixed VFS paths.  On native Unix (Linux/macOS), we use POSIX
+// APIs and XDG paths from sys_unix.c.
+
 #ifdef __EMSCRIPTEN__
 static char s_web_home_path[] = "/userfs";
 static char s_web_install_path[] = "/";
 #endif
 static char s_web_empty_path[] = "";
+
+// ── Install path storage (all platforms) ──
+static char s_install_path[MAX_OSPATH] = { 0 };
+
+void Sys_SetDefaultInstallPath(const char *path) {
+    if (path) {
+        Q_strncpyz(s_install_path, path, sizeof(s_install_path));
+    }
+}
+
+// ── Path stubs: three-way split (Emscripten / Windows / Unix) ──
+
+#ifdef __EMSCRIPTEN__
+// Web/Emscripten: use fixed VFS paths
+char *Sys_DefaultHomePath(void) {
+    return s_web_home_path;
+}
+char *Sys_DefaultHomeConfigPath(void) {
+    return s_web_home_path;
+}
+char *Sys_DefaultHomeDataPath(void) {
+    return s_web_home_path;
+}
+char *Sys_DefaultHomeStatePath(void) {
+    return s_web_home_path;
+}
+char *Sys_DefaultInstallPath(void) {
+    return s_web_install_path;
+}
+char *Sys_DefaultAppPath(void) {
+    return s_web_install_path;
+}
+char *Sys_DefaultBasePath(void) {
+    return s_web_install_path;
+}
+char *Sys_SteamPath(void) {
+    return s_web_empty_path;
+}
+char *Sys_GogPath(void) {
+    return s_web_empty_path;
+}
+char *Sys_MicrosoftStorePath(void) {
+    return s_web_empty_path;
+}
+char *Sys_DefaultUserPath(void) {
+    return s_web_home_path;
+}
+char *Sys_DefaultOutputPath(void) {
+    return s_web_home_path;
+}
+
+#elif defined(_WIN32)
+// Windows: sys_win32.c provides Sys_DefaultHomeConfigPath,
+// Sys_DefaultHomeDataPath, Sys_DefaultHomeStatePath, Sys_SteamPath,
+// Sys_GogPath, Sys_MicrosoftStorePath, Sys_Basename, Sys_Dirname,
+// Sys_FOpen, Sys_Mkdir, Sys_Mkfifo, Sys_Cwd, Sys_ListFiles,
+// Sys_FreeFileList, Sys_PlatformInit, Sys_SetEnv, Sys_GetCurrentUser,
+// Sys_PID, Sys_PIDIsRunning, Sys_DllExtension, Sys_Milliseconds,
+// Sys_RandomBytes, Sys_PlatformExit.
+// con_win32.c provides CON_Init, CON_Shutdown, CON_Input.
+// We only provide the Install/App/Base/Home/User/Output path stubs.
+
+char *Sys_DefaultHomePath(void) {
+    return Sys_DefaultHomeDataPath();
+}
+char *Sys_DefaultInstallPath(void) {
+    if (*s_install_path)
+        return s_install_path;
+    static char cwd[MAX_OSPATH];
+    if (!cwd[0]) {
+        if (!_getcwd(cwd, sizeof(cwd) - 1))
+            Q_strncpyz(cwd, ".", sizeof(cwd));
+        cwd[MAX_OSPATH - 1] = 0;
+    }
+    return cwd;
+}
+char *Sys_DefaultAppPath(void) {
+    return Sys_DefaultInstallPath();
+}
+char *Sys_DefaultBasePath(void) {
+    return Sys_DefaultInstallPath();
+}
+char *Sys_DefaultUserPath(void) {
+    return Sys_DefaultHomeDataPath();
+}
+char *Sys_DefaultOutputPath(void) {
+    return Sys_DefaultHomeDataPath();
+}
+
+#else
+// Native Unix (Linux/macOS): use real XDG paths from sys_unix.c.
+// These are defined in code/sys/sys_unix.c and NOT guarded by GODOT_GDEXTENSION.
+extern char *Sys_HomeConfigPath(void);
+extern char *Sys_HomeDataPath(void);
+extern char *Sys_HomeStatePath(void);
+extern char *Sys_BinaryPath(void);
+
+char *Sys_DefaultHomePath(void) {
+    return Sys_HomeDataPath();
+}
+char *Sys_DefaultHomeConfigPath(void) {
+    return Sys_HomeConfigPath();
+}
+char *Sys_DefaultHomeDataPath(void) {
+    return Sys_HomeDataPath();
+}
+char *Sys_DefaultHomeStatePath(void) {
+    return Sys_HomeStatePath();
+}
+char *Sys_DefaultInstallPath(void) {
+    if (*s_install_path)
+        return s_install_path;
+    static char cwd[MAX_OSPATH];
+    if (!cwd[0]) {
+        char *result = getcwd(cwd, sizeof(cwd) - 1);
+        if (result != cwd)
+            Q_strncpyz(cwd, ".", sizeof(cwd));
+        cwd[MAX_OSPATH - 1] = 0;
+    }
+    return cwd;
+}
+char *Sys_DefaultAppPath(void) {
+    return Sys_BinaryPath();
+}
+char *Sys_DefaultBasePath(void) {
+    return Sys_DefaultInstallPath();
+}
+char *Sys_SteamPath(void) {
+    return s_web_empty_path;
+}
+char *Sys_GogPath(void) {
+    return s_web_empty_path;
+}
+char *Sys_MicrosoftStorePath(void) {
+    return s_web_empty_path;
+}
+char *Sys_DefaultUserPath(void) {
+    return Sys_HomeDataPath();
+}
+char *Sys_DefaultOutputPath(void) {
+    return Sys_HomeDataPath();
+}
+#endif  // __EMSCRIPTEN__ / _WIN32 / Unix
+
+// ── File system / console / misc platform stubs ──
+// On Windows, sys_win32.c + con_win32.c provide all of these.
+// On Emscripten and native Unix, we provide our own implementations.
+
+#if !defined(_WIN32)
 
 static constexpr int STUB_MAX_FOUND_FILES = 0x1000;
 
@@ -357,109 +556,6 @@ static void Godot_Sys_ListFilteredFiles(
     }
 
     closedir(fdir);
-}
-
-static char s_install_path[MAX_OSPATH] = { 0 };
-
-void Sys_SetDefaultInstallPath(const char *path) {
-    if (path) {
-        Q_strncpyz(s_install_path, path, sizeof(s_install_path));
-    }
-}
-
-#ifndef __EMSCRIPTEN__
-// Native Linux/macOS: use real XDG paths from sys_unix.c (unguarded)
-// These are defined in code/sys/sys_unix.c and NOT guarded by GODOT_GDEXTENSION
-extern char *Sys_HomeConfigPath(void);
-extern char *Sys_HomeDataPath(void);
-extern char *Sys_HomeStatePath(void);
-extern char *Sys_BinaryPath(void);
-#endif
-
-#ifdef __EMSCRIPTEN__
-// Web/Emscripten: use fixed VFS paths
-char *Sys_DefaultHomePath(void) {
-    return s_web_home_path;
-}
-char *Sys_DefaultHomeConfigPath(void) {
-    return s_web_home_path;
-}
-char *Sys_DefaultHomeDataPath(void) {
-    return s_web_home_path;
-}
-char *Sys_DefaultHomeStatePath(void) {
-    return s_web_home_path;
-}
-char *Sys_DefaultInstallPath(void) {
-    return s_web_install_path;
-}
-char *Sys_DefaultAppPath(void) {
-    return s_web_install_path;
-}
-char *Sys_DefaultBasePath(void) {
-    return s_web_install_path;
-}
-#else
-// Native Linux/macOS: use real XDG paths from sys_unix.c
-
-char *Sys_DefaultHomePath(void) {
-    return Sys_HomeDataPath();
-}
-char *Sys_DefaultHomeConfigPath(void) {
-    return Sys_HomeConfigPath();
-}
-char *Sys_DefaultHomeDataPath(void) {
-    return Sys_HomeDataPath();
-}
-char *Sys_DefaultHomeStatePath(void) {
-    return Sys_HomeStatePath();
-}
-char *Sys_DefaultInstallPath(void) {
-    if (*s_install_path)
-        return s_install_path;
-    static char cwd[MAX_OSPATH];
-    if (!cwd[0]) {
-        char *result = getcwd(cwd, sizeof(cwd) - 1);
-        if (result != cwd)
-            Q_strncpyz(cwd, ".", sizeof(cwd));
-        cwd[MAX_OSPATH - 1] = 0;
-    }
-    return cwd;
-}
-char *Sys_DefaultAppPath(void) {
-    return Sys_BinaryPath();
-}
-char *Sys_DefaultBasePath(void) {
-    return Sys_DefaultInstallPath();
-}
-#endif
-
-char *Sys_SteamPath(void) {
-    return s_web_empty_path;
-}
-
-char *Sys_GogPath(void) {
-    return s_web_empty_path;
-}
-
-char *Sys_MicrosoftStorePath(void) {
-    return s_web_empty_path;
-}
-
-char *Sys_DefaultUserPath(void) {
-#ifdef __EMSCRIPTEN__
-    return s_web_home_path;
-#else
-    return Sys_HomeDataPath();
-#endif
-}
-
-char *Sys_DefaultOutputPath(void) {
-#ifdef __EMSCRIPTEN__
-    return s_web_home_path;
-#else
-    return Sys_HomeDataPath();
-#endif
 }
 
 const char *Sys_Basename(char *path) {
@@ -676,6 +772,8 @@ qboolean Sys_RandomBytes(byte *string, int len) {
 void Sys_PlatformExit(void) {
     // No-op under Godot — platform cleanup is handled by Godot's own shutdown.
 }
+
+#endif  // !defined(_WIN32)
 
 // Registry stubs (Windows-origin, called on all platforms in some paths)
 qboolean SaveRegistryInfo(qboolean user, const char *pszName, void *pvBuf, long lSize) {

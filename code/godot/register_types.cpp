@@ -2,8 +2,26 @@
 
 #include <gdextension_interface.h>
 #include <cstdio>
+#include <cstdlib>
 #include <godot_cpp/core/defs.hpp>
 #include <godot_cpp/godot.hpp>
+
+// Cross-platform helper for debug build-marker log path.
+static const char *get_build_marker_path() {
+#ifdef _WIN32
+    // On Windows, use %TEMP% or fall back to the current directory.
+    static char path[512];
+    if (!path[0]) {
+        const char *tmp = getenv("TEMP");
+        if (!tmp) tmp = getenv("TMP");
+        if (!tmp) tmp = ".";
+        snprintf(path, sizeof(path), "%s\\openmohaa_build_marker.log", tmp);
+    }
+    return path;
+#else
+    return "/tmp/openmohaa_build_marker.log";
+#endif
+}
 
 using namespace godot;
 
@@ -25,7 +43,7 @@ void initialize_openmohaa_module(ModuleInitializationLevel p_level) {
     printf("OpenMoHAA: initialize_openmohaa_module called at SCENE level.\n");
     printf("OpenMoHAA: build marker: %s\n", kOpenMohaaBuildMarker);
     {
-        FILE *fp = fopen("/tmp/openmohaa_build_marker.log", "a");
+        FILE *fp = fopen(get_build_marker_path(), "a");
         if (fp) {
             fprintf(fp, "init %s\n", kOpenMohaaBuildMarker);
             fclose(fp);
@@ -72,7 +90,7 @@ GDExtensionBool GDE_EXPORT openmohaa_library_init(GDExtensionInterfaceGetProcAdd
     printf("OpenMoHAA: openmohaa_library_init called.\n");
     printf("OpenMoHAA: build marker: %s\n", kOpenMohaaBuildMarker);
     {
-        FILE *fp = fopen("/tmp/openmohaa_build_marker.log", "a");
+        FILE *fp = fopen(get_build_marker_path(), "a");
         if (fp) {
             fprintf(fp, "library_init %s\n", kOpenMohaaBuildMarker);
             fclose(fp);

@@ -3467,13 +3467,22 @@ int Godot_Model_Register( const char *name )
  *  Allow MoHAARunner to read decoded RoQ frames for display.
  * ================================================================ */
 
-__attribute__((visibility("default")))
+/* Cross-platform symbol visibility macro for accessor functions */
+#ifdef _MSC_VER
+#  define GODOT_EXPORT __declspec(dllexport)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define GODOT_EXPORT __attribute__((visibility("default")))
+#else
+#  define GODOT_EXPORT
+#endif
+
+GODOT_EXPORT
 int Godot_Renderer_IsCinematicActive( void )
 {
     return gr_cin_active;
 }
 
-__attribute__((visibility("default")))
+GODOT_EXPORT
 int Godot_Renderer_GetCinematicFrame( const byte **out_data,
                                       int *out_width, int *out_height )
 {
@@ -3485,7 +3494,7 @@ int Godot_Renderer_GetCinematicFrame( const byte **out_data,
     return 1;
 }
 
-__attribute__((visibility("default")))
+GODOT_EXPORT
 void Godot_Renderer_SetCinematicInactive( void )
 {
     gr_cin_active = 0;

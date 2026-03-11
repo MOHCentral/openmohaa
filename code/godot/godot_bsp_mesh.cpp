@@ -80,8 +80,10 @@ extern "C" {
  *  avoid the godot-cpp / engine header collision.
  * ================================================================ */
 
-// "2015" in little-endian
-static constexpr int32_t BSP_IDENT = (('5' << 24) + ('1' << 16) + ('0' << 8) + '2');
+// "2015" in little-endian — base MOHAA (Allied Assault)
+static constexpr int32_t BSP_IDENT      = (('5' << 24) + ('1' << 16) + ('0' << 8) + '2');
+// "EALA" in little-endian — Spearhead and Breakthrough (EA Los Angeles)
+static constexpr int32_t BSP_IDENT_EALA = (('A' << 24) + ('L' << 16) + ('A' << 8) + 'E');
 static constexpr int32_t BSP_MIN_VERSION = 17;
 static constexpr int32_t BSP_MAX_VERSION = 21;
 
@@ -1219,10 +1221,10 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
 
     const bsp_header_t *hdr = reinterpret_cast<const bsp_header_t *>(data);
 
-    if (hdr->ident != BSP_IDENT) {
+    if (hdr->ident != BSP_IDENT && hdr->ident != BSP_IDENT_EALA) {
         UtilityFunctions::printerr(String("[BSP] Bad ident: ") +
                                    String::num_int64(hdr->ident) +
-                                   " (expected 'MOHAA 2015')");
+                                   " (expected '2015' for MOHAA or 'EALA' for SH/BT)");
         Godot_VFS_FreeFile(raw);
         return nullptr;
     }

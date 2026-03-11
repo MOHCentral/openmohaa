@@ -9,10 +9,13 @@ env = SConscript("../godot-cpp/SConstruct")
 
 # Prevent Linux host shell argv overflows when archiving very large static libs
 # (notably godot-cpp) from long workspace paths. This must also apply to
-# Linux-hosted cross-builds (e.g. platform=macos with osxcross).
+# Linux-hosted cross-builds (e.g. platform=macos with osxcross, platform=windows
+# with MinGW).
 # Disable for Web to avoid RecursionError during Emscripten SHLINK expansion.
 if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform") != "web":
-    if env.get("platform") == "macos":
+    if env.get("platform") in ("macos", "windows"):
+        # cctools ar (macOS) and MinGW ar don't support @response files;
+        # archive incrementally to keep each subprocess argv below ARG_MAX.
         def _archive_in_chunks(target, source, env):
             ar = env.subst("$AR")
             arflags = env.subst("$ARFLAGS").split()
@@ -22,8 +25,6 @@ if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform")
             if os.path.exists(out):
                 os.remove(out)
 
-            # cctools ar (osxcross) doesn't support @response files; archive
-            # incrementally to keep each subprocess argv below ARG_MAX.
             chunk_size = 128
             for i in range(0, len(source), chunk_size):
                 chunk = [str(s) for s in source[i:i + chunk_size]]
@@ -77,7 +78,11 @@ env.Append(CPPPATH=[
     "code/botlib",
     "code/cgame",
     "code/client",
-    "code/fgame",
+    # NOTE: code/fgame is intentionally NOT in global CPPPATH.
+    # It contains a "windows.h" (WindowObject class) that shadows the
+    # system <windows.h> on Windows builds.  All non-fgame files that need
+    # fgame headers use relative includes (e.g. "../fgame/g_local.h"), and
+    # fgame source files resolve their own headers via same-directory lookup.
     "code/gamespy",
     "code/qcommon",
     "code/renderercommon",
@@ -128,7 +133,10 @@ src_dirs = [
     "code/skeletor",
 
     # ── Bot AI ──
-    "code/botlib",
+    # NOTE: code/botlib is compiled separately below with code/fgame in its
+    # CPPPATH (botlib sources #include "botlib.h" which lives in code/fgame/).
+    # It is NOT in the global CPPPATH to avoid code/fgame/windows.h shadowing
+    # the system <windows.h> on Windows builds.
 
     # ── Client ──
     "code/client",
@@ -181,6 +189,13 @@ elif env["platform"] == "windows":
     env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
     if env["arch"] in ["x86_64", "arm64"]:
         env.Append(CPPDEFINES=["_WIN64"])
+    # Detect MinGW vs MSVC to use the right compiler flags.
+    _is_mingw_sys = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower()
+    if not _is_mingw_sys and os.name != "nt":
+        _is_mingw_sys = True  # Cross-compiling from Linux → assume MinGW
+    if _is_mingw_sys:
+        env.Append(CFLAGS=["-Wno-discarded-qualifiers", "-Wno-incompatible-pointer-types"])
+        env.Append(CXXFLAGS=["-fexceptions", "-frtti"])
     # /EHsc is added by godot-cpp when disable_exceptions=no — no /TP:
     # C files compile as C (MSVC default); C++ files compile as C++ by extension.
     sys_sources.append("code/sys/sys_win32.c")
@@ -233,6 +248,23 @@ def add_sources(directory):
 
 for d in src_dirs:
     add_sources(d)
+
+# ── Bot AI (separate env — needs code/fgame for botlib.h) ──
+# botlib sources #include "botlib.h" which lives in code/fgame/.  We must
+# NOT add code/fgame to the global CPPPATH because code/fgame/windows.h
+# (a WindowObject game entity class) shadows the system <windows.h> on
+# Windows builds.  Instead, compile botlib in an env that adds code/fgame.
+botlib_env = env.Clone()
+botlib_env.Append(CPPPATH=["code/fgame"])
+botlib_sources = []
+for root, dirs, files in os.walk("code/botlib"):
+    for f in files:
+        if f.endswith((".c", ".cpp")):
+            botlib_sources.append(os.path.join(root, f))
+botlib_objects = [botlib_env.SharedObject(
+    target=os.path.join("build", s.replace(".c", ".os").replace(".cpp", ".os")),
+    source=s,
+) for s in botlib_sources]
 
 # ── Renderer data modules (selective — GL draw-path files excluded) ──
 # These provide real shader parsing, image loading, BSP loading, model
@@ -402,8 +434,16 @@ elif env["platform"] == "macos":
     # We add -Wl,-w to suppress duplicate symbol errors (warning instead).
     env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress", "-Wl,-w"])
 elif env["platform"] == "windows":
-    # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
-    env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
+    # Detect MinGW vs MSVC — MinGW uses GCC-style flags, MSVC uses /FORCE etc.
+    _is_mingw = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower() or env.get("tools", [""])[0] == "mingw"
+    if not _is_mingw and os.name != "nt":
+        # Cross-compiling from Linux — assume MinGW
+        _is_mingw = True
+    if _is_mingw:
+        env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
+    else:
+        # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
+        env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
 
 # ── Link system libraries ──
 if env["platform"] == "linux":
@@ -411,12 +451,23 @@ if env["platform"] == "linux":
 elif env["platform"] == "macos":
     env.Append(LIBS=["z", "dl"])  # zlib, dlopen
 elif env["platform"] == "windows":
-    env.Append(LIBS=["zlib", "ws2_32", "winmm"])  # zlib, winsock, multimedia
+    # Embed zlib sources instead of linking a system library (CI runners
+    # and cross-compilation environments may not have a pre-built zlib).
+    env.Append(CPPPATH=["code/thirdparty/zlib-1.3.1"])
+    sources.extend([
+        "code/thirdparty/zlib-1.3.1/adler32.c",
+        "code/thirdparty/zlib-1.3.1/crc32.c",
+        "code/thirdparty/zlib-1.3.1/inffast.c",
+        "code/thirdparty/zlib-1.3.1/inflate.c",
+        "code/thirdparty/zlib-1.3.1/inftrees.c",
+        "code/thirdparty/zlib-1.3.1/zutil.c",
+    ])
+    env.Append(LIBS=["ws2_32", "winmm"])  # winsock, multimedia timer
 
 # ── Build the shared library ──
 library = env.SharedLibrary(
     target="bin/openmohaa",
-    source=sources,
+    source=sources + botlib_objects,
 )
 
 Default(library)
@@ -489,8 +540,24 @@ elif env["platform"] == "macos":
     cgame_env.Append(LINKFLAGS=["-Wl,-undefined,dynamic_lookup", "-Wl,-multiply_defined,suppress"])
 elif env["platform"] == "windows":
     cgame_env.Append(CPPDEFINES=["_WIN32", "WIN32", "_WINDOWS"])
-    cgame_env.Append(CCFLAGS=["/EHsc", "/O2"])
-    cgame_env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
+    # Detect MinGW vs MSVC for cgame build.
+    _cgame_mingw = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower()
+    if not _cgame_mingw and os.name != "nt":
+        _cgame_mingw = True  # Cross-compiling from Linux → assume MinGW
+    if _cgame_mingw:
+        # Inherit cross-compiler from the main env.
+        for tool_var in ("CC", "CXX", "AR", "RANLIB", "AS", "SHLINK"):
+            if env.get(tool_var):
+                cgame_env[tool_var] = env[tool_var]
+        if env.get("ENV", {}).get("PATH"):
+            cgame_env["ENV"]["PATH"] = env["ENV"]["PATH"]
+        cgame_env.Append(CCFLAGS=["-O2", "-fvisibility=hidden"])
+        cgame_env.Append(CFLAGS=["-Wno-discarded-qualifiers", "-Wno-incompatible-pointer-types"])
+        cgame_env.Append(CXXFLAGS=["-std=c++17", "-fexceptions", "-frtti"])
+        cgame_env.Append(LINKFLAGS=["-Wl,--allow-multiple-definition"])
+    else:
+        cgame_env.Append(CCFLAGS=["/EHsc", "/O2"])
+        cgame_env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
 elif env["platform"] == "web":
     # cgame for web: compiled as Emscripten WASM SIDE_MODULE so that
     # Sys_GetCGameAPI / Sys_LoadLibrary (dlopen) can load it at runtime

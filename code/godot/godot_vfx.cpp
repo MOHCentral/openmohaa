@@ -1,14 +1,17 @@
 /*
- * godot_vfx.cpp — VFX Manager: billboard sprite pool and lifecycle.
+ * godot_vfx.cpp — VFX Manager: billboard sprite rendering with MultiMesh batching.
  *
  * Reads RT_SPRITE entities from the renderer entity buffer (via the
  * C accessor in godot_vfx_accessors.c) and renders them as camera-facing
  * billboard quads in the Godot 3D scene.
  *
- * Pool of up to VFX_SPRITE_POOL_SIZE MeshInstance3D nodes.  Each frame the
- * active sprites are assigned to pool slots; unused slots are hidden.
+ * Sprites are grouped by shader handle and rendered using MultiMeshInstance3D
+ * for efficient batching.  Each unique shader gets one MultiMeshInstance3D
+ * with a shared material and per-instance transforms + vertex colours.
  *
  * Phase 221: VFX Manager Foundation
+ * Phase 39: Rewritten for MultiMesh batching, vertex colour parity, and
+ *           correct blend mode detection.
  */
 
 #include "godot_vfx.h"
@@ -18,14 +21,18 @@
 #include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/image_texture.hpp>
 #include <godot_cpp/classes/mesh_instance3d.hpp>
+#include <godot_cpp/classes/multi_mesh.hpp>
+#include <godot_cpp/classes/multi_mesh_instance3d.hpp>
 #include <godot_cpp/classes/standard_material3d.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
+#include <godot_cpp/variant/packed_color_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <cstring>
 #include <cmath>
 #include <cstdint>
@@ -49,9 +56,7 @@ extern "C" {
     long Godot_VFS_ReadFile(const char *qpath, void **out_buffer);
     void Godot_VFS_FreeFile(void *buffer);
 
-    /* Engine-side sprite dimension accessor (godot_shader_accessors.c).
-     * Reads image_t->width/height and shader_t->sprite.scale from the
-     * real renderer structs — same data path as SPR_RegisterSprite. */
+    /* Engine-side sprite dimension accessor (godot_shader_accessors.c). */
     int  Godot_Sprite_GetEngineSize(const char *shader_name,
                                     int *out_width, int *out_height,
                                     float *out_sprite_scale);
@@ -69,15 +74,17 @@ extern "C" {
     int  Godot_Model_GetRealHandle(int hModel);
     void Godot_VFX_GetSpriteAxis(int idx, float *out_axis);
 
-    /* Returns 1 once GR_BeginRegistration() has called R_Init() at least once.
-     * Before this point the shader text hash tables are unpopulated and
-     * R_FindShader cannot resolve any shader definitions from .pk3 files. */
+    /* Engine-side raw image loader for texture loading */
+    int  R_LoadRawImage(const char *name, unsigned char **pic,
+                        int *width, int *height);
+    void R_FreeRawImage(unsigned char *pic);
+
     int  GR_IsRealRendererInited(void);
 }
 
 /* ── Constants ── */
-static constexpr int   VFX_SPRITE_POOL_SIZE = 512;
-static constexpr float MOHAA_UNIT_SCALE     = 1.0f / 39.37f;
+static constexpr int   VFX_MAX_SPRITES_PER_GROUP = 256;
+static constexpr float MOHAA_UNIT_SCALE           = 1.0f / 39.37f;
 
 /* ── id Tech 3 → Godot coordinate conversion ── */
 static inline Vector3 id_to_godot(float ix, float iy, float iz) {
@@ -87,9 +94,10 @@ static inline Vector3 id_to_godot(float ix, float iy, float iz) {
 }
 
 /* ── Module state ── */
-static Node3D                              *vfx_parent     = nullptr;
-static MeshInstance3D                      *vfx_pool[VFX_SPRITE_POOL_SIZE] = {};
-static bool                                 vfx_initialised = false;
+static Node3D *vfx_parent     = nullptr;
+static bool    vfx_initialised = false;
+
+/* ── Texture cache ── */
 static std::unordered_map<int, Ref<ImageTexture>> vfx_tex_cache;
 
 /* Cached sprite size info: image pixel dimensions + shader spritescale */
@@ -100,15 +108,22 @@ struct VfxSpriteSize {
 };
 static std::unordered_map<int, VfxSpriteSize> vfx_size_cache;
 
-/* Material cache keyed by (shaderHandle << 32 | rgba32) to avoid per-frame allocation */
-static std::unordered_map<uint64_t, Ref<StandardMaterial3D>> vfx_mat_cache;
+/* Per-shader render group: one MultiMeshInstance3D per unique shader.
+ * Each group can render up to VFX_MAX_SPRITES_PER_GROUP billboard quads
+ * in a single draw call. */
+struct VfxShaderGroup {
+    MultiMeshInstance3D    *mminstance = nullptr;
+    Ref<MultiMesh>          multimesh;
+    Ref<StandardMaterial3D>  material;
+    Ref<ImageTexture>        texture;
+    int                      blend_type = 0;  /* 0=alpha, 1=additive, 2=multiplicative */
+    int                      active_count = 0;
+};
 
-static inline uint64_t vfx_mat_key(int shaderHandle, const unsigned char rgba[4])
-{
-    uint32_t c = (uint32_t)rgba[0] | ((uint32_t)rgba[1] << 8)
-               | ((uint32_t)rgba[2] << 16) | ((uint32_t)rgba[3] << 24);
-    return ((uint64_t)(unsigned)shaderHandle << 32) | c;
-}
+static std::unordered_map<int, VfxShaderGroup> vfx_groups;
+
+/* Diagnostics: log sprite sizes once per map load */
+static bool vfx_diag_done = false;
 
 /* ── Texture loading (mirrors MoHAARunner::get_shader_texture — resolves shader stage maps) ── */
 
@@ -116,6 +131,45 @@ static Ref<ImageTexture> vfx_load_from_qpath(const char *qpath)
 {
     if (!qpath || !qpath[0]) return Ref<ImageTexture>();
 
+    /* Primary path: use the engine's R_LoadRawImage for correct RGBA byte
+     * order and TGA/JPG handling parity with the real renderer. */
+    {
+        unsigned char *raw_pic = nullptr;
+        int raw_w = 0, raw_h = 0;
+        if (R_LoadRawImage(qpath, &raw_pic, &raw_w, &raw_h) && raw_pic && raw_w > 0 && raw_h > 0) {
+            int raw_size = raw_w * raw_h * 4;
+            PackedByteArray pba;
+            pba.resize(raw_size);
+            memcpy(pba.ptrw(), raw_pic, raw_size);
+            R_FreeRawImage(raw_pic);
+
+            Ref<Image> img = Image::create_from_data(raw_w, raw_h, false, Image::FORMAT_RGBA8, pba);
+            if (!img.is_null() && !img->is_empty()) {
+                /* Dead-alpha fix: textures with all-zero or all-255 alpha
+                 * have no meaningful alpha → convert to RGB8 so alpha blend
+                 * doesn't make them invisible or waste fill rate. */
+                if (img->get_format() == Image::FORMAT_RGBA8) {
+                    PackedByteArray imgdata = img->get_data();
+                    int pixel_count = raw_w * raw_h;
+                    const uint8_t *pix = imgdata.ptr();
+                    bool all_zero = true, all_opaque = true;
+                    for (int p = 0; p < pixel_count; p++) {
+                        uint8_t a = pix[p * 4 + 3];
+                        if (a > 0) all_zero = false;
+                        if (a < 255) all_opaque = false;
+                        if (!all_zero && !all_opaque) break;
+                    }
+                    if (all_zero || all_opaque) {
+                        img->convert(Image::FORMAT_RGB8);
+                    }
+                }
+                img->generate_mipmaps();
+                return ImageTexture::create_from_image(img);
+            }
+        }
+    }
+
+    /* Fallback: VFS + Godot image decoders + extension probing */
     const char *extensions[] = { "", ".tga", ".jpg", ".png", nullptr };
     for (int ext_i = 0; extensions[ext_i]; ext_i++) {
         char path[256];
@@ -183,15 +237,10 @@ static Ref<ImageTexture> vfx_load_texture_by_name(const char *name)
             if (sp->stages[st].tcGen == STAGE_TCGEN_ENVIRONMENT) continue;
 
             tex = vfx_load_from_qpath(stage_map);
-            if (tex.is_null()) {
-                UtilityFunctions::print(String("[VFX-TEX] WARN: stage map load failed: '") +
-                    String(stage_map) + String("' for sprite shader '") + String(name) + String("'"));
-            }
         }
     } else {
-        UtilityFunctions::print(String("[VFX-TEX] No shader props for sprite shader '") +
-            String(name) + String("' (props=") + String(sp ? "YES" : "NO") +
-            String(" stage_count=") + String::num_int64(sp ? sp->stage_count : -1) + String(")"));
+        /* No shader props or no stages — not unusual for sprite effects
+         * that use implicit shaders (texture file loaded directly). */
     }
 
     /* Fallback 1: try using the name itself as a texture path */
@@ -218,8 +267,7 @@ static Ref<ImageTexture> vfx_load_texture_by_name(const char *name)
             tex = vfx_load_from_qpath(path_buf);
         }
         if (tex.is_valid()) {
-            UtilityFunctions::print(String("[VFX-TEX] Fallback found texture for '") +
-                String(name) + String("' via directory search"));
+            /* Found via directory search — expected for implicit sprite shaders */
         }
     }
 
@@ -353,6 +401,59 @@ static Ref<ArrayMesh> vfx_get_unit_quad()
     return vfx_unit_quad;
 }
 
+/* ── Blend-mode detection from shader properties ──
+ * Returns: 0=alpha, 1=additive, 2=multiplicative.
+ *
+ * The engine determines transparency from the first non-lightmap stage's
+ * blendFunc.  For VFX sprites this is crucial: smoke uses alpha blend
+ * while fire/flash uses additive.  Getting this wrong makes smoke glow
+ * (additive on a textured-alpha sprite) and appear larger than it should.
+ *
+ * For SHADER_OPAQUE sprites (no explicit blendFunc in the shader
+ * definition), we probe the loaded texture's alpha channel.  Textures
+ * with meaningful alpha (smoke, fog) get alpha blend; textures that are
+ * fully opaque or have dead alpha (fire, flash, corona with black
+ * background) get additive blend so the black edges disappear. */
+static int vfx_detect_blend_mode(int shaderHandle)
+{
+    const char *sn     = Godot_Renderer_GetShaderName(shaderHandle);
+    const char *remap  = Godot_Renderer_GetShaderRemap(sn);
+    const char *lookup = (remap && remap[0]) ? remap : sn;
+
+    if (lookup && lookup[0]) {
+        const GodotShaderProps *sp = Godot_ShaderProps_Find(lookup);
+        if (sp) {
+            switch (sp->transparency) {
+                case SHADER_ADDITIVE:      return 1;
+                case SHADER_MULTIPLICATIVE:
+                case SHADER_MULTIPLICATIVE_INV: return 2;
+                case SHADER_ALPHA_BLEND:
+                case SHADER_ALPHA_TEST:
+                case SHADER_ALPHA_BLEND_INV: return 0;
+                case SHADER_OPAQUE:
+                default:
+                    /* Opaque sprite — probe texture alpha to decide. */
+                    break;
+            }
+        }
+    }
+
+    /* Texture-based detection: meaningful alpha → alpha blend (smoke).
+     * No alpha / dead alpha → additive (fire/flash with black bg). */
+    Ref<ImageTexture> tex = vfx_load_texture(shaderHandle);
+    if (tex.is_valid()) {
+        Ref<Image> img = tex->get_image();
+        if (img.is_valid()) {
+            Image::AlphaMode am = img->detect_alpha();
+            if (am == Image::ALPHA_BLEND || am == Image::ALPHA_BIT) {
+                return 0;  /* Has meaningful alpha → alpha blend */
+            }
+        }
+    }
+    return 1;  /* No alpha → additive (hides black background) */
+}
+
+
 /* ──────────────────────────────────────────── */
 /*  Public API                                  */
 /* ──────────────────────────────────────────── */
@@ -360,19 +461,7 @@ static Ref<ArrayMesh> vfx_get_unit_quad()
 void Godot_VFX_Init(Node3D *parent)
 {
     if (vfx_initialised || !parent) return;
-
-    vfx_parent = parent;
-
-    for (int i = 0; i < VFX_SPRITE_POOL_SIZE; i++) {
-        MeshInstance3D *mi = memnew(MeshInstance3D);
-        mi->set_mesh(vfx_get_unit_quad());
-        mi->set_visible(false);
-        /* Cast no shadows — sprites are VFX, not geometry */
-        mi->set_cast_shadows_setting(GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
-        parent->add_child(mi);
-        vfx_pool[i] = mi;
-    }
-
+    vfx_parent      = parent;
     vfx_initialised = true;
 }
 
@@ -381,10 +470,7 @@ void Godot_VFX_Update(float delta)
     (void)delta;
     if (!vfx_initialised) return;
 
-    /* One-shot: verify spriteScale for known shaders once the renderer is ready.
-     * Deferred until GR_BeginRegistration() has called R_Init() so the shader
-     * text hash tables are populated — otherwise R_FindShader returns the
-     * default shader for every name and all entries show NOT FOUND spuriously. */
+    /* ── One-shot: verify spriteScale for known shaders ── */
     {
         static bool verified = false;
         if (!verified && GR_IsRealRendererInited()) {
@@ -392,7 +478,7 @@ void Godot_VFX_Update(float delta)
             static const char *test_names[] = {
                 "muzsprite", "thompsonsmg_spriteflash",
                 "mg42_spriteflash", "corona_util", "vsssource",
-                "fgrenexplosion", "splash_z", NULL
+                "fgrenexplosion", "splash_z", nullptr
             };
             UtilityFunctions::print("[VFX-VERIFY] ---- Sprite shader data verification ----");
             for (int t = 0; test_names[t]; t++) {
@@ -411,281 +497,253 @@ void Godot_VFX_Update(float delta)
         }
     }
 
-    /* Scan entity buffer for sprites (rebuilds the cached index list) */
+    /* ── Reset all group active counts ── */
+    for (auto &kv : vfx_groups) {
+        kv.second.active_count = 0;
+    }
+
+    /* ── Read sprite count from entity buffer ── */
     int count = Godot_VFX_GetSpriteCount();
 
-    for (int i = 0; i < VFX_SPRITE_POOL_SIZE; i++) {
-        MeshInstance3D *mi = vfx_pool[i];
-        if (!mi) continue;
+    /* ── Determine whether to log diagnostics this frame ── */
+    bool log_sizes = false;
+    if (count > 0 && !vfx_diag_done) {
+        log_sizes = true;
+        vfx_diag_done = true;
+        UtilityFunctions::print(String("[VFX-DIAG] ---- Sprite size diagnostic (") +
+            String::num_int64(count) + String(" sprites) ----"));
+    }
 
-        if (i >= count) {
-            mi->set_visible(false);
-            continue;
-        }
+    /* ── Temporary per-group sprite collection ── */
+    struct SpriteInst {
+        Vector3 position;
+        float   width_m;
+        float   height_m;
+        Color   tint;
+        bool    engine_verts;
+        Vector3 engine_right;
+        Vector3 engine_up;
+    };
+    std::unordered_map<int, std::vector<SpriteInst>> group_sprites;
 
-        float origin[3]      = {0};
-        float radius          = 0.0f;
-        float rotation        = 0.0f;
-        float entityScale     = 1.0f;
-        int   shaderHandle    = 0;
-        unsigned char rgba[4] = {255, 255, 255, 255};
+    /* ── Collect and size sprites ── */
+    for (int i = 0; i < count; i++) {
+        float origin[3]       = {0};
+        float radius           = 0.0f;
+        float rotation         = 0.0f;
+        float entityScale      = 1.0f;
+        int   shaderHandle     = 0;
+        unsigned char rgba[4]  = {255, 255, 255, 255};
 
         Godot_VFX_GetSprite(i, origin, &radius, &shaderHandle,
                             &rotation, rgba, &entityScale);
+        if (shaderHandle <= 0) continue;
 
-        /* Sprite sizing: MOHAA's RB_DrawSprite computes half-extent as
-         *   image_pixels × 0.5 × entity.scale × shader.spritescale
-         * Full extent = image_pixels × entity.scale × spritescale (in inches).
-         * Our unit quad spans ±0.5, so scaling by full_extent gives the
-         * correct world-space size after converting inches → metres.
-         *
-         * Note: refEntity_t.radius is NOT used for sprite sizing in the real
-         * renderer (RB_DrawSprite uses only entity.scale × shader.spritescale
-         * × image pixels).  cgame sets radius to arbitrary values (4.0 for
-         * tempmodels, 0.0 for volumetric smoke) — it is purely for culling.
-         *
-         * Engine-vert path: when a real model handle exists in tr.models[],
-         * we call the engine's RB_DrawSprite() to get exact world-space
-         * quad vertices.  This handles all 4 sprite orientation modes
-         * (PARALLEL, PARALLEL_ORIENTED, ORIENTED, PARALLEL_UPRIGHT) and
-         * produces identical geometry to the original renderer.  The Basis
-         * is extracted from the quad vertices instead of using billboard. */
+        SpriteInst inst;
+        inst.tint = Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
+                          rgba[2] / 255.0f, rgba[3] / 255.0f);
+        inst.engine_verts = false;
+        inst.width_m  = 0.0f;
+        inst.height_m = 0.0f;
 
-        /* Try engine-vert path first */
-        bool use_engine_verts = false;
-        Vector3 engine_right, engine_up, engine_center;
-
+        /* ── Try engine-vert path (parity with RB_DrawSprite) ── */
         {
             int hModel = Godot_VFX_GetSpriteModelHandle(i);
             int realH  = (hModel > 0) ? Godot_Model_GetRealHandle(hModel) : 0;
             if (realH > 0) {
                 float entAxis[9];
                 Godot_VFX_GetSpriteAxis(i, entAxis);
-                /* Reshape flat [9] into [3][3] for the engine call */
                 float axis33[3][3];
                 memcpy(axis33, entAxis, sizeof(axis33));
 
-                float out_xyz[4][3];
-                float out_uv[4][2];
+                float out_xyz[4][3], out_uv[4][2];
                 if (Godot_ComputeSpriteQuad(realH, origin, entityScale,
                                             axis33, rgba, out_xyz, out_uv))
                 {
-                    /* Engine verts are in id Tech coords (inches).
-                     * Extract right and up vectors from the quad:
-                     *   point[0] = origin + up - right  (UV 0,0)
-                     *   point[1] = origin + up + right  (UV 1,0)
-                     *   point[2] = origin - up - right  (UV 0,1)
-                     *   point[3] = origin - up + right  (UV 1,1)
-                     *
-                     * right_id = (point[1] - point[0]) / 2
-                     * up_id    = (point[0] - point[2]) / 2
-                     *
-                     * Convert these direction vectors to Godot space and use
-                     * them as Basis columns for the unit quad.  The unit quad
-                     * spans ±0.5 so the Basis must be full extent (not half). */
                     float right_id[3], up_id[3];
                     for (int c = 0; c < 3; c++) {
-                        right_id[c] = (out_xyz[1][c] - out_xyz[0][c]);
-                        up_id[c]    = (out_xyz[0][c] - out_xyz[2][c]);
+                        right_id[c] = out_xyz[1][c] - out_xyz[0][c];
+                        up_id[c]    = out_xyz[0][c] - out_xyz[2][c];
                     }
-                    /* Convert id Tech direction vectors to Godot space.
-                     * id_to_godot applies: gx = -iy*S, gy = iz*S, gz = -ix*S */
-                    engine_right = Vector3(
+                    inst.engine_right = Vector3(
                         -right_id[1] * MOHAA_UNIT_SCALE,
                          right_id[2] * MOHAA_UNIT_SCALE,
                         -right_id[0] * MOHAA_UNIT_SCALE);
-                    engine_up = Vector3(
+                    inst.engine_up = Vector3(
                         -up_id[1] * MOHAA_UNIT_SCALE,
                          up_id[2] * MOHAA_UNIT_SCALE,
                         -up_id[0] * MOHAA_UNIT_SCALE);
-                    engine_center = id_to_godot(origin[0], origin[1], origin[2]);
-                    use_engine_verts = true;
+                    inst.position = id_to_godot(origin[0], origin[1], origin[2]);
+                    inst.width_m  = inst.engine_right.length();
+                    inst.height_m = inst.engine_up.length();
+                    inst.engine_verts = true;
                 }
             }
         }
 
-        /* Fallback sizing for billboard path */
-        float sprite_w = 0.0f, sprite_h = 0.0f;
-        if (!use_engine_verts && shaderHandle > 0) {
+        /* ── Fallback billboard sizing ── */
+        if (!inst.engine_verts) {
             VfxSpriteSize sz = vfx_get_sprite_size(shaderHandle);
             if (sz.width > 0 && sz.height > 0) {
-                sprite_w = (float)sz.width  * entityScale * sz.sprite_scale * MOHAA_UNIT_SCALE;
-                sprite_h = (float)sz.height * entityScale * sz.sprite_scale * MOHAA_UNIT_SCALE;
+                inst.width_m  = (float)sz.width  * entityScale * sz.sprite_scale * MOHAA_UNIT_SCALE;
+                inst.height_m = (float)sz.height * entityScale * sz.sprite_scale * MOHAA_UNIT_SCALE;
             }
+            inst.position = id_to_godot(origin[0], origin[1], origin[2]);
         }
 
-        if (!use_engine_verts && (sprite_w < 0.0001f || sprite_h < 0.0001f)) {
-            mi->set_visible(false);
-            continue;
+        if (inst.width_m < 0.0001f || inst.height_m < 0.0001f) continue;
+
+        /* ── Diagnostic logging (first occurrence only) ── */
+        if (log_sizes && i < 16) {
+            const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
+            int bm = vfx_detect_blend_mode(shaderHandle);
+            UtilityFunctions::print(
+                String("[VFX-DIAG]  #") + String::num_int64(i) +
+                String(" shader='") + String(sn ? sn : "???") +
+                String("' entScale=") + String::num(entityScale, 4) +
+                String(" finalW=") + String::num(inst.width_m, 4) +
+                String("m finalH=") + String::num(inst.height_m, 4) + "m" +
+                String(" blend=") + (bm == 1 ? String("ADD") :
+                    bm == 2 ? String("MUL") : String("ALPHA")) +
+                String(" rgba=") + String::num_int64(rgba[0]) + "," +
+                String::num_int64(rgba[1]) + "," + String::num_int64(rgba[2]) +
+                "," + String::num_int64(rgba[3]) +
+                String(" path=") + (inst.engine_verts ? String("ENGINE") : String("FALLBACK")));
         }
 
-        /* Coordinate conversion + positioning */
-        Vector3 pos = use_engine_verts ? engine_center
-                                       : id_to_godot(origin[0], origin[1], origin[2]);
-
-        /* Cached material (keyed by shader handle + RGBA + engine-vert flag).
-         * Engine-vert materials have no billboard mode (geometry is pre-oriented).
-         * Billboard materials use BILLBOARD_ENABLED as before. */
-        uint64_t mkey = vfx_mat_key(shaderHandle, rgba);
-        if (!use_engine_verts) mkey |= (1ULL << 63);  /* bit 63 = billboard */
-        Ref<StandardMaterial3D> mat;
-        auto mit = vfx_mat_cache.find(mkey);
-        if (mit != vfx_mat_cache.end()) {
-            mat = mit->second;
-        } else {
-            mat.instantiate();
-            /* Engine-vert sprites are pre-oriented — no billboard.
-             * Fallback sprites use Godot's billboard to face camera. */
-            if (!use_engine_verts) {
-                mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
-            }
-            mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-            mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-            mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
-            mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
-            mat->set_albedo(Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                                  rgba[2] / 255.0f, rgba[3] / 255.0f));
-
-            if (shaderHandle > 0) {
-                Ref<ImageTexture> tex = vfx_load_texture(shaderHandle);
-                if (tex.is_valid()) {
-                    mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
-                }
-
-                /* Apply shader properties: blendFunc, alphaFunc, cull, deform.
-                 * Trust the engine's shader data (R_FindShader parsed .shader
-                 * definitions during R_Init).  If the lookup fails, default to
-                 * additive blend — sprites are almost always fire/flash/corona
-                 * effects with black backgrounds that must be invisible. */
-                const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
-                const char *remap = Godot_Renderer_GetShaderRemap(sn);
-                const char *lookup = (remap && remap[0]) ? remap : sn;
-                bool applied_blend = false;
-                if (lookup && lookup[0]) {
-                    const GodotShaderProps *sp = Godot_ShaderProps_Find(lookup);
-                    if (sp) {
-                        switch (sp->transparency) {
-                            case SHADER_ALPHA_TEST:
-                                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA_SCISSOR);
-                                mat->set_alpha_scissor_threshold(sp->alpha_threshold);
-                                applied_blend = true;
-                                break;
-                            case SHADER_ALPHA_BLEND:
-                                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                                applied_blend = true;
-                                break;
-                            case SHADER_ADDITIVE:
-                                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                                applied_blend = true;
-                                break;
-                            case SHADER_MULTIPLICATIVE:
-                            case SHADER_MULTIPLICATIVE_INV:
-                                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
-                                applied_blend = true;
-                                break;
-                            default:
-                                /* SHADER_OPAQUE: unusual for a sprite effect.
-                                 * Default to additive (fire/flash/corona) since
-                                 * sprite quads need transparency to hide edges. */
-                                mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                                applied_blend = true;
-                                break;
-                        }
-                        /* autosprite/autosprite2 deform — only relevant for
-                         * billboard (fallback) path; engine verts already
-                         * handle orientation correctly. */
-                        if (!use_engine_verts && sp->has_deform && sp->deform_type == 4) {
-                            mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_FIXED_Y);
-                        }
-
-                        /* One-shot diagnostic per shader name */
-                        {
-                            static std::unordered_set<int> vfx_mat_logged;
-                            if (vfx_mat_logged.find(shaderHandle) == vfx_mat_logged.end()) {
-                                vfx_mat_logged.insert(shaderHandle);
-                                UtilityFunctions::print(
-                                    String("[VFX-MAT] shader='") + String(lookup) +
-                                    String("' handle=") + String::num_int64(shaderHandle) +
-                                    String(" transparency=") + String::num_int64(sp->transparency) +
-                                    String(" blend=") + (sp->transparency == SHADER_ADDITIVE ? String("ADD") :
-                                        sp->transparency == SHADER_ALPHA_BLEND ? String("ALPHA") :
-                                        sp->transparency == SHADER_ALPHA_TEST ? String("ATEST") :
-                                        sp->transparency == SHADER_MULTIPLICATIVE ? String("MUL") :
-                                        String("OPAQUE->ADD")));
-                            }
-                        }
-                    } else {
-                        static std::unordered_set<int> vfx_warn_logged;
-                        if (vfx_warn_logged.find(shaderHandle) == vfx_warn_logged.end()) {
-                            vfx_warn_logged.insert(shaderHandle);
-                            UtilityFunctions::print(
-                                String("[VFX-MAT] WARN: sp=NULL for shader='") + String(lookup) +
-                                String("' handle=") + String::num_int64(shaderHandle) +
-                                String(" -> defaulting to additive"));
-                        }
-                    }
-                } else {
-                    static std::unordered_set<int> vfx_empty_logged;
-                    if (vfx_empty_logged.find(shaderHandle) == vfx_empty_logged.end()) {
-                        vfx_empty_logged.insert(shaderHandle);
-                        UtilityFunctions::print(
-                            String("[VFX-MAT] WARN: empty shader name for handle=") +
-                            String::num_int64(shaderHandle) +
-                            String(" -> defaulting to additive"));
-                    }
-                }
-
-                /* Safety net: if shader props lookup failed (sp=NULL, empty name,
-                 * or shaderHandle didn't resolve), default to additive blend.
-                 * Sprites are VFX effects — additive hides black backgrounds. */
-                if (!applied_blend) {
-                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
-                    mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                }
-
-                /* Re-enforce sprite-specific settings: cull mode must stay
-                 * CULL_DISABLED for billboard sprites (shader default
-                 * SHADER_CULL_BACK would hide back faces). */
-                mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
-            } else {
-                /* shaderHandle == 0: no shader at all — default to additive */
-                mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
-                static bool vfx_zero_logged = false;
-                if (!vfx_zero_logged) {
-                    vfx_zero_logged = true;
-                    UtilityFunctions::print(
-                        String("[VFX-MAT] WARN: shaderHandle=0, defaulting to additive"));
-                }
-            }
-            vfx_mat_cache[mkey] = mat;
-        }
-
-        mi->set_surface_override_material(0, mat);
-
-        if (use_engine_verts) {
-            /* Engine-vert path: Basis columns from the pre-computed quad.
-             * engine_right = full width vector, engine_up = full height vector.
-             * The unit quad spans ±0.5, so these become the X and Y columns.
-             * Z column = normal direction (cross product), unit length. */
-            Vector3 normal = engine_right.cross(engine_up);
-            float nlen = normal.length();
-            if (nlen > 0.0001f) normal /= nlen;
-            else normal = Vector3(0, 0, 1);
-            Basis basis(engine_right, engine_up, normal);
-            mi->set_global_transform(Transform3D(basis, pos));
-        } else {
-            /* Fallback billboard path: scale the unit quad by width × height. */
-            Basis basis;
-            basis.scale(Vector3(sprite_w, sprite_h, 1.0f));
-            mi->set_global_transform(Transform3D(basis, pos));
-        }
-
-        mi->set_visible(true);
+        group_sprites[shaderHandle].push_back(inst);
     }
 
+    if (log_sizes) {
+        UtilityFunctions::print("[VFX-DIAG] ---- End diagnostic ----");
+    }
+
+    /* ── Update MultiMesh groups ── */
+    for (auto &kv : group_sprites) {
+        int shaderHandle   = kv.first;
+        auto &sprites      = kv.second;
+        int n              = (int)sprites.size();
+        if (n > VFX_MAX_SPRITES_PER_GROUP) n = VFX_MAX_SPRITES_PER_GROUP;
+
+        /* Get or create group */
+        auto git = vfx_groups.find(shaderHandle);
+        if (git == vfx_groups.end()) {
+            /* Create new shader group */
+            VfxShaderGroup grp;
+            grp.mminstance = memnew(MultiMeshInstance3D);
+            grp.mminstance->set_name(String("VFX_") + String::num_int64(shaderHandle));
+            grp.mminstance->set_visible(false);
+            grp.mminstance->set_cast_shadows_setting(GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+            vfx_parent->add_child(grp.mminstance);
+
+            /* Create MultiMesh with instance colour support */
+            grp.multimesh.instantiate();
+            grp.multimesh->set_transform_format(MultiMesh::TRANSFORM_3D);
+            grp.multimesh->set_use_colors(true);
+            grp.multimesh->set_use_custom_data(false);
+            grp.multimesh->set_mesh(vfx_get_unit_quad());
+            grp.multimesh->set_instance_count(VFX_MAX_SPRITES_PER_GROUP);
+            grp.mminstance->set_multimesh(grp.multimesh);
+
+            /* Detect blend mode */
+            grp.blend_type = vfx_detect_blend_mode(shaderHandle);
+
+            /* Create material with vertex(instance) colour support.
+             * MultiMesh instance colours are exposed as COLOR in the shader,
+             * so FLAG_ALBEDO_FROM_VERTEX_COLOR multiplies albedo × instance_color.
+             * This replaces the old per-RGBA material cache. */
+            Ref<StandardMaterial3D> mat;
+            mat.instantiate();
+            mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
+            mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
+            mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_DISABLED);
+            mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+            mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+
+            switch (grp.blend_type) {
+                case 1: /* Additive */
+                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_ADD);
+                    break;
+                case 2: /* Multiplicative */
+                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
+                    break;
+                default: /* Alpha (0) */
+                    mat->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
+                    break;
+            }
+
+            /* Load and attach texture */
+            grp.texture = vfx_load_texture(shaderHandle);
+            if (grp.texture.is_valid()) {
+                mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, grp.texture);
+            }
+            grp.material = mat;
+            grp.mminstance->set_material_override(mat);
+
+            /* One-time diagnostic log for this shader group */
+            {
+                const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
+                UtilityFunctions::print(
+                    String("[VFX-GRP] New group: shader='") + String(sn ? sn : "???") +
+                    String("' handle=") + String::num_int64(shaderHandle) +
+                    String(" blend=") + (grp.blend_type == 1 ? String("ADD") :
+                        grp.blend_type == 2 ? String("MUL") : String("ALPHA")) +
+                    String(" tex=") + (grp.texture.is_valid() ? String("YES") : String("NO")));
+            }
+
+            vfx_groups[shaderHandle] = grp;
+            git = vfx_groups.find(shaderHandle);
+        }
+
+        VfxShaderGroup &grp = git->second;
+        grp.active_count = n;
+        grp.multimesh->set_visible_instance_count(n);
+
+        for (int j = 0; j < n; j++) {
+            const SpriteInst &sp = sprites[j];
+
+            Transform3D xform;
+            if (sp.engine_verts) {
+                /* Engine-vert path: use pre-computed right/up as basis.
+                 * Disable billboard for this material on first engine-vert. */
+                Vector3 normal = sp.engine_right.cross(sp.engine_up);
+                float nlen = normal.length();
+                if (nlen > 0.0001f) normal /= nlen;
+                else normal = Vector3(0, 0, 1);
+                xform = Transform3D(Basis(sp.engine_right, sp.engine_up, normal), sp.position);
+
+                /* Switch off billboard if this group adopted billboard */
+                if (j == 0) {
+                    grp.material->set_billboard_mode(BaseMaterial3D::BILLBOARD_DISABLED);
+                }
+            } else {
+                /* Fallback billboard: scale the 1×1 unit quad. */
+                Basis basis;
+                basis.scale(Vector3(sp.width_m, sp.height_m, 1.0f));
+                xform = Transform3D(basis, sp.position);
+
+                /* Ensure billboard is on for fallback sprites */
+                if (j == 0) {
+                    grp.material->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
+                }
+            }
+
+            grp.multimesh->set_instance_transform(j, xform);
+            grp.multimesh->set_instance_color(j, sp.tint);
+        }
+
+        grp.mminstance->set_visible(true);
+    }
+
+    /* ── Hide groups that have no sprites this frame ── */
+    for (auto &kv : vfx_groups) {
+        if (kv.second.active_count == 0) {
+            kv.second.multimesh->set_visible_instance_count(0);
+            kv.second.mminstance->set_visible(false);
+        }
+    }
 }
 
 
@@ -693,15 +751,14 @@ void Godot_VFX_Shutdown(void)
 {
     if (!vfx_initialised) return;
 
-    for (int i = 0; i < VFX_SPRITE_POOL_SIZE; i++) {
-        if (vfx_pool[i]) {
-            vfx_pool[i]->queue_free();
-            vfx_pool[i] = nullptr;
+    for (auto &kv : vfx_groups) {
+        if (kv.second.mminstance) {
+            kv.second.mminstance->queue_free();
         }
     }
+    vfx_groups.clear();
 
     vfx_tex_cache.clear();
-    vfx_mat_cache.clear();
     vfx_size_cache.clear();
     vfx_unit_quad.unref();
     vfx_parent      = nullptr;
@@ -712,14 +769,16 @@ void Godot_VFX_Clear(void)
 {
     if (!vfx_initialised) return;
 
-    for (int i = 0; i < VFX_SPRITE_POOL_SIZE; i++) {
-        if (vfx_pool[i]) {
-            vfx_pool[i]->set_visible(false);
-        }
+    for (auto &kv : vfx_groups) {
+        kv.second.multimesh->set_visible_instance_count(0);
+        kv.second.mminstance->set_visible(false);
+        kv.second.active_count = 0;
     }
 
     /* Flush caches — shaders/textures may differ on the next map */
     vfx_tex_cache.clear();
-    vfx_mat_cache.clear();
     vfx_size_cache.clear();
+
+    /* Reset diagnostics for next map */
+    vfx_diag_done = false;
 }

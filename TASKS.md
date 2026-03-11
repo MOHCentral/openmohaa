@@ -57,3 +57,23 @@ The OpenMoHAA script engine (`code/script/` — ScriptVM, ScriptCompiler, Script
 - [ ] **Task 4.1:** Bridge the VFS so Godot can also read assets via the engine's `FS_*` functions (expose file-read helpers to GDScript). Ensure `fs_basepath` correctly resolves for all three game directories. Do not bypass or re-implement the VFS.
 - [ ] **Task 4.2:** Implement a BSP parser that generates Godot `ArrayMesh` data from map files at runtime, reading BSP data through the engine VFS.
 - [ ] **Task 4.3:** Convert Quake 3 / MOHAA textures and shader definitions to Godot `ShaderMaterial` / `StandardMaterial3D` at runtime.
+
+## Phase 39: VFX Sprite Rendering Rewrite ✅
+Complete rewrite of `godot_vfx.cpp` to fix visual parity issues with sprite effects (bullet smoke, muzzle flash, explosions) and improve rendering performance.
+
+- [x] **Task 39.1:** Trace the real renderer's sprite pipeline (`RB_DrawSprite` in `tr_sprite.c`, `SPR_RegisterSprite` in `tr_model.cpp`) to verify sizing formulas. Confirmed: `full_extent = image_pixels × entity.scale × shader.spritescale` (in engine inches). **Sizing math was already correct.**
+- [x] **Task 39.2:** Identify root cause of "too big" effects appearance: incorrect blend mode. Old code defaulted ALL sprites (including smoke) to ADDITIVE blend. Additive blend on smoke textures creates bright glow extending beyond the intended boundary, making effects appear much larger than in the real renderer.
+- [x] **Task 39.3:** Replace 512-node `MeshInstance3D` pool with `MultiMeshInstance3D` batching (one group per shader handle, up to 256 instances each). One draw call per unique shader instead of per-sprite draw calls.
+- [x] **Task 39.4:** Replace per-RGBA material cache (unique `StandardMaterial3D` per `(shader, RGBA32)` combo — potentially thousands) with per-shader shared materials using `FLAG_ALBEDO_FROM_VERTEX_COLOR` + MultiMesh instance colours for per-sprite tinting.
+- [x] **Task 39.5:** Implement `vfx_detect_blend_mode()`: checks shader props first (ADDITIVE/MULTIPLICATIVE honoured directly), then probes texture alpha for SHADER_OPAQUE sprites — meaningful alpha → alpha blend (smoke), dead/no alpha → additive (fire/flash/corona).
+- [x] **Task 39.6:** Add `R_LoadRawImage` as primary texture loader for engine byte-order parity, with dead-alpha detection (all-zero or all-255 alpha → convert to RGB8).
+- [x] **Task 39.7:** Add diagnostic logging system: `[VFX-DIAG]` one-shot per-sprite log on first frame with sprites (shader name, entity scale, size in metres, blend mode, RGBA, rendering path); `[VFX-GRP]` on group creation; `[VFX-VERIFY]` shader data verification.
+- [x] **Task 39.8:** Verify poly effects (`update_polys()` in MoHAARunner.cpp) already have correct blend mode detection, texture alpha fallback, and vertex colour support — no changes needed.
+
+### Key technical details (Phase 39):
+- **Root cause was visual, not mathematical:** Sprite sizing formulas were correct. The "too big" appearance was caused by additive blend mode on smoke textures — additive blending makes the alpha channel contribute as brightness, creating bright glow halos that extend the visible boundary of the effect.
+- **MultiMesh batching:** `VfxShaderGroup` struct holds `MultiMeshInstance3D` + shared `StandardMaterial3D` + quad `ArrayMesh`. Groups created on-demand, keyed by shader handle. `vfx_update_group()` sets per-instance transform + colour each frame.
+- **Blend mode detection pipeline:** `shader_props.transparency` → if OPAQUE, probe texture alpha via `R_LoadRawImage` → meaningful alpha → alpha blend (smoke), dead alpha → additive (fire/flash).
+- **Two rendering paths preserved:** (1) Engine-vert path via `Godot_ComputeSpriteQuad()` for sprites with pre-computed quad vertices; (2) Fallback billboard path using `BILLBOARD_ENABLED` + uniform scale for sprites without engine verts.
+- **Files changed:** `godot_vfx.cpp` (complete rewrite, ~790 lines). No other files modified.
+- **Poly effects unchanged:** `update_polys()` already uses `apply_shader_props_to_material()` with correct ADDITIVE/MULTIPLICATIVE handling, texture alpha fallback for unknown shaders, `FLAG_ALBEDO_FROM_VERTEX_COLOR`, and `BILLBOARD_DISABLED`.
