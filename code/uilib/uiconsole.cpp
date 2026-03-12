@@ -430,6 +430,14 @@ void UIConsole::Draw(void)
 	if (ui_console_scale && ui_console_scale->value > 0.0f) {
 		Godot_Renderer_SetFontScale(oldScale * ui_console_scale->value);
 	}
+
+	/* Recalculate page height for scaled font so the scroll widget
+	 * knows how many lines actually fit in the visible area. */
+	{
+		int scaledLinesPerPage = (int)(m_frame.size.height / (float)m_font->getHeight(getHighResScale()));
+		if (scaledLinesPerPage < 2) scaledLinesPerPage = 2;
+		m_scroll->setPageHeight(scaledLinesPerPage - 1);
+	}
 #endif
 
 	m_font->setColor(m_foreground_color);
@@ -451,18 +459,27 @@ void UIConsole::Draw(void)
 		topitem = m_scroll->getTopItem() - 1;
 
 		if (item == -1) {
+#ifdef GODOT_GDEXTENSION
+			Godot_Renderer_SetFontScale(oldScale);
+#endif
 			return;
 		}
 
 		for (i = m_items[item].lines; i < topitem; i += m_items[item].lines) {
 			item = getNextItem(item);
 			if (item == -1) {
+#ifdef GODOT_GDEXTENSION
+				Godot_Renderer_SetFontScale(oldScale);
+#endif
 				return;
 			}
 		}
 
 		if (item == -1) {
 			// no item available
+#ifdef GODOT_GDEXTENSION
+			Godot_Renderer_SetFontScale(oldScale);
+#endif
 			return;
 		}
 
