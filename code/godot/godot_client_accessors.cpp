@@ -87,11 +87,13 @@ int Godot_Client_IsUIActive(void) {
 }
 
 /*
- * Godot_Client_IsConsoleVisible — Return 1 if the console is
- *   currently capturing input (KEYCATCH_CONSOLE flag set).
+ * Godot_Client_IsConsoleVisible — Return 1 if the developer console
+ *   (fakk_console / UIFloatingConsole, toggled by ~) is visible.
+ *   MOHAA's console operates under KEYCATCH_UI (not KEYCATCH_CONSOLE),
+ *   so we must check UI_ConsoleIsVisible() rather than the catcher flag.
  */
 int Godot_Client_IsConsoleVisible(void) {
-    return (cls.keyCatchers & KEYCATCH_CONSOLE) ? 1 : 0;
+    return UI_ConsoleIsVisible() ? 1 : 0;
 }
 
 /*
@@ -115,26 +117,42 @@ void Godot_Client_GetUIMousePos(int *mx, int *my) {
 /*
  * Godot_Client_IsAnyOverlayActive — Return 1 if any overlay is
  *   capturing input (UI, console, or message mode).
+ *   KEYCATCH_CGAME is deliberately excluded: it is always set during
+ *   gameplay and indicates that cgame is loaded, NOT that an overlay
+ *   is active.  Including it made this function always return true,
+ *   which broke overlay detection, safety-net KEYCATCH_UI clearing,
+ *   and mouse sync.
  */
 int Godot_Client_IsAnyOverlayActive(void) {
-    return (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) ? 1 : 0;
+    return (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) ? 1 : 0;
 }
 
 /*
  * Godot_Client_SyncGuiMouseToOverlayState — Keep in_guimouse aligned with
  *   overlay catcher state. Some web paths can leave in_guimouse stale even
  *   when KEYCATCH_UI is active, which breaks hover/click hit testing.
+ *
+ *   IMPORTANT: Only force IN_MouseOn() when a mouse-interactive overlay is
+ *   actually visible (menu or developer console).  The DM console (chat)
+ *   sets KEYCATCH_UI but intentionally calls IN_MouseOff() because it is
+ *   keyboard-only.  Overriding that causes CL_GetMouseState() to return
+ *   cl.mouseButtons, which makes ServiceEvents() think a mouse click
+ *   occurred, which activates view3d and deactivates dm_console — closing
+ *   chat instantly.
  */
 void Godot_Client_SyncGuiMouseToOverlayState(void) {
-    if (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE | KEYCATCH_CGAME)) {
-        if (!in_guimouse) {
-            Com_Printf("[MoHAA] SyncGuiMouse: Force ON (catchers=0x%x)\n", cls.keyCatchers);
+    if (cls.keyCatchers & (KEYCATCH_UI | KEYCATCH_CONSOLE | KEYCATCH_MESSAGE)) {
+        /* Only force mouse ON when an overlay that needs the cursor is up.
+         * UI_MenuUp() covers ESC/options menus.
+         * UI_ConsoleIsVisible() covers the developer console.
+         * The DM console (chat) is keyboard-only — leave in_guimouse as
+         * the engine set it (false). */
+        if (UI_MenuUp() || UI_ConsoleIsVisible()) {
+            IN_MouseOn();
         }
-        IN_MouseOn();
+        /* If KEYCATCH_UI is set but no menu/console is visible (DM console),
+         * do NOT override in_guimouse — the engine set it intentionally. */
     } else {
-        if (in_guimouse) {
-            Com_Printf("[MoHAA] SyncGuiMouse: Force OFF (catchers=0x%x)\n", cls.keyCatchers);
-        }
         IN_MouseOff();
     }
 }
@@ -180,32 +198,6 @@ const char *Godot_Client_GetKeyBinding(int keynum) {
  */
 int Godot_Client_GetMouseButtons(void) {
     return cl.mouseButtons;
-}
-
-/*
- * Godot_Client_DumpInputState — Print a comprehensive debug dump of input
- *   state to the engine console (Com_Printf).  Called from Godot debug key.
- */
-void Godot_Client_DumpInputState(void) {
-    Com_Printf("=== Input State Dump ===\n");
-    Com_Printf("  clc.state:      %d (0=DISC,3=CONN,4=LOAD,5=PRIM,6=ACT)\n", (int)clc.state);
-    Com_Printf("  cls.keyCatchers: 0x%X (UI=0x2, CON=0x1, MSG=0x4)\n", cls.keyCatchers);
-    Com_Printf("  in_guimouse:    %d\n", (int)in_guimouse);
-    Com_Printf("  cls.startStage: %d (0=intro finished)\n", cls.startStage);
-    Com_Printf("  paused:         %d\n", paused ? paused->integer : -1);
-    Com_Printf("  cl.mousex:      %d\n", cl.mousex);
-    Com_Printf("  cl.mousey:      %d\n", cl.mousey);
-    Com_Printf("  cl.mouseButtons: 0x%X\n", cl.mouseButtons);
-    Com_Printf("  server_running: %d\n", com_sv_running ? com_sv_running->integer : -1);
-    Com_Printf("  --- Key Bindings ---\n");
-    Com_Printf("  w: '%s'\n", keys['w'].binding ? keys['w'].binding : "(null)");
-    Com_Printf("  a: '%s'\n", keys['a'].binding ? keys['a'].binding : "(null)");
-    Com_Printf("  s: '%s'\n", keys['s'].binding ? keys['s'].binding : "(null)");
-    Com_Printf("  d: '%s'\n", keys['d'].binding ? keys['d'].binding : "(null)");
-    Com_Printf("  MOUSE1: '%s'\n", keys[K_MOUSE1].binding ? keys[K_MOUSE1].binding : "(null)");
-    Com_Printf("  ESC: '%s'\n", keys[K_ESCAPE].binding ? keys[K_ESCAPE].binding : "(null)");
-    Com_Printf("  SPACE: '%s'\n", keys[' '].binding ? keys[' '].binding : "(null)");
-    Com_Printf("========================\n");
 }
 
 /* Player zoom state — returns STAT_INZOOM from playerState_t.

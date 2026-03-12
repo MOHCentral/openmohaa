@@ -373,6 +373,14 @@ int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
  */
 int Godot_ShaderProps_GetTextureMap(const char *shader_name, char *out_path, int out_size);
 
+/*
+ * Override a font shader's stages so that SetColor controls text colour.
+ * Forces CGEN_GLOBAL_COLOR / AGEN_GLOBAL_ALPHA on all lightmapIndex
+ * variants (LIGHTMAP_NONE and LIGHTMAP_2D) of the given shader name.
+ * Must be called AFTER GR_RegisterShaderNoMip so the real shader_t exists.
+ */
+void Godot_ShaderAccessor_OverrideFontShader(const char *shader_name);
+
 #ifdef __cplusplus
 }
 #endif

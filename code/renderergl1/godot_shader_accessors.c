@@ -795,22 +795,6 @@ static void convert_shader(const shader_t *sh, GodotShaderProps *out) {
             }
         }
 
-        /* Diagnostic: log non-opaque shaders so we can track depth-write issues.
-         * This is a one-shot log (first 64 non-opaque shaders) to avoid spam. */
-        if (out->transparency != SHADER_OPAQUE) {
-            static int s_nonopaque_log_count = 0;
-            if (s_nonopaque_log_count < 64) {
-                static const char *s_trans_names[] = {
-                    "OPAQUE", "ALPHA_TEST", "ALPHA_BLEND", "ADDITIVE",
-                    "MULTIPLICATIVE", "MULTIPLICATIVE_INV", "ALPHA_BLEND_INV"
-                };
-                int ti = (int)out->transparency;
-                const char *tname = (ti >= 0 && ti <= 6) ? s_trans_names[ti] : "UNKNOWN";
-                ri.Printf(PRINT_ALL, "[SHADER-DIAG] Non-opaque: '%s' sort=%d transparency=%s stages=%d\n",
-                    sh->name, (int)sh->sort, tname, out->stage_count);
-                s_nonopaque_log_count++;
-            }
-        }
     }
 }
 

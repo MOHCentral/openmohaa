@@ -122,9 +122,6 @@ struct VfxShaderGroup {
 
 static std::unordered_map<int, VfxShaderGroup> vfx_groups;
 
-/* Diagnostics: log sprite sizes once per map load */
-static bool vfx_diag_done = false;
-
 /* ── Texture loading (mirrors MoHAARunner::get_shader_texture — resolves shader stage maps) ── */
 
 static Ref<ImageTexture> vfx_load_from_qpath(const char *qpath)
@@ -470,33 +467,6 @@ void Godot_VFX_Update(float delta)
     (void)delta;
     if (!vfx_initialised) return;
 
-    /* ── One-shot: verify spriteScale for known shaders ── */
-    {
-        static bool verified = false;
-        if (!verified && GR_IsRealRendererInited()) {
-            verified = true;
-            static const char *test_names[] = {
-                "muzsprite", "thompsonsmg_spriteflash",
-                "mg42_spriteflash", "corona_util", "vsssource",
-                "fgrenexplosion", "splash_z", nullptr
-            };
-            UtilityFunctions::print("[VFX-VERIFY] ---- Sprite shader data verification ----");
-            for (int t = 0; test_names[t]; t++) {
-                int ew = 0, eh = 0;
-                float es = 1.0f;
-                int ok = Godot_Sprite_GetEngineSize(test_names[t], &ew, &eh, &es);
-                float extent_1m = ok ? ((float)ew * es * MOHAA_UNIT_SCALE) : -1.0f;
-                UtilityFunctions::print(
-                    String("[VFX-VERIFY]  '") + String(test_names[t]) + "'" +
-                    (ok ? (String(" img=") + String::num_int64(ew) + "x" + String::num_int64(eh) +
-                           " sprScale=" + String::num(es, 3) +
-                           " base_extent=" + String::num(extent_1m, 3) + "m (at entScale=1.0)")
-                         : String(" NOT FOUND")));
-            }
-            UtilityFunctions::print("[VFX-VERIFY] ---- End verification ----");
-        }
-    }
-
     /* ── Reset all group active counts ── */
     for (auto &kv : vfx_groups) {
         kv.second.active_count = 0;
@@ -504,15 +474,6 @@ void Godot_VFX_Update(float delta)
 
     /* ── Read sprite count from entity buffer ── */
     int count = Godot_VFX_GetSpriteCount();
-
-    /* ── Determine whether to log diagnostics this frame ── */
-    bool log_sizes = false;
-    if (count > 0 && !vfx_diag_done) {
-        log_sizes = true;
-        vfx_diag_done = true;
-        UtilityFunctions::print(String("[VFX-DIAG] ---- Sprite size diagnostic (") +
-            String::num_int64(count) + String(" sprites) ----"));
-    }
 
     /* ── Temporary per-group sprite collection ── */
     struct SpriteInst {
@@ -593,29 +554,7 @@ void Godot_VFX_Update(float delta)
 
         if (inst.width_m < 0.0001f || inst.height_m < 0.0001f) continue;
 
-        /* ── Diagnostic logging (first occurrence only) ── */
-        if (log_sizes && i < 16) {
-            const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
-            int bm = vfx_detect_blend_mode(shaderHandle);
-            UtilityFunctions::print(
-                String("[VFX-DIAG]  #") + String::num_int64(i) +
-                String(" shader='") + String(sn ? sn : "???") +
-                String("' entScale=") + String::num(entityScale, 4) +
-                String(" finalW=") + String::num(inst.width_m, 4) +
-                String("m finalH=") + String::num(inst.height_m, 4) + "m" +
-                String(" blend=") + (bm == 1 ? String("ADD") :
-                    bm == 2 ? String("MUL") : String("ALPHA")) +
-                String(" rgba=") + String::num_int64(rgba[0]) + "," +
-                String::num_int64(rgba[1]) + "," + String::num_int64(rgba[2]) +
-                "," + String::num_int64(rgba[3]) +
-                String(" path=") + (inst.engine_verts ? String("ENGINE") : String("FALLBACK")));
-        }
-
         group_sprites[shaderHandle].push_back(inst);
-    }
-
-    if (log_sizes) {
-        UtilityFunctions::print("[VFX-DIAG] ---- End diagnostic ----");
     }
 
     /* ── Update MultiMesh groups ── */
@@ -681,17 +620,6 @@ void Godot_VFX_Update(float delta)
             }
             grp.material = mat;
             grp.mminstance->set_material_override(mat);
-
-            /* One-time diagnostic log for this shader group */
-            {
-                const char *sn = Godot_Renderer_GetShaderName(shaderHandle);
-                UtilityFunctions::print(
-                    String("[VFX-GRP] New group: shader='") + String(sn ? sn : "???") +
-                    String("' handle=") + String::num_int64(shaderHandle) +
-                    String(" blend=") + (grp.blend_type == 1 ? String("ADD") :
-                        grp.blend_type == 2 ? String("MUL") : String("ALPHA")) +
-                    String(" tex=") + (grp.texture.is_valid() ? String("YES") : String("NO")));
-            }
 
             vfx_groups[shaderHandle] = grp;
             git = vfx_groups.find(shaderHandle);
@@ -779,6 +707,4 @@ void Godot_VFX_Clear(void)
     vfx_tex_cache.clear();
     vfx_size_cache.clear();
 
-    /* Reset diagnostics for next map */
-    vfx_diag_done = false;
 }

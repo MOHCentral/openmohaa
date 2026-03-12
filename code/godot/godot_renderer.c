@@ -604,6 +604,9 @@ static int   gr_2d_vp_h;
 /* Accessor so Godot-side C++ code can tell whether R_Init() has been called yet */
 int GR_IsRealRendererInited( void ) { return gr_realRendererInited; }
 
+/* Forward declaration — implemented after font data declarations */
+static void GR_ClearFontCaches( void );
+
 static void GR_Shutdown( qboolean destroyWindow )
 {
     ri.Printf( PRINT_ALL, "[GodotRenderer] Shutdown\n" );
@@ -635,6 +638,14 @@ static void GR_Shutdown( qboolean destroyWindow )
     memset( &gr_currentSwipe, 0, sizeof( gr_currentSwipe ) );
     gr_bgActive        = 0;
     gr_frameNumber     = 0;
+
+    /* Clear font caches so fonts are re-loaded from the current VFS search
+     * path after a vid_restart or game directory change (AA→SH→BT).
+     * Without this, cached font data (UV coords, height, aspect) from the
+     * previous game would persist despite the new game's fonts having
+     * different dimensions (e.g. base facfont-20 is 256×128 / aspect 2.0
+     * while Spearhead's is 256×256 / aspect 1.0). */
+    GR_ClearFontCaches();
 }
 
 static void GR_BeginRegistration( glconfig_t *config )
@@ -1571,6 +1582,25 @@ static int               gr_numFonts = 0;
 static float             gr_fontHeightScale  = 1.0f;
 static float             gr_fontGeneralScale = 1.0f;
 
+/* Clear all cached font data.  Called from GR_Shutdown so that a
+ * vid_restart or game directory change (AA→SH→BT) forces fonts to be
+ * re-loaded from the current VFS search path. */
+static void GR_ClearFontCaches( void )
+{
+    int fi;
+    for ( fi = 0; fi < gr_numFonts; fi++ ) {
+        if ( gr_fonts[fi].charTable ) {
+            ri.Free( gr_fonts[fi].charTable );
+            gr_fonts[fi].charTable = NULL;
+        }
+    }
+    memset( gr_fontsgl, 0, sizeof( gr_fontsgl ) );
+    memset( gr_fonts, 0, sizeof( gr_fonts ) );
+    gr_numFonts    = 0;
+    gr_numFontsSgl = 0;
+    gr_fontHandlesDirty = 0;
+}
+
 static void GR_RegisterFont( const char *fontName, int pointSize,
                              fontInfo_t *font )
 {
@@ -1587,6 +1617,8 @@ static void GR_RefreshFontHandlesIfNeeded( void )
         char shaderName[MAX_QPATH];
         Com_sprintf( shaderName, sizeof( shaderName ), "gfx/fonts/%s", gr_fontsgl[i].name );
         gr_fontsgl[i].trhandle = GR_RegisterShaderNoMip( shaderName );
+        /* Force CGEN_GLOBAL_COLOR / AGEN_GLOBAL_ALPHA so SetColor controls text colour */
+        Godot_ShaderAccessor_OverrideFontShader( shaderName );
     }
 
     gr_fontHandlesDirty = 0;
@@ -1685,6 +1717,10 @@ static fontheader_sgl_t *GR_LoadFont_sgl( const char *name )
         char shaderName[MAX_QPATH];
         Com_sprintf( shaderName, sizeof(shaderName), "gfx/fonts/%s", name );
         header->trhandle = GR_RegisterShaderNoMip( shaderName );
+        /* Replicate R_LoadFontShader: force CGEN_GLOBAL_COLOR / AGEN_GLOBAL_ALPHA
+         * so that re.SetColor() controls text colour (critical for SH/BT fonts
+         * whose .shader has explicit "rgbGen identity"). */
+        Godot_ShaderAccessor_OverrideFontShader( shaderName );
     }
 
     gr_numFontsSgl++;

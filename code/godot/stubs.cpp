@@ -883,11 +883,12 @@ const char *Sys_LV_CL_ConvertString(const char *var) {
     return var ? var : "";
 }
 
-void Sys_LV_ConvertString(char *dest, const char *src, int maxlen) {
-    if (dest && src) {
-        strncpy(dest, src, maxlen);
-        dest[maxlen - 1] = '\0';
-    }
+/* Real signature: const char *Sys_LV_ConvertString(const char *var)
+ * Localisation passthrough — returns the input string unchanged.
+ * The old 3-parameter void stub had a completely wrong signature,
+ * causing heap corruption when called via gi.LV_ConvertString(). */
+const char *Sys_LV_ConvertString(const char *var) {
+    return var ? var : "";
 }
 
 // Thread priority stubs

@@ -251,13 +251,13 @@ extern "C" {
     void Godot_Client_ForceUnpause(void);
     int  Godot_Client_IsAnyOverlayActive(void);
     void Godot_Client_SyncGuiMouseToOverlayState(void);
+    int  Godot_Client_IsConsoleVisible(void);
     void Godot_Client_SetMousePos(int x, int y);
     int  Godot_Client_IsUIStarted(void);
     int  Godot_Client_IsMenuUp(void);
     const char *Godot_Client_GetKeyBinding(int keynum);
     int  Godot_Client_GetPlayerZoom(void);
     int  Godot_Client_GetMouseButtons(void);
-    void Godot_Client_DumpInputState(void);
     void Godot_Client_SyncGlConfigVidSize(int w, int h);
     void Godot_Client_ResolutionChange(void);
 
@@ -4224,75 +4224,6 @@ void MoHAARunner::update_entities() {
                     }
                 }
 
-                // ── FPS/depthhack diagnostic: log on state change + periodic ──
-                if (is_first_person || is_depthhack) {
-                    // Track previous surface hash per entity slot for change detection
-                    static std::unordered_map<int, uint32_t> s_fps_prev_surf_hash;
-                    static int s_fps_diag_counter = 0;
-                    s_fps_diag_counter++;
-
-                    uint32_t prev_sh = 0;
-                    auto ph_it = s_fps_prev_surf_hash.find(i);
-                    if (ph_it != s_fps_prev_surf_hash.end()) prev_sh = ph_it->second;
-                    bool surf_changed = (prev_sh != surf_hash);
-                    s_fps_prev_surf_hash[i] = surf_hash;
-
-                    // Log on: first frame, surface state change, or periodic (every 120 frames)
-                    if (surf_changed || s_fps_diag_counter % 120 == 1) {
-                        const char *nm = Godot_Model_GetName(hModel);
-                        // Log ALL 32 surface bytes (not just 8)
-                        String surfStr;
-                        bool any_nonzero = false;
-                        for (int si = 0; si < 32; si++) {
-                            if (ent_surfaces[si] != 0) {
-                                if (any_nonzero) surfStr += ",";
-                                surfStr += String::num_int64(si) + "=" + String::num_int64(ent_surfaces[si]);
-                                any_nonzero = true;
-                            }
-                        }
-                        if (!any_nonzero) surfStr = "all-zero";
-
-                        String fiStr;
-                        for (int si = 0; si < (int)entry.flat_surf_idx.size(); si++) {
-                            if (si > 0) fiStr += ",";
-                            fiStr += String::num_int64(entry.flat_surf_idx[si]);
-                        }
-                        String snStr;
-                        for (int si = 0; si < (int)entry.surf_names.size(); si++) {
-                            if (si > 0) snStr += ",";
-                            snStr += entry.surf_names[si].is_empty() ? String("?") : entry.surf_names[si];
-                        }
-                        // Log which surfaces got NODRAW applied
-                        String ndStr;
-                        for (int s = 0; s < (int)entry.flat_surf_idx.size() && s < sc; s++) {
-                            int fi = entry.flat_surf_idx[s];
-                            if (fi >= 0 && fi < 32 && (ent_surfaces[fi] & 4)) {
-                                if (!ndStr.is_empty()) ndStr += ",";
-                                ndStr += String::num_int64(s) + "(" +
-                                    (s < (int)entry.surf_names.size() && !entry.surf_names[s].is_empty()
-                                     ? entry.surf_names[s] : String("?")) + ")";
-                            }
-                        }
-                        if (ndStr.is_empty()) ndStr = "none";
-
-                        UtilityFunctions::print(
-                            String("[FPS-DIAG] ") + (surf_changed ? "CHANGE " : "periodic ") +
-                            "slot=" + String::num_int64(i) +
-                            " entNum=" + String::num_int64(entityNumber) +
-                            " rfx=0x" + String::num_int64(renderfx, 16) +
-                            " FP=" + String(is_first_person ? "Y" : "N") +
-                            " DH=" + String(is_depthhack ? "Y" : "N") +
-                            " model=" + String(nm ? nm : "?") +
-                            " meshSC=" + String::num_int64(sc) +
-                            " matSC=" + String::num_int64((int64_t)entry.mats.size()) +
-                            " fiSC=" + String::num_int64((int64_t)entry.flat_surf_idx.size()) +
-                            " surfs={" + surfStr + "}" +
-                            " fi=[" + fiStr + "]" +
-                            " names=[" + snStr + "]" +
-                            " nodraw=[" + ndStr + "]" +
-                            " skinNum=" + String::num_int64(ent_skinNum));
-                    }
-                }
             }
         }  // end else (TIKI model)
 
@@ -4615,100 +4546,6 @@ void MoHAARunner::update_entities() {
                         tinted_mat_cache[tint_key] = dup;
                         mi->set_surface_override_material(s, dup);
                     }
-                }
-            }
-        }
-
-        // ── [VIEWMODEL-VALIDATE] Post-tinting NODRAW integrity check ──
-        // After tinting runs, verify that surfaces which should have NODRAW
-        // still have the transparent material.  If not, the tinting cache
-        // overwrote it (Bug: tint_key doesn't encode NODRAW state).
-        // Also validate general FPS entity health for automated testing.
-        if (is_first_person || is_depthhack) {
-            static std::unordered_map<int, int> s_fps_validate_period;
-            auto &vp = s_fps_validate_period[i];
-            vp++;
-
-            // Recompute mat_key (same algorithm as the material cache block above,
-            // which is in a different scope).
-            uint64_t v_svh = 1469598103934665603ULL;
-            for (int si = 0; si < 32; si++) {
-                unsigned char v = (unsigned char)(ent_surfaces[si] & 3);
-                v_svh ^= (uint64_t)v;
-                v_svh *= 1099511628211ULL;
-            }
-            uint64_t v_mat_key = ((uint64_t)(uint32_t)hModel << 32)
-                               | ((uint64_t)(uint16_t)(ent_skinNum & 0xFFFF) << 16)
-                               | (v_svh & 0xFFFFULL);
-
-            auto mat_it = tiki_mat_cache.find(v_mat_key);
-            if (mat_it != tiki_mat_cache.end()) {
-                auto &ventry = mat_it->second;
-                int vsc = mi->get_mesh().is_valid()
-                        ? mi->get_mesh()->get_surface_count() : 0;
-
-                // 1. Validate mesh exists with surfaces
-                if (vsc == 0 && vp % 120 == 1) {
-                    const char *nm = Godot_Model_GetName(hModel);
-                    UtilityFunctions::print(
-                        String("[VIEWMODEL-VALIDATE] FAIL mesh_empty slot=") + String::num_int64(i) +
-                        " entNum=" + String::num_int64(entityNumber) +
-                        " model=" + String(nm ? nm : "?") +
-                        " FP=" + String(is_first_person ? "Y" : "N") +
-                        " DH=" + String(is_depthhack ? "Y" : "N"));
-                }
-
-                // 2. Validate surface count consistency
-                if (vsc > 0 && (int)ventry.mats.size() != vsc && vp % 120 == 1) {
-                    const char *nm = Godot_Model_GetName(hModel);
-                    UtilityFunctions::print(
-                        String("[VIEWMODEL-VALIDATE] WARN surf_mismatch slot=") + String::num_int64(i) +
-                        " meshSC=" + String::num_int64(vsc) +
-                        " matSC=" + String::num_int64((int64_t)ventry.mats.size()) +
-                        " fiSC=" + String::num_int64((int64_t)ventry.flat_surf_idx.size()) +
-                        " model=" + String(nm ? nm : "?"));
-                }
-
-                // 3. Validate NODRAW integrity — check every surface
-                for (int vs = 0; vs < (int)ventry.flat_surf_idx.size() && vs < vsc; vs++) {
-                    int vfi = ventry.flat_surf_idx[vs];
-                    bool should_nodraw = (vfi >= 0 && vfi < 32 && (ent_surfaces[vfi] & 4));
-                    Ref<Material> actual = mi->get_surface_override_material(vs);
-
-                    if (should_nodraw && actual != nodraw_surface_material) {
-                        // NODRAW was overwritten!  Log once per transition.
-                        const char *nm = Godot_Model_GetName(hModel);
-                        String sname = (vs < (int)ventry.surf_names.size() && !ventry.surf_names[vs].is_empty())
-                            ? ventry.surf_names[vs] : String("surf") + String::num_int64(vs);
-                        UtilityFunctions::print(
-                            String("[VIEWMODEL-VALIDATE] FAIL nodraw_overwritten slot=") + String::num_int64(i) +
-                            " surf=" + sname +
-                            " fi=" + String::num_int64(vfi) +
-                            " surfByte=" + String::num_int64(ent_surfaces[vfi]) +
-                            " model=" + String(nm ? nm : "?") +
-                            " actualMatNull=" + String(actual.is_null() ? "Y" : "N"));
-                    }
-                }
-
-                // 4. Periodic health summary for ALL FPS entities (every ~2s)
-                if (vp % 120 == 1) {
-                    const char *nm = Godot_Model_GetName(hModel);
-                    int nd_count = 0, vis_count = 0;
-                    for (int vs = 0; vs < (int)ventry.flat_surf_idx.size() && vs < vsc; vs++) {
-                        int vfi = ventry.flat_surf_idx[vs];
-                        if (vfi >= 0 && vfi < 32 && (ent_surfaces[vfi] & 4)) nd_count++;
-                        else vis_count++;
-                    }
-                    UtilityFunctions::print(
-                        String("[VIEWMODEL-VALIDATE] INFO slot=") + String::num_int64(i) +
-                        " entNum=" + String::num_int64(entityNumber) +
-                        " model=" + String(nm ? nm : "?") +
-                        " meshSC=" + String::num_int64(vsc) +
-                        " visible=" + String::num_int64(vis_count) +
-                        " nodraw=" + String::num_int64(nd_count) +
-                        " FP=" + String(is_first_person ? "Y" : "N") +
-                        " DH=" + String(is_depthhack ? "Y" : "N") +
-                        " rfx=0x" + String::num_int64(renderfx, 16));
                 }
             }
         }
@@ -6682,6 +6519,7 @@ void MoHAARunner::update_2d_overlay() {
                         ui_offset_y + rect[1] * ui_scale_y,
                         rect[2] * ui_scale_x,
                         rect[3] * ui_scale_y);
+                    screen_rect = screen_rect.abs();
                     RID hm_ci = get_segment_ci(BLEND_MIX);
                     rs->canvas_item_add_texture_rect(hm_ci, screen_rect, vp_tex->get_rid());
                 }
@@ -6709,9 +6547,12 @@ void MoHAARunner::update_2d_overlay() {
             rs->canvas_item_add_texture_rect(bg_ci, bg_rect, s_loading_bg_tex->get_rid());
         }
 
-        // Scale from engine coords to actual viewport (with aspect correction)
+        // Scale from engine coords to actual viewport (with aspect correction).
+        // Engine 2D commands can have negative w/h (flipped draws); Godot's
+        // canvas internal merge() requires non-negative size, so normalise.
         Rect2 rect(ui_offset_x + x * ui_scale_x, ui_offset_y + y * ui_scale_y,
                    w * ui_scale_x, h * ui_scale_y);
+        rect = rect.abs();
         Color col(color[0], color[1], color[2], color[3]);
 
         if (type == 2) {
@@ -7245,6 +7086,7 @@ void MoHAARunner::update_2d_overlay() {
                     ui_offset_y + rect[1] * ui_scale_y,
                     rect[2] * ui_scale_x,
                     rect[3] * ui_scale_y);
+                screen_rect = screen_rect.abs();
                 RID hm_ci2 = get_segment_ci(BLEND_MIX);
                 rs->canvas_item_add_texture_rect(hm_ci2, screen_rect, vp_tex->get_rid());
             }
@@ -8416,12 +8258,17 @@ void MoHAARunner::_process(double delta) {
         overlay_active_now = overlay_active;
         overlay_prev_frame = overlay_active;  // save for next frame's pre-frame poll
         bool engine_wants_gui = Godot_Client_GetGuiMouse() != 0;
-        // Only show the OS cursor when a menu is actually visible on screen.
-        // During multiplayer spawn, KEYCATCH_UI / in_guimouse can be set before
-        // any menu has rendered — guard against that with UI_MenuUp().
+        // Only show the OS cursor when a menu or the developer console is
+        // actually visible on screen.  During multiplayer spawn,
+        // KEYCATCH_UI / in_guimouse can be set before any menu has rendered
+        // — guard against that with UI_MenuUp().
+        // The developer console (toggled by ~) is NOT a menu
+        // (UI_MenuUp returns false) but still needs the cursor visible.
         bool menu_actually_up = Godot_Client_IsMenuUp() != 0;
-        bool should_capture = !(engine_wants_gui && menu_actually_up);
-        overlay_active_now = engine_wants_gui && menu_actually_up;
+        bool console_visible = Godot_Client_IsConsoleVisible() != 0;
+        bool overlay_needs_cursor = menu_actually_up || console_visible;
+        bool should_capture = !(engine_wants_gui && overlay_needs_cursor);
+        overlay_active_now = engine_wants_gui && overlay_needs_cursor;
 
         static int last_catchers = -1;
         int cur_catchers = Godot_Client_GetKeyCatchers();
@@ -8855,8 +8702,12 @@ void MoHAARunner::_process(double delta) {
         const char *cur_map_raw = Godot_GetMapName();
         godot::String cur_map(cur_map_raw ? cur_map_raw : "");
 
-        // Detect map loaded: state transitioned to SS_GAME (3) with a valid map name
-        if (cur_state == 3 && last_server_state != 3 && !cur_map.is_empty()) {
+        // Detect map loaded when gameplay becomes active or when the first
+        // non-empty map name appears after init. Startup +map/+devmap can
+        // complete during Com_Init(), so a pure state-transition check can
+        // miss the initial load entirely.
+        if (cur_state == 3 && !cur_map.is_empty() &&
+            (last_server_state != 3 || last_map_name != cur_map)) {
             UtilityFunctions::print(godot::String("[MoHAA] Map loaded: ") + cur_map);
 
             // Dump client diagnostics once after map load
@@ -9827,15 +9678,10 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
         bool pressed = key_event->is_pressed();
         bool echo = key_event->is_echo();
 
-        // ── DEBUG: Layer toggle keys to isolate double-rendering ──
         // F1 — toggle BSP world mesh
         if (pressed && !echo && key_event->get_keycode() == Key::KEY_F1) {
             if (bsp_map_node) {
                 bsp_map_node->set_visible(!bsp_map_node->is_visible());
-                UtilityFunctions::print(String("[DEBUG] BSP world mesh: ") +
-                    (bsp_map_node->is_visible() ? String("ON") : String("OFF")));
-            } else {
-                UtilityFunctions::print("[DEBUG] BSP world mesh: no bsp_map_node!");
             }
             return;
         }
@@ -9843,9 +9689,6 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
         if (pressed && !echo && key_event->get_keycode() == Key::KEY_F2) {
             if (static_model_root) {
                 static_model_root->set_visible(!static_model_root->is_visible());
-                UtilityFunctions::print(String("[DEBUG] Static models (") +
-                    String::num_int64(static_model_root->get_child_count()) +
-                    " children): " + (static_model_root->is_visible() ? String("ON") : String("OFF")));
             }
             return;
         }
@@ -9853,27 +9696,11 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
         if (pressed && !echo && key_event->get_keycode() == Key::KEY_F3) {
             if (entity_root) {
                 entity_root->set_visible(!entity_root->is_visible());
-                UtilityFunctions::print(String("[DEBUG] Entities (") +
-                    String::num_int64(entity_root->get_child_count()) +
-                    " children): " + (entity_root->is_visible() ? String("ON") : String("OFF")));
             }
             return;
         }
-        // F4 — dump scene tree summary
+        // F4 — reserved for local debugging
         if (pressed && !echo && key_event->get_keycode() == Key::KEY_F4) {
-            UtilityFunctions::print("[DEBUG] === Scene Tree Dump ===");
-            if (game_world) {
-                UtilityFunctions::print(String("[DEBUG] game_world children: ") +
-                    String::num_int64(game_world->get_child_count()));
-                for (int ci = 0; ci < game_world->get_child_count(); ci++) {
-                    Node *child = game_world->get_child(ci);
-                    int gc = child ? child->get_child_count() : 0;
-                    UtilityFunctions::print(String("[DEBUG]   ") +
-                        String::num_int64(ci) + ": " + child->get_name() +
-                        " (" + child->get_class() + ", " +
-                        String::num_int64(gc) + " children)");
-                }
-            }
             return;
         }
 
@@ -9884,8 +9711,6 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
                 Ref<Environment> env = world_env->get_environment();
                 if (env.is_valid()) {
                     env->set_fog_enabled(!debug_fog_off);
-                    UtilityFunctions::print(String("[DEBUG] Fog: ") +
-                        (!debug_fog_off ? String("ON") : String("OFF")));
                 }
             }
             return;
@@ -9897,15 +9722,11 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
                 auto cur = vp->get_debug_draw();
                 if (cur == Viewport::DEBUG_DRAW_WIREFRAME) {
                     vp->set_debug_draw(Viewport::DEBUG_DRAW_DISABLED);
-                    UtilityFunctions::print("[DEBUG] Wireframe: OFF");
                 } else {
                     // Must enable wireframe generation first
                     RenderingServer::get_singleton()->set_debug_generate_wireframes(true);
                     vp->set_debug_draw(Viewport::DEBUG_DRAW_WIREFRAME);
-                    UtilityFunctions::print("[DEBUG] Wireframe: ON");
                 }
-            } else {
-                UtilityFunctions::print("[DEBUG] Wireframe: no viewport!");
             }
             return;
         }
@@ -9929,8 +9750,6 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
                         }
                     }
                 }
-                UtilityFunctions::print(String("[DEBUG] BSP textures: ") +
-                    (!debug_notex ? String("ON (reload map to restore)") : String("OFF")));
             }
             return;
         }
@@ -9956,13 +9775,8 @@ void MoHAARunner::_unhandled_input(const Ref<InputEvent> &p_event) {
             return;
         }
 
-        // F11 — dump input state (debug: keyCatchers, bindings, mouse, pause)
+        // F11 — reserved for local debugging
         if (pressed && !echo && key_event->get_keycode() == Key::KEY_F11) {
-            Godot_Client_DumpInputState();
-            UtilityFunctions::print(String("[MoHAA] mouse_captured=") +
-                String::num_int64(mouse_captured ? 1 : 0) +
-                String(" godot_mouse_mode=") +
-                String::num_int64((int)Input::get_singleton()->get_mouse_mode()));
             return;
         }
 

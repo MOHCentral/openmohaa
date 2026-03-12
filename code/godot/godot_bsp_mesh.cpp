@@ -846,9 +846,6 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                             if (ftex.is_valid()) {
                                 smat->set_shader_parameter(
                                     String("stage") + idx + "_frame" + String::num_int64(f), ftex);
-                            } else if (batch.shader_name) {
-                                printf("[BSP-TEX-FAIL] shader='%s' stage=%d animFrame[%d]='%s'\n",
-                                       batch.shader_name, si, f, stage->animMapFrames[f]);
                             }
                         }
                     } else if (stage->isLightmap) {
@@ -880,10 +877,6 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                             tex_ok++;
                         } else {
                             tex_bad++;
-                            if (batch.shader_name) {
-                                printf("[BSP-TEX-FAIL] shader='%s' stage=%d map='%s'\n",
-                                       batch.shader_name, si, stage->map);
-                            }
                         }
                     }
 
