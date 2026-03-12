@@ -46,6 +46,18 @@
 #include <unordered_set>
 #include <setjmp.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+static bool godot_webdriver_active() {
+    static int cached = -1;
+    if (cached < 0) {
+        cached = emscripten_run_script_int("(typeof navigator !== 'undefined' && !!navigator.webdriver) ? 1 : 0");
+    }
+    return cached != 0;
+}
+#endif
+
 // From register_types.cpp — track engine lifecycle across module boundary
 extern void Godot_SetEngineInitialized(bool v);
 
@@ -350,6 +362,7 @@ extern "C" {
     // Phase 149: Vid_restart detection + settings accessors
     int   Godot_Renderer_ConsumeVidRestart(int *out_fullscreen, int *out_width, int *out_height);
     void  Godot_Renderer_SetDesktopResolution(int w, int h);
+    void  Godot_Renderer_SetScreenResolution(int w, int h);
     int   Godot_Renderer_GetNumVidModes(void);
     int   Godot_Renderer_GetVidMode(int mode, int *w, int *h);
 
@@ -7100,6 +7113,7 @@ void MoHAARunner::update_2d_overlay() {
                                 String::num_int64(cmd_count) + String(" draw commands"));
         logged_2d = true;
     }
+
 }
 
 // ──────────────────────────────────────────────
@@ -8082,6 +8096,14 @@ void MoHAARunner::_ready() {
                 UtilityFunctions::print(String("[MoHAA] Desktop resolution (window): ") +
                     String::num_int64(win.x) + String("x") + String::num_int64(win.y));
             }
+            // Store the physical screen/monitor resolution for widescreen
+            // aspect ratio adjustment in GR_BeginRegistration when fullscreen.
+            Vector2i screen = ds->screen_get_size();
+            if (screen.x > 0 && screen.y > 0) {
+                Godot_Renderer_SetScreenResolution(screen.x, screen.y);
+                UtilityFunctions::print(String("[MoHAA] Screen resolution: ") +
+                    String::num_int64(screen.x) + String("x") + String::num_int64(screen.y));
+            }
         }
     }
 
@@ -8133,6 +8155,8 @@ void MoHAARunner::_ready() {
     // 3D scene.  This makes the root viewport match the engine coords
     // from the very first frame, so HUD and weapon SubViewport sizes are
     // correct immediately — no async window_set_size race.
+    // KEEP_HEIGHT ensures widescreen displays expand the width (hor+)
+    // instead of stretching vertically.
     {
         int vw = 0, vh = 0;
         Godot_Renderer_GetVidSize(&vw, &vh);
@@ -8141,7 +8165,7 @@ void MoHAARunner::_ready() {
             if (win) {
                 win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
                 win->set_content_scale_size(Vector2i(vw, vh));
-                win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
+                win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_KEEP_HEIGHT);
             }
             Godot_Renderer_SetViewportSize(vw, vh);
             UtilityFunctions::print(String("[MoHAA] Initial VIEWPORT content_scale: ") +
@@ -8269,6 +8293,15 @@ void MoHAARunner::_process(double delta) {
         bool overlay_needs_cursor = menu_actually_up || console_visible;
         bool should_capture = !(engine_wants_gui && overlay_needs_cursor);
         overlay_active_now = engine_wants_gui && overlay_needs_cursor;
+
+    #ifdef __EMSCRIPTEN__
+        // Browser automation cannot grant pointer lock reliably. Keep the
+        // cursor visible under webdriver so headless web tests do not spam
+        // WrongDocumentError and interfere with startup progression.
+        if (godot_webdriver_active()) {
+            should_capture = false;
+        }
+    #endif
 
         static int last_catchers = -1;
         int cur_catchers = Godot_Client_GetKeyCatchers();
@@ -8458,24 +8491,26 @@ void MoHAARunner::_process(double delta) {
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
                 if (fs) {
-                    // Fullscreen: set desktop resolution to monitor size for
-                    // correct r_mode -2 resolution, then go fullscreen.
+                    // Fullscreen: update screen resolution for next vid_restart's
+                    // widescreen adjustment, then go fullscreen.
                     Vector2i screen = ds->screen_get_size();
                     if (screen.x > 0 && screen.y > 0) {
                         Godot_Renderer_SetDesktopResolution(screen.x, screen.y);
+                        Godot_Renderer_SetScreenResolution(screen.x, screen.y);
                     }
                     ds->window_set_mode(DisplayServer::WINDOW_MODE_FULLSCREEN);
 
-                    // Use content_scale_mode = VIEWPORT so that BOTH 3D and 2D
-                    // (HUD) render at the user's selected engine resolution,
-                    // then Godot stretches the result to fill the screen.
-                    // This replaces the old scaling_3d_scale approach which only
-                    // affected 3D quality without changing HUD resolution.
+                    // GR_BeginRegistration already adjusted the engine width
+                    // for the screen's widescreen aspect ratio.  vw/vh from
+                    // ConsumeVidRestart are the already-adjusted values.
+                    // Use KEEP_HEIGHT so Godot expands width to fill the
+                    // screen (hor+ = show more of the map) instead of
+                    // stretching the image vertically.
                     Window *win = get_window();
                     if (win && vw > 0 && vh > 0) {
                         win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
                         win->set_content_scale_size(Vector2i(vw, vh));
-                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
+                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_KEEP_HEIGHT);
                     }
 
                     // Viewport tracking: with content_scale, the viewport IS
@@ -8496,7 +8531,7 @@ void MoHAARunner::_process(double delta) {
                     if (win && vw > 0 && vh > 0) {
                         win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
                         win->set_content_scale_size(Vector2i(vw, vh));
-                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_IGNORE);
+                        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_KEEP_HEIGHT);
                     }
 
                     Godot_Renderer_SetViewportSize(vw > 0 ? vw : 640,
@@ -9650,7 +9685,7 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
         // only context where requestPointerLock() is allowed.  If we want
         // capture but the browser doesn't have it yet, re-assert the mode
         // NOW — inside the gesture context — so the lock actually activates.
-        if (pressed && !overlay_active) {
+    if (pressed && !overlay_active && !godot_webdriver_active()) {
             Input *inp = Input::get_singleton();
             if (inp && inp->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
                 inp->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);

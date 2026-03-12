@@ -143,6 +143,12 @@ cvar_t        *ui_gmboxspam;
 cvar_t        *ui_debugload;
 cvar_t        *sound_overlay;
 cvar_t        *ui_compass_scale;
+#ifdef GODOT_GDEXTENSION
+cvar_t        *ui_dmbox_scale;
+cvar_t        *ui_gmbox_scale;
+cvar_t        *ui_console_scale;
+cvar_t        *ui_minicon_scale;
+#endif
 
 static intro_stage_t intro_stage;
 static char          server_mapname[64];
@@ -5436,6 +5442,14 @@ void CL_InitializeUI(void)
     ui_NumHits             = Cvar_Get("ui_NumHits", "0", 0);
     ui_NumShotsFired       = Cvar_Get("ui_NumShotsFired", "0", 0);
     ui_gmboxspam           = Cvar_Get("ui_gmboxspam", "1", 0);
+
+#ifdef GODOT_GDEXTENSION
+    /* Text scale cvars — allow per-widget font scaling from the console. */
+    ui_dmbox_scale     = Cvar_Get("ui_dmbox_scale",  "1.0", CVAR_ARCHIVE);
+    ui_gmbox_scale     = Cvar_Get("ui_gmbox_scale",  "1.0", CVAR_ARCHIVE);
+    ui_console_scale   = Cvar_Get("ui_console_scale", "1.0", CVAR_ARCHIVE);
+    ui_minicon_scale   = Cvar_Get("ui_minicon_scale", "1.0", CVAR_ARCHIVE);
+#endif
 
     // Register ui_compass_scale early — getDefaultGMBoxRectangle/getDefaultDMBoxRectangle
     // dereference it during uie.Init() menu creation below.

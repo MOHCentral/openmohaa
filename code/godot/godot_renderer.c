@@ -342,6 +342,15 @@ static const int gr_numVidModes = (int)( sizeof(gr_vidModes) / sizeof(gr_vidMode
 static int gr_desktopWidth  = 1920;
 static int gr_desktopHeight = 1080;
 
+/* Physical screen/monitor resolution — set by MoHAARunner at startup.
+ * Used for widescreen aspect ratio adjustment when going fullscreen:
+ * the engine width is expanded to match the screen's aspect ratio
+ * so the cgame's hor+ FOV calculation widens the view instead of
+ * stretching.  Separate from gr_desktopWidth/Height which tracks
+ * the Godot window size for r_mode -2. */
+static int gr_screenWidth   = 0;
+static int gr_screenHeight  = 0;
+
 /* Actual Godot viewport size — tracked separately from stored_glconfig
  * so that glConfig (engine resolution) is never clobbered by per-frame
  * viewport sync.  MoHAARunner calls SetViewportSize each frame; the
@@ -753,9 +762,28 @@ static void GR_BeginRegistration( glconfig_t *config )
             h = gr_desktopHeight;
         }
 
-        /* Set glConfig to the ACTUAL resolution (OPM parity).  The engine
-         * UI framework, SCR_AdjustFrom640(), and all draw code use these
-         * values for coordinate scaling and widget layout. */
+        /* Widescreen support: when fullscreen, adjust the width to match
+         * the physical screen's aspect ratio.  This preserves the user's
+         * vertical resolution (render quality) while widening the view.
+         * The cgame's CG_CalcFov() hor+ calculation in cg_view.c uses
+         * refdef.width/height (derived from glConfig.vidWidth/Height) to
+         * compute a wider fov_x for widescreen displays. */
+        if ( fs && gr_screenWidth > 0 && gr_screenHeight > 0 ) {
+            float screen_aspect = (float)gr_screenWidth / (float)gr_screenHeight;
+            float engine_aspect = (float)w / (float)h;
+            if ( screen_aspect - engine_aspect > 0.01f ||
+                 engine_aspect - screen_aspect > 0.01f ) {
+                w = (int)((float)h * screen_aspect + 0.5f);
+                w &= ~1;  /* ensure even */
+                ri.Printf( PRINT_ALL,
+                    "[GodotRenderer] Widescreen adjust: %dx%d (screen %.0fx%.0f aspect %.3f)\n",
+                    w, h, (float)gr_screenWidth, (float)gr_screenHeight, screen_aspect );
+            }
+        }
+
+        /* Set glConfig to the (possibly widescreen-adjusted) resolution.
+         * The engine UI framework, SCR_AdjustFrom640(), and all draw code
+         * use these values for coordinate scaling and widget layout. */
         config->vidWidth     = w;
         config->vidHeight    = h;
         config->windowAspect = (float)w / (float)h;
@@ -1581,6 +1609,21 @@ static fontheader_t      gr_fonts[MAX_GR_FONTS];
 static int               gr_numFonts = 0;
 static float             gr_fontHeightScale  = 1.0f;
 static float             gr_fontGeneralScale = 1.0f;
+
+/* ----------------------------------------------------------------
+ *  Font scale accessors — allow per-widget text scaling.
+ *  Used by UI widgets (UIDMBox, UIGMBox, UIConsole) under
+ *  GODOT_GDEXTENSION to apply cvar-driven text scale.
+ * ---------------------------------------------------------------- */
+void Godot_Renderer_SetFontScale( float scale )
+{
+    gr_fontGeneralScale = scale;
+}
+
+float Godot_Renderer_GetFontScale( void )
+{
+    return gr_fontGeneralScale;
+}
 
 /* Clear all cached font data.  Called from GR_Shutdown so that a
  * vid_restart or game directory change (AA→SH→BT) forces fonts to be
@@ -3725,6 +3768,17 @@ void Godot_Renderer_SetDesktopResolution( int w, int h )
     if ( w > 0 && h > 0 ) {
         gr_desktopWidth  = w;
         gr_desktopHeight = h;
+    }
+}
+
+/* Set the physical screen/monitor resolution.  Called by MoHAARunner at
+ * startup.  GR_BeginRegistration uses this to adjust the engine width for
+ * widescreen aspect ratio when fullscreen is active. */
+void Godot_Renderer_SetScreenResolution( int w, int h )
+{
+    if ( w > 0 && h > 0 ) {
+        gr_screenWidth  = w;
+        gr_screenHeight = h;
     }
 }
 
