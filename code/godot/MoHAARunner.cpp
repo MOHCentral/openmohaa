@@ -5,6 +5,7 @@
 #include "godot_debug_render.h"
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/classes/input.hpp>
+#include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/classes/input_event_key.hpp>
 #include <godot_cpp/classes/input_event_mouse_motion.hpp>
 #include <godot_cpp/classes/input_event_mouse_button.hpp>
@@ -37,6 +38,7 @@
 #include <godot_cpp/classes/sub_viewport.hpp>
 #include <godot_cpp/classes/viewport_texture.hpp>
 #include <godot_cpp/classes/audio_server.hpp>
+#include <godot_cpp/classes/label.hpp>
 #include <godot_cpp/classes/os.hpp>
 #include <cstdio>
 #include <cstring>
@@ -49,10 +51,18 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 
+// Returns true only when the URL contains ?webdriver=1 (set by automated
+// test scripts).  Previous versions detected navigator.webdriver, but that
+// flag is also present whenever Chrome is launched with --remote-debugging-port
+// or DevTools protocol, which blocks pointer lock for normal gameplay.
 static bool godot_webdriver_active() {
     static int cached = -1;
     if (cached < 0) {
-        cached = emscripten_run_script_int("(typeof navigator !== 'undefined' && !!navigator.webdriver) ? 1 : 0");
+        cached = emscripten_run_script_int(
+            "(function(){"
+            "  try { return new URLSearchParams(window.location.search).get('webdriver') === '1' ? 1 : 0; }"
+            "  catch(e) { return 0; }"
+            "})()");
     }
     return cached != 0;
 }
@@ -443,6 +453,10 @@ extern "C" {
     // Game switch completed flag — from common.c (GODOT_GDEXTENSION)
     int  Godot_GetGameSwitchCompleted(void);
     void Godot_ClearGameSwitchCompleted(void);
+
+    // Loading screen force-render — from godot_renderer.c
+    void Godot_Renderer_SetForceRenderCallback(void (*cb)(void));
+    void Godot_Renderer_ResetEndFrameCount(void);
 }
 
 // ──────────────────────────────────────────────
@@ -520,6 +534,14 @@ static void Godot_ClearStaticRefCaches() {
 }
 
 static MoHAARunner* s_mohaa_runner_instance = nullptr;
+
+// C-linkage callback invoked by GR_EndFrame() during loading loops.
+// Routes through the global MoHAARunner instance to render intermediate frames.
+static void godot_loading_frame_callback(void) {
+    if (s_mohaa_runner_instance) {
+        s_mohaa_runner_instance->force_loading_frame_render();
+    }
+}
 
 godot::Ref<godot::ImageTexture> Godot_GetShaderTexture(int shader_handle) {
     if (s_mohaa_runner_instance) {
@@ -605,6 +627,7 @@ MoHAARunner::MoHAARunner() {
     hud_visible = true;
 
     s_mohaa_runner_instance = this;
+    Godot_Renderer_SetForceRenderCallback(godot_loading_frame_callback);
 }
 
 // ── Coordinate conversion helpers (Phase 7a) ──
@@ -641,6 +664,7 @@ static inline float clamp01(float v) {
 MoHAARunner::~MoHAARunner() {
     if (s_mohaa_runner_instance == this) {
         s_mohaa_runner_instance = nullptr;
+        Godot_Renderer_SetForceRenderCallback(nullptr);
     }
 
 #ifdef HAS_WEAPON_VIEWPORT_MODULE
@@ -1072,6 +1096,66 @@ void MoHAARunner::clear_godot_caches_for_game_switch(int target_game) {
 }
 
 // ──────────────────────────────────────────────
+//  Native loading screen (prevents black screen during first blocking Com_Frame)
+// ──────────────────────────────────────────────
+
+void MoHAARunner::show_native_loading_screen() {
+    if (loading_canvas_layer) return;  // already showing
+
+    loading_canvas_layer = memnew(CanvasLayer);
+    loading_canvas_layer->set_layer(250);  // above everything including gamma overlay (200)
+    loading_canvas_layer->set_name("NativeLoadingScreen");
+    add_child(loading_canvas_layer);
+
+    loading_bg_rect = memnew(ColorRect);
+    loading_bg_rect->set_color(Color(0.0f, 0.0f, 0.0f, 1.0f));
+    loading_bg_rect->set_anchors_preset(Control::PRESET_FULL_RECT);
+    loading_canvas_layer->add_child(loading_bg_rect);
+
+    // Add a "Loading..." label so the screen isn't just solid black.
+    // On web, force_draw doesn't composite mid-frame, so this label
+    // is the only visual feedback the user gets during long BSP builds.
+    Label *lbl = memnew(Label);
+    lbl->set_text("Loading...");
+    lbl->set_horizontal_alignment(HORIZONTAL_ALIGNMENT_CENTER);
+    lbl->set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER);
+    lbl->set_anchors_preset(Control::PRESET_FULL_RECT);
+    lbl->add_theme_font_size_override("font_size", 28);
+    lbl->add_theme_color_override("font_color", Color(0.8f, 0.8f, 0.8f, 1.0f));
+    loading_canvas_layer->add_child(lbl);
+}
+
+void MoHAARunner::hide_native_loading_screen() {
+    if (!loading_canvas_layer) return;
+
+    if (loading_bg_rect) {
+        loading_bg_rect->queue_free();
+        loading_bg_rect = nullptr;
+    }
+    loading_canvas_layer->queue_free();
+    loading_canvas_layer = nullptr;
+}
+
+void MoHAARunner::force_loading_frame_render() {
+    // Called from GR_EndFrame() during loading loops (multiple
+    // SCR_UpdateScreen calls within a single Com_Frame).  Transfers
+    // the current 2D command buffer to Godot canvas items and forces
+    // a synchronous frame render so the loading screen is visible.
+#ifdef __EMSCRIPTEN__
+    // On web, force_draw renders to the WebGL backbuffer but the browser
+    // only composites the backbuffer when the event loop returns — not
+    // mid-frame.  Each call adds unnecessary GPU work that slows down
+    // the CPU-bound loading process.  Skip force_draw and keep the native
+    // loading screen (with "Loading..." label) visible instead.
+    update_2d_overlay();
+#else
+    hide_native_loading_screen();
+    update_2d_overlay();
+    RenderingServer::get_singleton()->force_draw(false, 0.0);
+#endif
+}
+
+// ──────────────────────────────────────────────
 //  3D scene setup (Phase 7a)
 // ──────────────────────────────────────────────
 
@@ -1379,14 +1463,34 @@ void MoHAARunner::check_world_load() {
     if (!map_path || !map_path[0]) return;
 
     String new_bsp(map_path);
-    if (new_bsp == loaded_bsp_name) return;  // Same map already loaded
-
-    // Remove old BSP mesh if any
-    if (bsp_map_node) {
-        bsp_map_node->queue_free();
-        bsp_map_node = nullptr;
-        Godot_BSP_Unload();
+    if (new_bsp == loaded_bsp_name) {
+        bsp_load_pending = false;  // Clear in case we got here after a deferred load completed
+        return;  // Same map already loaded
     }
+
+    // ── Deferred BSP load: show loading screen one frame before heavy work ──
+    // On the first frame that detects a new map, we show the loading screen
+    // and return early.  Godot renders the loading screen, then on the NEXT
+    // frame we proceed with the blocking BSP build.  This prevents the
+    // screen from going black during the multi-second load on web.
+    if (!bsp_load_pending) {
+        bsp_load_pending = true;
+        // Free old BSP mesh NOW (one frame before the blocking BSP build)
+        // so Godot reclaims GPU/CPU memory at end of this frame.
+        // Without this, old and new BSP coexist during the build, which
+        // can exhaust the limited WASM heap on web.
+        if (bsp_map_node) {
+            bsp_map_node->queue_free();
+            bsp_map_node = nullptr;
+            static_model_root = nullptr;
+            Godot_BSP_Unload();
+        }
+        show_native_loading_screen();
+        UtilityFunctions::print(String("[MoHAA] Map change detected: ") + new_bsp +
+            String(" — showing loading screen, deferring BSP build to next frame."));
+        return;
+    }
+    bsp_load_pending = false;
 
     // Load new BSP geometry
     UtilityFunctions::print(String("[MoHAA] Loading BSP world: ") + new_bsp);
@@ -1558,6 +1662,10 @@ void MoHAARunner::check_world_load() {
     } else {
         UtilityFunctions::printerr("[MoHAA] Failed to load BSP world.");
     }
+
+    // BSP build finished — dismiss the loading screen so the engine's
+    // own 2D overlay (loading progress / menu) becomes visible.
+    hide_native_loading_screen();
 }
 
 // ──────────────────────────────────────────────
@@ -8230,6 +8338,20 @@ void MoHAARunner::_process(double delta) {
         return;
     }
 
+    // ── First-frame guard: ensure Godot renders one frame before any ─────────
+    // blocking Com_Frame().  Without this, a startup +map command causes
+    // Com_Frame() to block for the entire map load on the very first
+    // _process() call.  Since no frame has been rendered yet, the screen
+    // stays black for the whole duration.  By skipping Com_Frame() once
+    // and showing a native loading screen, we guarantee at least one
+    // rendered frame is visible before any heavy work begins.
+    if (!first_process_done) {
+        first_process_done = true;
+        show_native_loading_screen();
+        godot_jmpbuf_valid = false;
+        return;
+    }
+
     // ── Pre-frame mouse injection (web only) ──────────────────────────────────
     // MUST happen BEFORE Com_Frame() so that UI_Update() → ServiceEvents() sees
     // the correct cl.mousex/cl.mousey and cl.mouseButtons this frame.
@@ -8249,8 +8371,19 @@ void MoHAARunner::_process(double delta) {
     }
 #endif
 
+    Godot_Renderer_ResetEndFrameCount();
     Com_Frame();
+    Godot_Renderer_ResetEndFrameCount();
     godot_jmpbuf_valid = false;
+
+    // Dismiss the native loading screen once we've left the LOADING state
+    // and no deferred BSP load is pending.  During map transitions the
+    // loading screen stays visible so the user has visual feedback instead
+    // of a black screen while the heavy BSP build runs.
+    if (!bsp_load_pending && game_flow_state != GameFlowState::LOADING &&
+        game_flow_state != GameFlowState::BOOT) {
+        hide_native_loading_screen();
+    }
 
     // ── Check if a game switch just completed (switchgame console command) ──
     // Com_SwitchGame_f runs Com_GameRestart() inline during Com_Frame().
@@ -8301,6 +8434,17 @@ void MoHAARunner::_process(double delta) {
         if (godot_webdriver_active()) {
             should_capture = false;
         }
+        // During map transitions (LOADING/BOOT/DISCONNECTED), the browser
+        // document may be in a state that rejects requestPointerLock().
+        // Release capture to avoid flooding the console with
+        // WrongDocumentError / SecurityError which can cascade into
+        // std::terminate on Emscripten.  DISCONNECTED is included because
+        // map changes briefly transition through SS_DEAD before SS_LOADING.
+        if (game_flow_state == GameFlowState::LOADING ||
+            game_flow_state == GameFlowState::BOOT ||
+            game_flow_state == GameFlowState::DISCONNECTED) {
+            should_capture = false;
+        }
     #endif
 
         static int last_catchers = -1;
@@ -8335,11 +8479,18 @@ void MoHAARunner::_process(double delta) {
         // (Escape key, Alt-Tab, focus loss).  When that happens the actual
         // mouse mode reverts to VISIBLE even though mouse_captured is true.
         // Re-assert CAPTURED so Godot's JS layer will re-lock on the next
-        // user click.  This is cheap (just stores intent, no DOM call).
+        // user click.  Rate-limit to once per second to avoid flooding the
+        // browser with requestPointerLock() rejections during transient
+        // document states (map transitions, focus changes).
         else if (mouse_captured) {
-            Input *input = Input::get_singleton();
-            if (input && input->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
-                input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
+            static uint64_t last_reassert_msec = 0;
+            uint64_t now_msec = Time::get_singleton()->get_ticks_msec();
+            if (now_msec - last_reassert_msec >= 1000) {
+                Input *input = Input::get_singleton();
+                if (input && input->get_mouse_mode() != Input::MOUSE_MODE_CAPTURED) {
+                    input->set_mouse_mode(Input::MOUSE_MODE_CAPTURED);
+                    last_reassert_msec = now_msec;
+                }
             }
         }
 #endif
@@ -8474,7 +8625,11 @@ void MoHAARunner::_process(double delta) {
         int fs = 0, vw = 0, vh = 0;
         if (Godot_Renderer_ConsumeVidRestart(&fs, &vw, &vh)) {
             /* Renderer shader/model tables are rebuilt on vid_restart.
-               Drop handle-keyed caches so 2D/UI textures are re-resolved. */
+               Drop handle-keyed caches so 2D/UI textures are re-resolved.
+               Also clear loaded_bsp_name so check_world_load() forces a
+               full BSP rebuild with fresh materials — without this the old
+               BSP mesh stays in the scene graph with stale shader handles,
+               causing a black screen. */
             shader_textures.clear();
             s_shader_texture_loaded_names.clear();
             animmap_info.clear();
@@ -8487,7 +8642,43 @@ void MoHAARunner::_process(double delta) {
             s_sprite_tint_cache.clear();
             s_beam_tint_cache.clear();
             s_alpha_inv_tex_cache.clear();
+            loaded_bsp_name = "";  // Force BSP rebuild on next check_world_load()
 
+#ifdef __EMSCRIPTEN__
+            /* On web the browser/HTML page owns the canvas size and
+             * fullscreen state.  Calling window_set_mode(FULLSCREEN)
+             * without a user gesture throws a SecurityError that can
+             * cascade into std::terminate via Emscripten's C++ runtime.
+             * Calling window_set_size() resizes the <canvas> element
+             * which can break the CSS layout and invalidate the WebGL
+             * context, causing a black screen.
+             *
+             * Instead, only update the internal rendering resolution
+             * via content_scale — Godot handles the mapping from the
+             * engine resolution to the actual canvas size.  The cache
+             * clearing and BSP rebuild trigger above still apply. */
+            {
+                Window *win = get_window();
+                if (win && vw > 0 && vh > 0) {
+                    win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
+                    win->set_content_scale_size(Vector2i(vw, vh));
+                    win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_KEEP_HEIGHT);
+                }
+                Godot_Renderer_SetViewportSize(vw > 0 ? vw : 640,
+                                               vh > 0 ? vh : 480);
+
+                Godot_Client_ResolutionChange();
+
+                if (weapon_viewport && vw > 0 && vh > 0) {
+                    weapon_viewport->set_size(Vector2i(vw, vh));
+                }
+
+                vid_restart_grace_frames = 3;
+
+                UtilityFunctions::print(String("[MoHAA] vid_restart (web): engine=") +
+                    String::num_int64(vw) + String("x") + String::num_int64(vh));
+            }
+#else
             DisplayServer *ds = DisplayServer::get_singleton();
             if (ds) {
                 if (fs) {
@@ -8565,6 +8756,7 @@ void MoHAARunner::_process(double delta) {
                     String("x") +
                     String::num_int64(weapon_viewport ? weapon_viewport->get_size().y : 0));
             }
+#endif
         }
     }
 
@@ -9111,6 +9303,14 @@ void MoHAARunner::update_game_flow_state() {
     }
 
     if (new_state != game_flow_state) {
+        // Show loading screen immediately when entering LOADING state.
+        // On web, force_loading_frame_render doesn't hide it (force_draw
+        // can't present mid-frame), so this provides continuous visual
+        // feedback during the full map load + BSP build sequence.
+        if (new_state == GameFlowState::LOADING) {
+            show_native_loading_screen();
+        }
+
         // When entering IN_GAME from MAIN_MENU or LOADING, clear any residual
         // pause state — the 'paused' cvar can be left set from the in-game
         // menu that was open before the player navigated to the main menu.

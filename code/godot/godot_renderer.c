@@ -281,6 +281,27 @@ static refEntity_t scratch_entity;
 static int   scratch_bone_tag[5];
 static float scratch_bone_quat[5][4];
 
+/* ── Loading screen force-render callback ──
+ * During map loading, SCR_UpdateScreen() is called multiple times within a
+ * single Com_Frame().  Each call goes through BeginFrame → draw → EndFrame.
+ * Under Godot the stub EndFrame is a no-op, so none of these intermediate
+ * frames are ever presented.  We detect this by counting EndFrame calls per
+ * Com_Frame() cycle.  On the 2nd+ EndFrame, we invoke a callback that triggers
+ * an actual Godot frame render (update_2d_overlay + force_draw) so the loading
+ * screen is visible instead of a black screen. */
+static int  gr_endframe_count = 0;
+static void (*gr_force_render_callback)(void) = NULL;
+
+void Godot_Renderer_SetForceRenderCallback(void (*cb)(void))
+{
+    gr_force_render_callback = cb;
+}
+
+void Godot_Renderer_ResetEndFrameCount(void)
+{
+    gr_endframe_count = 0;
+}
+
 /* Per-entity skeleton pose tracking — mirrors tr.skel_index[] / tr.frame_skel_index
  * in the real renderer.  Prevents redundant SetPose calls within a single frame
  * while ensuring TIKI_Orientation always has a current pose to query. */
@@ -620,15 +641,29 @@ static void GR_Shutdown( qboolean destroyWindow )
 {
     ri.Printf( PRINT_ALL, "[GodotRenderer] Shutdown\n" );
 
-    /* Shut down the real renderer subsystems (shaders, images, models,
-     * fonts, terrain).  This must happen before gr_realRendererInited is
-     * reset so that R_Init() can be called cleanly from the next
-     * GR_BeginRegistration().  RE_Shutdown removes renderer commands
-     * (modellist, shaderlist, etc.) and sets tr.registered = qfalse. */
-    if ( gr_realRendererInited ) {
-        RE_Shutdown( destroyWindow );
-        gr_realRendererInited = 0;
-    }
+    /* Under Godot we intentionally keep the real renderer subsystems alive
+     * across vid_restart.  The shader text database, image system, model
+     * table, and font data are all resolution-independent — tearing them
+     * down and rebuilding via RE_Shutdown() + R_Init() is unnecessary and
+     * harmful:
+     *   - Leaks memory: old s_shaderText, shadertext_t hash entries,
+     *     backEndData, and image allocations are never freed before the
+     *     second R_Init() allocates replacements.
+     *   - Re-parses all .shader files from VFS (hundreds of FS_ReadFile
+     *     calls) — expensive and risky on web/Emscripten where memory is
+     *     limited and malloc failure in Z_TagMalloc is a NULL-deref crash.
+     *   - Causes crashes on the web platform specifically because the
+     *     full teardown + rebuild cycle exhausts or corrupts zone memory.
+     *
+     * By keeping gr_realRendererInited = 1, the next GR_BeginRegistration
+     * skips R_Init() entirely and just resolves the new resolution.  The
+     * real renderer's R_FindShader / R_FindShaderByName / R_FindModel
+     * continue to work because their data structures (tr.shaders[],
+     * s_shaderText, hashTable) are still intact.
+     *
+     * During final library unload, Com_Shutdown() → Cmd_Shutdown() removes
+     * renderer commands, and process exit reclaims all malloc'd memory.
+     * No explicit RE_Shutdown() call is needed. */
 
     GR_ModelInit();
     next_shader_handle = 1;
@@ -1006,6 +1041,16 @@ static void GR_EndFrame( int *frontEndMsec, int *backEndMsec )
 {
     if ( frontEndMsec ) *frontEndMsec = 0;
     if ( backEndMsec )  *backEndMsec  = 0;
+
+    gr_endframe_count++;
+
+    /* If this is the 2nd+ EndFrame within a single Com_Frame() call,
+     * we are inside a loading loop (SCR_UpdateScreen called repeatedly
+     * by UI_LoadResource / UI_TestUpdateScreen).  Invoke the callback
+     * so Godot actually presents the loading screen content. */
+    if ( gr_endframe_count > 1 && gr_force_render_callback ) {
+        gr_force_render_callback();
+    }
 }
 
 /* -------------------------------------------------------------------

@@ -2,7 +2,7 @@
  * godot_music.h — Music playback manager for the OpenMoHAA GDExtension.
  *
  * Manages music playback using Godot AudioStreamPlayer + AudioStreamMP3.
- * Loads music files from the engine VFS (sound/music/*.mp3) and handles
+ * Loads music files from the engine VFS (sound/music/ .mp3) and handles
  * the MOHAA music state machine: play, stop, crossfade, volume control,
  * current/fallback mood tracks, and triggered music.
  *

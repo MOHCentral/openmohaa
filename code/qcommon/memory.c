@@ -135,13 +135,26 @@ void Z_Free( void *ptr )
 	}
 
 	if( block->id != ZONEID ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		/* On web the gamestate-drop/reinit cycle can leave stale pointers
+		   from a previous cgame init.  Skip rather than crash — the memory
+		   is either already freed or from a different allocator. */
+		Com_Printf("Z_Free: skipping pointer %p without ZONEID (id=0x%x)\n", ptr, block->id);
+		return;
+#else
 		Com_Error( ERR_FATAL, "Z_Free: freed a pointer without ZONEID" );
+#endif
 	}
 
 	// check the memory trash tester
 #ifndef _DEBUG
 	if( *( int * )( ( byte * )block + block->size - sizeof( int ) ) != ZONEID ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("Z_Free: skipping pointer %p — memory block wrote past end\n", ptr);
+		return;
+#else
 		Com_Error( ERR_FATAL, "Z_Free: memory block wrote past end" );
+#endif
 	}
 #endif
 

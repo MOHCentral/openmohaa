@@ -832,7 +832,7 @@ static void SV_SendClientGameState( client_t *client ) {
     }
 
 	if ( client->state != CS_CONNECTED && g_gametype->integer == GT_SINGLE_PLAYER ) {
-		Com_Printf( "SV_SendClientGameState: Aborting\n" );
+		Com_Printf( "SV_SendClientGameState: Aborting (state=%d)\n", client->state );
 		return;
 	}
  	Com_DPrintf ("SV_SendClientGameState() for %s\n", client->name);
@@ -2153,6 +2153,7 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 		if ( cl->state != CS_ACTIVE && cl->messageAcknowledge > cl->gamestateMessageNum ) {
 			Com_DPrintf( "%s : dropped gamestate, resending\n", cl->name );
 			SV_SendClientGameState( cl );
+		} else {
 		}
 		return;
 	}

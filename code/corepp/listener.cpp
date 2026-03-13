@@ -579,10 +579,12 @@ void L_InitEvents(void)
     g_watch      = LISTENER_Cvar_Get("g_watch", "0", 0);
     g_eventstats = LISTENER_Cvar_Get("g_eventstats", "0", 0);
 
-#ifdef GODOT_GDEXTENSION
-    // Monolithic build: event definitions persist across map reloads
-    // because DataNodeList is consumed once by LoadEvents() and static
-    // constructors do not re-run.  Only load on the first call.
+#if defined(GODOT_GDEXTENSION) || (defined(CGAME_DLL) && defined(__EMSCRIPTEN__))
+    // Event definitions persist across map reloads because DataNodeList
+    // is consumed once by LoadEvents() and static constructors do not
+    // re-run.  On Emscripten, cgame.so is never truly unloaded (dlclose
+    // is a no-op), so the same constraint applies.  Only load on the
+    // first call.
     if (Event::NumEventCommands() <= 1) {
         Event::LoadEvents();
         ClassDef::BuildEventResponses();
@@ -591,6 +593,7 @@ void L_InitEvents(void)
     Event::LoadEvents();
     ClassDef::BuildEventResponses();
 #endif
+
 
     LL_Reset(&Event::EventQueue, next, prev);
 
@@ -641,11 +644,13 @@ void L_ShutdownEvents(void)
 
     L_ClearEventList();
 
-#ifdef GODOT_GDEXTENSION
-    // Monolithic build: DataNodeList is consumed once by LoadEvents()
-    // and cannot be rebuilt (static constructors only run at library load).
-    // Preserve commandList/eventDefList so subsequent L_InitEvents() calls
-    // (triggered by map reloads) have valid event data.
+#if defined(GODOT_GDEXTENSION) || (defined(CGAME_DLL) && defined(__EMSCRIPTEN__))
+    // DataNodeList is consumed once by LoadEvents() and cannot be rebuilt
+    // (static constructors only run at library load).  On Emscripten,
+    // cgame.so is never truly unloaded (dlclose is a no-op), so static
+    // constructors won't re-run.  Preserve commandList/eventDefList so
+    // subsequent L_InitEvents() calls (triggered by map reloads) have
+    // valid event data.
 #else
     Event::commandList.clear();
     Event::eventDefList.clear();
@@ -1671,7 +1676,8 @@ FindEventNum
 unsigned int Event::FindEventNum(const char *s)
 {
     command_t cmd(s, EV_NORMAL);
-    return commandList.findKeyIndex(cmd);
+    unsigned int result = commandList.findKeyIndex(cmd);
+    return result;
 }
 
 /*

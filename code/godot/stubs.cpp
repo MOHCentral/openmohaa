@@ -135,7 +135,20 @@ void *Sys_GetCGameAPI(void *parms) {
     GetCGameAPI_t getCGameAPI = NULL;
 
     if (cgame_library) {
-        Com_Printf("GDExtension: Sys_GetCGameAPI — already loaded\n");
+        // Already loaded — on map reload the engine calls Sys_UnloadCGame then
+        // Sys_GetCGameAPI again.  On Emscripten we intentionally keep cgame
+        // mapped (dlclose + dlopen blocks the main thread), so re-resolve the
+        // export symbol and return a fresh API pointer.
+        getCGameAPI = (GetCGameAPI_t)dlsym(cgame_library, "GetCGameAPI");
+        if (!getCGameAPI) getCGameAPI = (GetCGameAPI_t)dlsym(cgame_library, "_GetCGameAPI");
+        if (!getCGameAPI) {
+            getCGameAPI = (GetCGameAPI_t)dlsym(RTLD_DEFAULT, "GetCGameAPI");
+        }
+        if (getCGameAPI) {
+            Com_Printf("GDExtension: Sys_GetCGameAPI — reusing mapped library\n");
+            return (void *)getCGameAPI();
+        }
+        Com_Printf("GDExtension: Sys_GetCGameAPI — already loaded but symbol lookup failed\n");
         return NULL;
     }
 
@@ -309,13 +322,22 @@ void Sys_UnloadCGame(void) {
             // closing the library would unmap those code pages and crash
             // when the handlers run at process exit.
             Com_Printf("GDExtension: Sys_UnloadCGame — keeping cgame mapped (final shutdown)\n");
+#ifdef __EMSCRIPTEN__
+        } else {
+            // Web: NEVER dlclose cgame — Emscripten's dlopen blocks the main
+            // browser thread (emscripten_proxy_sync + pthread_cond_wait) which
+            // triggers std::terminate.  Keep the library mapped; Sys_GetCGameAPI
+            // will re-resolve the GetCGameAPI symbol on the next map load.
+            Com_Printf("GDExtension: Sys_UnloadCGame — keeping cgame mapped (web: dlclose/dlopen unsafe)\n");
+#else
         } else {
             // Map reload — unload so that the next Sys_GetCGameAPI
             // re-opens a fresh copy with all static data reinitialised.
             Com_Printf("GDExtension: Sys_UnloadCGame — closing cgame (map reload)\n");
             Sys_UnloadLibrary(cgame_library);
+            cgame_library = NULL;
+#endif
         }
-        cgame_library = NULL;
     }
 }
 

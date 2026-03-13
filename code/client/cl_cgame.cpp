@@ -548,7 +548,15 @@ void CL_ShutdownCGame( void ) {
 		re.FreeModels();
 	}
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	// On Emscripten, cgame.so is never truly unloaded (dlclose is a no-op).
+	// Its static data (Event::commandList, MEM_BlockAlloc blocks) persists
+	// and was allocated via cgi.Malloc → Z_TagMalloc(TAG_CGAME).
+	// Freeing TAG_CGAME here would invalidate those hash table entries,
+	// causing FindEventNum lookups to fail on subsequent map loads.
+#else
 	Z_FreeTags( TAG_CGAME );
+#endif
 }
 
 static int	FloatAsInt( float f ) {
@@ -839,6 +847,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->stopWatch					= &cls.stopwatch;
 	// FIXME
 	//cgi->pUnknownVar				= NULL;
+
 
 	cls.cgameStarted = qtrue;
 }

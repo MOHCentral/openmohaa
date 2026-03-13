@@ -202,6 +202,17 @@ private:
     std::array<bool, 10> mouse_poll_prev_buttons{};
     bool overlay_prev_frame = false;  // overlay state from end of last frame; used for pre-Com_Frame web mouse poll
     int vid_restart_grace_frames = 0;  // skip viewport sync for N frames after vid_restart
+
+    // Loading screen — prevents black screen during blocking Com_Frame.
+    // On the very first _process() call we skip Com_Frame() and show a native
+    // loading indicator so Godot renders one frame before any heavy work.
+    // Also shown during map transitions so the user sees feedback.
+    bool first_process_done = false;
+    CanvasLayer *loading_canvas_layer = nullptr;
+    ColorRect *loading_bg_rect = nullptr;
+    void show_native_loading_screen();
+    void hide_native_loading_screen();
+    bool bsp_load_pending = false;  // Deferred BSP load: show loading screen one frame before heavy work
     bool hud_visible = true;        // F9 toggles HUD overlay visibility
     bool debug_fog_off = false;     // F5 toggles fog off for debugging
     bool debug_notex = false;       // F8 toggles textures off for debugging
@@ -559,6 +570,10 @@ public:
     ~MoHAARunner();
 
     Ref<ImageTexture> get_shader_texture(int shader_handle); // Lazily load shader textures
+
+    // Force-render loading screen: called from engine's GR_EndFrame() callback
+    // during loading loops so Godot presents intermediate frames.
+    void force_loading_frame_render();
 
     void _ready() override;
     void _notification(int p_what);

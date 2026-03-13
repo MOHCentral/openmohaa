@@ -77,3 +77,18 @@ Complete rewrite of `godot_vfx.cpp` to fix visual parity issues with sprite effe
 - **Two rendering paths preserved:** (1) Engine-vert path via `Godot_ComputeSpriteQuad()` for sprites with pre-computed quad vertices; (2) Fallback billboard path using `BILLBOARD_ENABLED` + uniform scale for sprites without engine verts.
 - **Files changed:** `godot_vfx.cpp` (complete rewrite, ~790 lines). No other files modified.
 - **Poly effects unchanged:** `update_polys()` already uses `apply_shader_props_to_material()` with correct ADDITIVE/MULTIPLICATIVE handling, texture alpha fallback for unknown shaders, `FLAG_ALBEDO_FROM_VERTEX_COLOR`, and `BILLBOARD_DISABLED`.
+
+## Phase 40: Web Map Transition Fix (Z_FreeTags + cgame event system) ✅
+Fixed web (Emscripten) map transitions hanging on second CG_Init after a CG_Shutdown cycle.
+
+- [x] **Task 40.1:** Root cause analysis — `CL_ShutdownCGame()` calls `Z_FreeTags(TAG_CGAME)` which bulk-frees ALL zone memory allocated with `TAG_CGAME`. On Emscripten, `dlclose` is a no-op, so cgame.so is never unloaded and its static data persists — but the underlying zone memory backing `Event::commandList` (hash table entries + table array) is freed. On the next `CG_Init`, `FindEventNum("alias")` reads freed memory and returns 0, causing silent event processing failure and map load hang at `CA_LOADING`.
+- [x] **Task 40.2:** Traced the full allocation chain: `Event::commandList` → `con_arrayset<command_t>` → `Entry_allocator` (MEM_BlockAlloc) → `MEM_Alloc` → `cgi.Malloc` → `CL_CG_Malloc` → `Z_TagMalloc(size, TAG_CGAME)`. Table array: `ARRAYSET_Alloc` → safe wrapper → `cgi.Malloc` → `CL_CG_Malloc` → `Z_TagMalloc(size, TAG_CGAME)`.
+- [x] **Task 40.3:** Fix applied in `code/client/cl_cgame.cpp`: guarded `Z_FreeTags(TAG_CGAME)` with `#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)` to skip the bulk free on Emscripten where cgame.so is never truly unloaded. On native Linux, cgame.so IS properly unloaded via `dlclose`, so `Z_FreeTags` is appropriate there.
+- [x] **Task 40.4:** Verified fix with 10-rotation stress tests on both platforms — web E2E (mohdm1↔mohdm2, 10 rounds) and Linux headless (TestMapRotation.tscn, 10 rounds). Both PASS.
+
+### Key technical details (Phase 40):
+- **The server restart pattern:** During map transition, the server assigns a new `serverId`. On Emscripten, async VFS timing can cause the client to receive a gamestate with the old serverId, triggering a full CG_Shutdown + CG_Init cycle before the new serverId arrives and triggers a second CG_Shutdown + CG_Init. The first CG_Init works (TAG_CGAME memory intact); `CL_ShutdownCGame` frees TAG_CGAME; the second CG_Init fails because the commandList hash table entries are now dangling pointers.
+- **Why only Emscripten:** On native Linux, `dlclose(cgameLib)` truly unloads cgame.so, destroying all static data including `Event::commandList`. On next `dlopen` + `CG_Init`, everything is fresh. On Emscripten, `dlclose` is a no-op — the static `commandList` with its dangling pointers persists across CG_Shutdown/CG_Init cycles.
+- **Existing guards:** `L_ShutdownEvents()` under `GODOT_GDEXTENSION` already preserves `commandList` (skips `clear()`), and `L_InitEvents()` skips `LoadEvents()/BuildEventResponses()` if `NumEventCommands() > 1`. These were correct for the commandList-persistence design but insufficient without the TAG_CGAME memory backing.
+- **Files changed:** `code/client/cl_cgame.cpp` (1 line: guard `Z_FreeTags(TAG_CGAME)`).
+- **Test infrastructure:** `scripts/web-e2e/run-map-transition-e2e.mjs` (updated for `NUM_ROTATIONS` env var), `project/TestMapRotation.gd` + `TestMapRotation.tscn` (new headless Linux test scene).
