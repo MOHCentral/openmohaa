@@ -139,10 +139,16 @@ void *Sys_GetCGameAPI(void *parms) {
         // Sys_GetCGameAPI again.  On Emscripten we intentionally keep cgame
         // mapped (dlclose + dlopen blocks the main thread), so re-resolve the
         // export symbol and return a fresh API pointer.
-        getCGameAPI = (GetCGameAPI_t)dlsym(cgame_library, "GetCGameAPI");
-        if (!getCGameAPI) getCGameAPI = (GetCGameAPI_t)dlsym(cgame_library, "_GetCGameAPI");
+        getCGameAPI = (GetCGameAPI_t)Sys_LoadFunction(cgame_library, "GetCGameAPI");
+        if (!getCGameAPI) getCGameAPI = (GetCGameAPI_t)Sys_LoadFunction(cgame_library, "_GetCGameAPI");
         if (!getCGameAPI) {
-            getCGameAPI = (GetCGameAPI_t)dlsym(RTLD_DEFAULT, "GetCGameAPI");
+#ifdef _WIN32
+            void *hSelf = (void *)GetModuleHandle(NULL);
+#else
+            void *hSelf = dlopen(NULL, RTLD_NOW);
+#endif
+            if (hSelf)
+                getCGameAPI = (GetCGameAPI_t)Sys_LoadFunction(hSelf, "GetCGameAPI");
         }
         if (getCGameAPI) {
             Com_Printf("GDExtension: Sys_GetCGameAPI — reusing mapped library\n");
