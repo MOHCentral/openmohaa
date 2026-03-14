@@ -336,6 +336,8 @@ static void InitOpenGL( void )
 GL_CheckErrors
 ==================
 */
+#ifndef GODOT_GDEXTENSION
+/* Under Godot the no-op stub in tr_godot_gl_stubs.c is used instead. */
 void GL_CheckErrors( void ) {
 	int		err;
 	char	s[64];
@@ -373,6 +375,7 @@ void GL_CheckErrors( void ) {
 
 	ri.Error( ERR_FATAL, "GL_CheckErrors: %s", s );
 }
+#endif /* !GODOT_GDEXTENSION */
 
 
 /*
@@ -589,6 +592,8 @@ void RB_TakeScreenshotJPEG( int x, int y, int width, int height, char *fileName 
 RB_TakeScreenshotCmd
 ==================
 */
+#ifndef GODOT_GDEXTENSION
+/* Under Godot the no-op stub in tr_godot_gl_stubs.c is used instead. */
 const void *RB_TakeScreenshotCmd( const void *data ) {
 	const screenshotCommand_t	*cmd;
 
@@ -601,6 +606,7 @@ const void *RB_TakeScreenshotCmd( const void *data ) {
 
 	return (const void *)(cmd + 1);
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==================

@@ -859,13 +859,9 @@ void VM_Forced_Unload_Start(void) {
 void VM_Forced_Unload_Done(void) {
 }
 
-// GLimp_SpawnRenderThread, GLimp_RendererSleep, GLimp_WakeRenderer
-// are defined in renderergl1/tr_godot_gl_stubs.c — do not duplicate here.
-
-#ifndef _UNIX
-void GLimp_FrontEndSleep(void) {
-}
-#endif
+// GLimp_SpawnRenderThread, GLimp_RendererSleep, GLimp_WakeRenderer,
+// GLimp_FrontEndSleep are defined in renderergl1/tr_godot_gl_stubs.c
+// — do not duplicate here.
 
 // Clipboard — use a static buffer for Get since the engine expects the
 // pointer to remain valid until the next call.
@@ -923,10 +919,14 @@ const char *Sys_LV_ConvertString(const char *var) {
 void SetBelowNormalThreadPriority(void) {}
 void SetNormalThreadPriority(void) {}
 
-// CL_CDKeyValidate — the original client validates CD keys
+// CL_CDKeyValidate — cl_main.cpp has the real implementation but it
+// depends on CD key constants that may not compile cleanly everywhere.
+// The stub is only needed when the real one is guarded out.
+#ifndef GODOT_CDKEY_STUB_NOT_NEEDED
 qboolean CL_CDKeyValidate(const char *key, const char *checksum) {
     return qtrue;
 }
+#endif
 
 // R_ImageExists — Global symbol referenced by some shared code paths.
 // Forward to GR_ImageExists in godot_renderer.c which checks the shader table

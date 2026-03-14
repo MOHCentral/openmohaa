@@ -38,6 +38,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "be_interface.h"			//for botimport.Print
 #include "l_crc.h"
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build, qcommon/crc.c provides identical CRC
+ * functions. Suppress all definitions here to avoid duplicate symbols
+ * on linkers that don't support -z muldefs (wasm-ld, PE/COFF). */
+#else
+
 
 // FIXME: byte swap?
 
@@ -150,3 +156,5 @@ void CRC_ContinueProcessString(unsigned short *crc, char *data, int length)
 		*crc = (*crc << 8) ^ crctable[(*crc >> 8) ^ data[i]];
 	} //end for
 } //end of the function CRC_ProcessString
+
+#endif /* !GODOT_GDEXTENSION */

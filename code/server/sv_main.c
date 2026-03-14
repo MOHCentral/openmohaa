@@ -34,11 +34,20 @@ server_t		sv;					// local server
 //vm_t			*gvm = NULL;				// game virtual machine
 game_export_t	*ge = NULL;
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build these are owned by fgame/gamecvars.cpp. */
+extern cvar_t *sv_fps;
+#else
 cvar_t	*sv_fps;				// time rate for running non-clients
+#endif
 cvar_t	*sv_timeout;			// seconds without any message
 cvar_t	*sv_zombietime;			// seconds to sink messages after disconnect
 cvar_t	*sv_rconPassword;		// password for remote server commands
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_privatePassword;
+#else
 cvar_t	*sv_privatePassword;	// password for the privateClient slots
+#endif
 cvar_t	*sv_allowDownload;
 cvar_t	*sv_maxclients;
 
@@ -59,16 +68,29 @@ cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;
 cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_maplist;
+#else
 cvar_t	*sv_maplist;
+#endif
 cvar_t	*sv_drawentities;
 cvar_t	*sv_deeptracedebug;
 cvar_t	*sv_netprofile;
 cvar_t	*sv_netprofileoverlay;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_netoptimize;
+#else
 cvar_t	*sv_netoptimize;
+#endif
 cvar_t	*sv_netoptimize_vistime;
 cvar_t	*g_netoptimize;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *g_gametype;
+extern cvar_t *g_gametypestring;
+#else
 cvar_t	*g_gametype;
 cvar_t	*g_gametypestring;
+#endif
 cvar_t	*sv_chatter;
 cvar_t	*sv_gamename;
 cvar_t	*sv_location;

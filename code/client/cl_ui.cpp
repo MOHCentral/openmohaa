@@ -5877,6 +5877,8 @@ void UI_ClearResource(void)
 UI_LoadResource
 ====================
 */
+#ifndef GODOT_GDEXTENSION
+/* Under Godot the no-op stub in tr_godot_gl_stubs.c is used instead. */
 void UI_LoadResource(const char *name)
 {
     if (cls.loading == LOAD_PROGRESS_FALSE) {
@@ -5894,6 +5896,7 @@ void UI_LoadResource(const char *name)
 
     UI_TestUpdateScreen(33);
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ====================

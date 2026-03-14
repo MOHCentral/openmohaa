@@ -4879,6 +4879,10 @@ void CL_ShowIP_f(void) {
 bool CL_CDKeyValidate
 =================
 */
+#ifdef GODOT_GDEXTENSION
+/* Under Godot the no-op stub in stubs.cpp is used instead. */
+#define GODOT_CDKEY_STUB_NOT_NEEDED
+#else
 qboolean CL_CDKeyValidate( const char *key, const char *checksum ) {
 	char	ch;
 	byte	sum;
@@ -4938,6 +4942,7 @@ qboolean CL_CDKeyValidate( const char *key, const char *checksum ) {
 
 	return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 void TIKI_CG_Command_ProcessFile(char* filename, qboolean quiet, dtiki_t* curTiki)
 {

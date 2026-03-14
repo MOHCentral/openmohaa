@@ -30,10 +30,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/crc.h"
 #include "../qcommon/alias.h"
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build these are owned by fgame/debuglines.cpp. */
+extern debugline_t *DebugLines;
+extern int numDebugLines;
+extern debugstring_t *DebugStrings;
+extern int numDebugStrings;
+#else
 debugline_t *DebugLines;
 int numDebugLines;
 debugstring_t *DebugStrings;
 int numDebugStrings;
+#endif
 
 static int modelUserCount[ MAX_MODELS ];
 
