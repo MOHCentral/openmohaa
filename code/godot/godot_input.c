@@ -65,6 +65,7 @@ void Key_KeynameCompletion( void (*callback)(const char *s) )
  *  Under Godot, the display surface is owned by Godot itself.
  * ---------------------------------------------------------------- */
 
+#ifndef __EMSCRIPTEN__
 void GLimp_Init( qboolean fixedFunction )
 {
     Com_Printf( "[GodotInput] GLimp_Init (Godot owns the display)\n" );
@@ -91,6 +92,7 @@ void GLimp_SetGamma( unsigned char red[256], unsigned char green[256],
 void GLimp_Minimize( void )
 {
 }
+#endif
 #endif
 
 /* -------------------------------------------------------------------
