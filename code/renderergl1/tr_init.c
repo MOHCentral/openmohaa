@@ -823,6 +823,7 @@ screenshot [filename]
 Doesn't print the pacifier message if there is a second arg
 ==================
 */
+#ifndef GODOT_GDEXTENSION
 void R_ScreenShot_f(void) {
 	char	checkname[MAX_OSPATH];
 	static int	lastNumber = -1;
@@ -896,6 +897,7 @@ void R_ScreenShot_f(void) {
 		R_ResampledScreenShot(checkname, width, height);
 	}
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_ScreenShot_f) */
 
 /*
 ==================
@@ -962,6 +964,7 @@ void R_ScreenShotJPEG_f (void) {
 RB_TakeVideoFrameCmd
 ==================
 */
+#ifndef GODOT_GDEXTENSION
 const void *RB_TakeVideoFrameCmd( const void *data )
 {
 	const videoFrameCommand_t	*cmd;
@@ -1087,6 +1090,7 @@ void GL_SetDefaultState( void )
 	glState.fFogColor[2] = 0.0;
 	glState.fFogColor[3] = 1.0;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (RB_TakeVideoFrameCmd, GL_SetDefaultState) */
 
 /*
 ==================

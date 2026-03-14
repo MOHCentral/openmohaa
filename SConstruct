@@ -268,7 +268,8 @@ for d in src_dirs:
 # #ifndef GODOT_GDEXTENSION.  Stub rendering functions for un-compiled
 # modules live in tr_godot_gl_stubs.c.
 renderer_sources = [
-    # GL stubs FIRST — -z muldefs picks the first definition
+    # GL stubs — duplicates resolved by #ifndef GODOT_GDEXTENSION guards in real files
+    # (Linux also uses -z muldefs as a safety net; web relies solely on guards)
     "code/renderergl1/tr_godot_gl_stubs.c",
     # Data management modules
     "code/renderergl1/tr_init.c",
@@ -415,7 +416,9 @@ elif env["platform"] == "web":
     # -fwasm-exceptions would import __cpp_exception WebAssembly.Tag which
     # Godot's main module does not provide.
     env.Append(LINKFLAGS=["-fexceptions"])
-    env.Append(LINKFLAGS=["-Wl,-z,muldefs"])
+    # Note: wasm-ld does not support -z muldefs. Duplicate symbols between
+    # tr_godot_gl_stubs.c and real renderer files are resolved by
+    # #ifndef GODOT_GDEXTENSION guards in the real renderer source files.
     env.Append(CPPPATH=["code/thirdparty/zlib-1.3.1"])
     sources.extend([
         "code/thirdparty/zlib-1.3.1/adler32.c",

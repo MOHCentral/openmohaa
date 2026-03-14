@@ -2296,6 +2296,7 @@ void jpegDest (j_compress_ptr cinfo, byte* outfile, int size)
   dest->size = size;
 }
 
+#ifndef GODOT_GDEXTENSION
 void SaveJPG(char * filename, int quality, int image_width, int image_height, unsigned char *image_buffer) {
   /* This struct contains the JPEG compression parameters and pointers to
    * working space (which is allocated as needed by the JPEG library).
@@ -2400,6 +2401,7 @@ void SaveJPG(char * filename, int quality, int image_width, int image_height, un
 
   /* And we're done! */
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (SaveJPG) */
 #endif
 
 //===================================================================
@@ -2624,6 +2626,7 @@ image_t* R_RefreshImageFileOld(const char* name, qboolean mipmap, qboolean allow
 R_ImageExists
 ================
 */
+#ifndef GODOT_GDEXTENSION
 qboolean R_ImageExists(const char* name) {
     image_t* image;
     long int hash;
@@ -2646,6 +2649,7 @@ qboolean R_ImageExists(const char* name) {
 
     return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION — stub in stubs.cpp */
 
 /*
 ================

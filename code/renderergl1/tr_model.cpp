@@ -722,6 +722,7 @@ surfaceType_t skelSurface = SF_TIKI_SKEL;
 R_AddSkelSurfaces
 ==============
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddSkelSurfaces(trRefEntity_t *ent)
 {
     dtiki_t         *tiki;
@@ -944,6 +945,7 @@ void R_AddSkelSurfaces(trRefEntity_t *ent)
 
     // FIXME: setup LOD
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddSkelSurfaces) */
 
 /*
 =============
@@ -1024,6 +1026,7 @@ inline static void SkelWeightMorphGetXyz(skelWeight_t *weight, skelBoneCache_t *
 RB_SkelMesh
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void RB_SkelMesh(skelSurfaceGame_t *sf)
 {
     unsigned int       baseIndex, baseVertex;
@@ -1622,6 +1625,7 @@ void RB_StaticMesh(staticSurface_t *staticSurf)
 
     tess.vertexColorValid = qtrue;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (RB_SkelMesh, RB_StaticMesh) */
 
 /*
 =============
@@ -1790,6 +1794,7 @@ void R_GetFrame(refEntity_t *model, struct skelAnimFrame_s *newFrame)
 R_DebugSkeleton
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void R_DebugSkeleton(void)
 {
     int            i;
@@ -1821,6 +1826,7 @@ void R_DebugSkeleton(void)
         }
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_DebugSkeleton) */
 
 /*
 =============

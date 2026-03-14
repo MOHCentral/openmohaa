@@ -353,6 +353,7 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
 R_DlightTerrain
 ======================
 */
+#ifndef GODOT_GDEXTENSION
 int R_DlightTerrain(cTerraPatchUnpacked_t* surf, int dlightBits)
 {
 	int dlightMap;
@@ -373,6 +374,7 @@ int R_DlightTerrain(cTerraPatchUnpacked_t* surf, int dlightBits)
 
     return dlightMap;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_DlightTerrain) */
 
 /*
 ======================
@@ -423,6 +425,7 @@ static int R_CheckDlightSurface(msurface_t* surf, int dlightBits)
 R_CheckDlightTerrain
 ======================
 */
+#ifndef GODOT_GDEXTENSION
 int R_CheckDlightTerrain(cTerraPatchUnpacked_t* surf, int dlightBits)
 {
 	if (surf->frameCount == tr.frameCount) {
@@ -438,6 +441,7 @@ int R_CheckDlightTerrain(cTerraPatchUnpacked_t* surf, int dlightBits)
 	surf->drawinfo.dlightBits[tr.smpFrame] = 0;
 	return 0;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_CheckDlightTerrain) */
 
 /*
 ======================
@@ -481,6 +485,7 @@ static void R_AddWorldSurface( msurface_t *surf, int dlightBits ) {
 R_AddBrushModelSurfaces
 =================
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 	bmodel_t	*bmodel;
 	int			clip;
@@ -502,6 +507,7 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 		R_AddWorldSurface( bmodel->firstSurface + i, tr.currentEntity->needDlights );
 	}
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddBrushModelSurfaces) */
 
 
 /*
@@ -879,6 +885,7 @@ static void R_MarkLeaves (void) {
 R_AddWorldSurfaces
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddWorldSurfaces (void) {
 	if (!r_drawworld->integer) {
 		return;
@@ -922,6 +929,7 @@ void R_AddWorldSurfaces (void) {
 
 	R_UpdateLevelMarksSystem();
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddWorldSurfaces) */
 
 /* ================================================================
  *  Godot terrain-only BSP tree walk

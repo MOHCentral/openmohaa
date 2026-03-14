@@ -541,7 +541,10 @@ int Godot_BSP_GetStaticModelVertexColors(int index, int vertexOffset,
  *  Terrain patch accessors — from tr.world->terraPatches[]
  * ================================================================ */
 
-int Godot_BSP_GetTerrainPatchCount(void)
+/* Note: Godot_BSP_GetTerrainPatchCount is provided by godot_bsp_mesh.cpp
+ * (returns Godot-side mesh count). This accessor reads engine data for
+ * internal use only. */
+static int Godot_BSP_GetEngineTerrainPatchCount(void)
 {
     if (!tr.world) return 0;
     return tr.world->numTerraPatches;

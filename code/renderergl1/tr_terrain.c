@@ -70,11 +70,20 @@ typedef struct poolInfo_s {
 
 static int modeTable[8];
 
+#ifdef GODOT_GDEXTENSION
+/* Under GODOT_GDEXTENSION these are defined in navigation_bsp_load_terrain.cpp;
+ * use extern to avoid duplicate symbol errors with wasm-ld. */
+extern terraTri_t    *g_pTris;
+extern terrainVert_t *g_pVert;
+extern poolInfo_t g_tri;
+extern poolInfo_t g_vert;
+#else
 terraTri_t    *g_pTris;
 terrainVert_t *g_pVert;
 
 poolInfo_t g_tri;
 poolInfo_t g_vert;
+#endif /* GODOT_GDEXTENSION */
 
 /*
 ================
@@ -1314,6 +1323,7 @@ void R_MarkTerrainPatch(cTerraPatchUnpacked_t *pPatch)
 R_AddTerrainSurfaces
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddTerrainSurfaces()
 {
     int                    i;
@@ -1483,6 +1493,7 @@ qboolean R_TerrainHeightForPoly(cTerraPatchUnpacked_t *pPatch, polyVert_t *pVert
     );
     return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddTerrainSurfaces, R_TerrainHeightForPoly) */
 
 /*
 ================
@@ -1597,6 +1608,7 @@ void R_CraterTerrain(const vec3_t pos, const vec3_t dir, float fDepth, float fRa
 R_TerrainCrater_f
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_TerrainCrater_f(void)
 {
     vec3_t dir;
@@ -1615,6 +1627,7 @@ void R_TerrainCrater_f(void)
     R_CraterTerrain(tr.refdef.vieworg, dir, 256.0, 256.0);
     R_TerrainRestart_f();
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_TerrainCrater_f) */
 
 /*
 ================
@@ -1690,6 +1703,7 @@ R_SwapTerraPatch
 Swaps the patch on big-endian
 ====================
 */
+#ifndef GODOT_GDEXTENSION
 void R_SwapTerraPatch(cTerraPatch_t *pPatch)
 {
 #ifdef Q3_BIG_ENDIAN
@@ -1717,6 +1731,7 @@ void R_SwapTerraPatch(cTerraPatch_t *pPatch)
     }
 #endif
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_SwapTerraPatch) */
 
 /* ================================================================
  *  Godot terrain visibility accessors
