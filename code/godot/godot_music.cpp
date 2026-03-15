@@ -17,6 +17,7 @@
 #include <godot_cpp/variant/utility_functions.hpp>
 #include <godot_cpp/variant/string.hpp>
 
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <cmath>

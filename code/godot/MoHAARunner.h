@@ -189,6 +189,7 @@ private:
 
     // Track server state for change detection (signals)
     int last_server_state = 0;   // SS_DEAD
+    int last_client_state = 0;   // CA_UNINITIALIZED
     String last_map_name;
 
     // Game flow state machine (Phase 261)

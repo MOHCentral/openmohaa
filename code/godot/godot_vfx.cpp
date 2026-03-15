@@ -31,6 +31,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <unordered_map>
+#include <cstdio>
 #include <unordered_set>
 #include <vector>
 #include <cstring>

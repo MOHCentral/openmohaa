@@ -38,13 +38,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "be_interface.h"			//for botimport.Print
 #include "l_crc.h"
 
-#ifdef GODOT_GDEXTENSION
-/* In the monolithic Godot build, qcommon/crc.c provides identical CRC
- * functions. Suppress all definitions here to avoid duplicate symbols
- * on linkers that don't support -z muldefs (wasm-ld, PE/COFF). */
-#else
-
-
 // FIXME: byte swap?
 
 // this is a 16 bit, non-reflected CRC using the polynomial 0x1021
@@ -53,6 +46,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define CRC_INIT_VALUE	0xffff
 #define CRC_XOR_VALUE	0x0000
+
+#ifndef GODOT_GDEXTENSION
+/* In the monolithic Godot build, qcommon/crc.c provides crctable,
+ * CRC_Init, CRC_ProcessByte, CRC_Value. Suppress only those duplicates
+ * here; CRC_ProcessString and CRC_ContinueProcessString are unique to
+ * botlib and must remain available. */
 
 unsigned short crctable[257] =
 {
@@ -120,6 +119,15 @@ unsigned short CRC_Value(unsigned short crcvalue)
 {
 	return crcvalue ^ CRC_XOR_VALUE;
 } //end of the function CRC_Value
+#endif /* !GODOT_GDEXTENSION — duplicates of qcommon/crc.c end here */
+
+#ifdef GODOT_GDEXTENSION
+/* Under Godot, CRC_Init/CRC_Value/crctable come from qcommon/crc.c.
+ * Declare them so CRC_ProcessString can call them. */
+extern void CRC_Init(unsigned short *crcvalue);
+extern unsigned short CRC_Value(unsigned short crcvalue);
+extern unsigned short crctable[257];
+#endif
 //===========================================================================
 //
 // Parameter:				-
@@ -156,5 +164,3 @@ void CRC_ContinueProcessString(unsigned short *crc, char *data, int length)
 		*crc = (*crc << 8) ^ crctable[(*crc >> 8) ^ data[i]];
 	} //end for
 } //end of the function CRC_ProcessString
-
-#endif /* !GODOT_GDEXTENSION */

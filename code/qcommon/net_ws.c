@@ -30,33 +30,42 @@ extern void opm_ws_close(void);
 extern int  opm_ws_send(const void *data, int length);
 extern int  opm_ws_recv(void *data, int maxlen);
 extern int  opm_ws_status(void);
+extern int  opm_ws_is_secure(void);
 
 static cvar_t  *net_ws_relay = NULL;
 static qboolean ws_was_connected = qfalse;
+static int      ws_last_reconnect_time = 0;
+static int      ws_last_drop_warning = 0;
+static int      ws_dropped_packets = 0;
+
+#define WS_RECONNECT_INTERVAL_MS  5000  /* retry relay connection every 5 s */
+#define WS_DROP_WARNING_INTERVAL  5000  /* throttle "packet dropped" warnings */
+
+/* Forward declarations */
+static void NET_WS_Status_f(void);
 
 /*
  * Build a WebSocket URL from the cvar value.
  *
- * Two accepted formats (the cvar never stores the scheme because the Quake
- * command parser treats // as a comment delimiter):
+ * The cvar never stores the scheme because the Quake command parser
+ * treats // as a comment delimiter.  The scheme is determined by
+ * querying the browser's page protocol via opm_ws_is_secure():
  *
- *   host:port          →  ws://host:port        (legacy LAN/direct relay)
- *   host/path          →  wss://host/path        (HTTPS reverse-proxy relay)
- *   host:port/path     →  wss://host:port/path   (HTTPS with non-standard port)
+ *   HTTPS page  →  wss://...
+ *   HTTP  page  →  ws://...
  *
- * Rule: if the value contains a '/' it is a path-based (TLS) endpoint.
+ * Accepted cvar formats:
+ *   host:port          →  ws(s)://host:port       (direct relay)
+ *   host/path          →  ws(s)://host/path        (reverse-proxy relay)
+ *   host:port/path     →  ws(s)://host:port/path   (non-standard port proxy)
+ *
  * Returns a pointer to a static buffer — valid until the next call.
  */
 static const char *NET_WS_BuildURL(const char *hostport)
 {
     static char url[512];
-    if (strchr(hostport, '/')) {
-        /* Path present → secure WebSocket via HTTPS reverse-proxy */
-        Com_sprintf(url, sizeof(url), "wss://%s", hostport);
-    } else {
-        /* host:port only → plain WebSocket (LAN / direct connection) */
-        Com_sprintf(url, sizeof(url), "ws://%s", hostport);
-    }
+    const char *scheme = opm_ws_is_secure() ? "wss" : "ws";
+    Com_sprintf(url, sizeof(url), "%s://%s", scheme, hostport);
     return url;
 }
 
@@ -67,6 +76,8 @@ static const char *NET_WS_BuildURL(const char *hostport)
 void NET_WS_Init(void)
 {
     net_ws_relay = Cvar_Get("net_ws_relay", "", CVAR_ARCHIVE);
+
+    Cmd_AddCommand("net_ws_status", NET_WS_Status_f);
 
     if (net_ws_relay->string[0]) {
         const char *url = NET_WS_BuildURL(net_ws_relay->string);
@@ -109,7 +120,20 @@ void NET_WS_SendPacket(int length, const void *data, netadr_t to)
     }
 
     if (!opm_ws_status()) {
-        return; /* Not connected — silently drop */
+        ws_dropped_packets++;
+        /* Throttled warning so the console isn't spammed */
+        int now = Sys_Milliseconds();
+        if (now - ws_last_drop_warning > WS_DROP_WARNING_INTERVAL) {
+            ws_last_drop_warning = now;
+            if (net_ws_relay && net_ws_relay->string[0]) {
+                Com_Printf("NET_WS: Relay not connected — %d packet(s) dropped (relay=%s)\n",
+                           ws_dropped_packets, net_ws_relay->string);
+            } else {
+                Com_Printf("NET_WS: No relay configured — %d packet(s) dropped. Set net_ws_relay to connect.\n",
+                           ws_dropped_packets);
+            }
+        }
+        return;
     }
 
     if (length + WS_ADDR_HEADER_SIZE > (int)sizeof(buf)) {
@@ -184,10 +208,22 @@ void NET_WS_Poll(void)
     qboolean connected = opm_ws_status() ? qtrue : qfalse;
     if (connected && !ws_was_connected) {
         Com_Printf("NET_WS: Connected to relay\n");
+        ws_dropped_packets = 0; /* reset counter on successful connect */
     } else if (!connected && ws_was_connected) {
         Com_Printf("NET_WS: Disconnected from relay\n");
     }
     ws_was_connected = connected;
+
+    /* Auto-reconnect: if relay is configured but not connected, retry periodically */
+    if (!connected && net_ws_relay && net_ws_relay->string[0]) {
+        int now = Sys_Milliseconds();
+        if (now - ws_last_reconnect_time > WS_RECONNECT_INTERVAL_MS) {
+            ws_last_reconnect_time = now;
+            const char *url = NET_WS_BuildURL(net_ws_relay->string);
+            opm_ws_open(url);
+            Com_Printf("NET_WS: Auto-reconnecting to relay %s\n", url);
+        }
+    }
 
     /* Drain the receive queue */
     while (1) {
@@ -203,6 +239,27 @@ void NET_WS_Poll(void)
             break;
         }
     }
+}
+
+/*
+ * NET_WS_Status_f — Console command: print relay connection diagnostics.
+ */
+static void NET_WS_Status_f(void)
+{
+    if (!net_ws_relay || !net_ws_relay->string[0]) {
+        Com_Printf("NET_WS: No relay configured (net_ws_relay is empty)\n");
+        Com_Printf("  Set it with: set net_ws_relay <host:port> or <host/path>\n");
+        return;
+    }
+
+    const char *url = NET_WS_BuildURL(net_ws_relay->string);
+    qboolean connected = opm_ws_status() ? qtrue : qfalse;
+
+    Com_Printf("NET_WS Relay Status:\n");
+    Com_Printf("  Cvar:      net_ws_relay = \"%s\"\n", net_ws_relay->string);
+    Com_Printf("  URL:       %s\n", url);
+    Com_Printf("  Connected: %s\n", connected ? "YES" : "NO");
+    Com_Printf("  Dropped:   %d packet(s)\n", ws_dropped_packets);
 }
 
 #endif /* GODOT_GDEXTENSION && __EMSCRIPTEN__ */

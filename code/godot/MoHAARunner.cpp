@@ -263,6 +263,7 @@ extern "C" {
 
     // Client diagnostics (Phase 6 debug) — from godot_client_accessors.cpp
     int  Godot_Client_GetState(void);
+    const char *Godot_Client_GetMapName(void);
     int  Godot_Client_GetKeyCatchers(void);
     int  Godot_Client_GetGuiMouse(void);
     int  Godot_Client_GetStartStage(void);
@@ -8926,19 +8927,29 @@ void MoHAARunner::_process(double delta) {
     // ── State change detection for signals (Task 2.5.4) ──
     if (initialized) {
         int cur_state = Godot_GetServerState();
+        int cl_state = Godot_Client_GetState();
         const char *cur_map_raw = Godot_GetMapName();
         godot::String cur_map(cur_map_raw ? cur_map_raw : "");
 
-        // Detect map loaded when gameplay becomes active or when the first
-        // non-empty map name appears after init. Startup +map/+devmap can
-        // complete during Com_Init(), so a pure state-transition check can
-        // miss the initial load entirely.
-        if (cur_state == 3 && !cur_map.is_empty() &&
-            (last_server_state != 3 || last_map_name != cur_map)) {
+        // For remote server connections (no local listen server),
+        // sv.state stays 0 (SS_DEAD). Use client map name instead.
+        if (cur_map.is_empty() && cl_state >= 6) {  // CA_LOADING=6 or higher
+            const char *cl_map_raw = Godot_Client_GetMapName();
+            if (cl_map_raw && cl_map_raw[0]) {
+                cur_map = godot::String(cl_map_raw);
+            }
+        }
+
+        // Map is loaded when either:
+        //   - Local server: sv.state == SS_GAME (3) with map name
+        //   - Remote client: clc.state == CA_ACTIVE (8) with map name
+        bool map_active = (cur_state == 3 || cl_state == 8) && !cur_map.is_empty();
+        bool was_active = (last_server_state == 3 || last_client_state == 8) && !last_map_name.is_empty();
+
+        if (map_active && (!was_active || last_map_name != cur_map)) {
             UtilityFunctions::print(godot::String("[MoHAA] Map loaded: ") + cur_map);
 
             // Dump client diagnostics once after map load
-            int cl_state = Godot_Client_GetState();
             int catchers = Godot_Client_GetKeyCatchers();
             int gui_mouse = Godot_Client_GetGuiMouse();
             int start_stage = Godot_Client_GetStartStage();
@@ -8964,13 +8975,14 @@ void MoHAARunner::_process(double delta) {
             }
         }
 
-        // Detect map unloaded: was in SS_GAME, now not
-        else if (last_server_state == 3 && cur_state != 3) {
+        // Detect map unloaded: was active, now not
+        else if (was_active && !map_active) {
             UtilityFunctions::print("[MoHAA] Map unloaded.");
             emit_signal("map_unloaded");
         }
 
         last_server_state = cur_state;
+        last_client_state = cl_state;
         last_map_name = cur_map;
     }
 }

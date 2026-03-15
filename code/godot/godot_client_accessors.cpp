@@ -18,6 +18,12 @@ int Godot_Client_GetState(void) {
     return (int)clc.state;
 }
 
+/* Return the client-side map name (from CS_SERVERINFO).
+ * Non-empty when connected to a remote or local server with an active map. */
+const char *Godot_Client_GetMapName(void) {
+    return cl.mapname;
+}
+
 int Godot_Client_GetKeyCatchers(void) {
     return cls.keyCatchers;
 }
