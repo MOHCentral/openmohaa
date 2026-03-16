@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 
-sys.setrecursionlimit(5000)
+sys.setrecursionlimit(10000)
 
 env = SConscript("../godot-cpp/SConstruct")
 
