@@ -6,78 +6,128 @@ import traceback
 
 sys.setrecursionlimit(10000)
 
-# ── RecursionError diagnostic — monkey-patch scons_subst to capture traceback ──
+# ── RecursionError diagnostic — comprehensive monkey-patch ──
+# Previous attempts patching SCons.Subst.scons_subst didn't catch the error
+# because SCons.Action does 'from SCons.Subst import scons_subst' (local copy).
+# This time we patch:
+#   1. StringSubber.substitute/expand (the ACTUAL recursive methods)
+#   2. SCons.Action module's local scons_subst/scons_subst_list references
+#   3. faulthandler to dump all thread stacks on crash
 if sys.platform == "win32":
+    import faulthandler
+    faulthandler.enable(file=sys.stderr)
+
+    _diag_printed = [False]
+
+    def _print_recursion_diag(location, frame_info=""):
+        if _diag_printed[0]:
+            return
+        _diag_printed[0] = True
+        sys.setrecursionlimit(sys.getrecursionlimit() + 1000)
+        print("=" * 60, file=sys.stderr, flush=True)
+        print(f"RECURSION detected in: {location}", file=sys.stderr, flush=True)
+        if frame_info:
+            print(f"  context: {frame_info}", file=sys.stderr, flush=True)
+        traceback.print_exc(limit=200, file=sys.stderr)
+        print("=" * 60, file=sys.stderr, flush=True)
+
     try:
         import SCons.Subst as _SSubst
-        _orig_scons_subst = _SSubst.scons_subst
-        _diag_printed = [False]
 
-        def _diag_scons_subst(*args, **kwargs):
+        # Patch the actual recursive class methods
+        _orig_substitute = _SSubst.StringSubber.substitute
+        _orig_expand = _SSubst.StringSubber.expand
+        def _diag_substitute(self, args, lvars):
             try:
-                return _orig_scons_subst(*args, **kwargs)
+                return _orig_substitute(self, args, lvars)
             except RecursionError:
-                if not _diag_printed[0]:
-                    _diag_printed[0] = True
-                    sys.setrecursionlimit(sys.getrecursionlimit() + 500)
-                    print("=" * 60, file=sys.stderr, flush=True)
-                    print("RECURSION in scons_subst:", file=sys.stderr, flush=True)
-                    if args:
-                        print(f"  input: {repr(args[0])[:2000]}", file=sys.stderr, flush=True)
-                    if len(args) > 1:
-                        env_arg = args[1]
-                        if hasattr(env_arg, 'Dictionary'):
-                            d = env_arg.Dictionary()
-                            for k in ('CCCOM','SHCCCOM','CXXCOM','SHCXXCOM','_CCCOMCOM',
-                                       'CPPFLAGS','_CPPDEFFLAGS','_CPPINCFLAGS'):
-                                if k in d:
-                                    print(f"  {k} = {repr(d[k])[:500]}", file=sys.stderr, flush=True)
-                    traceback.print_exc(limit=200, file=sys.stderr)
-                    print("=" * 60, file=sys.stderr, flush=True)
+                _print_recursion_diag("StringSubber.substitute",
+                    f"args={repr(args)[:500]}")
                 raise
-
-        _SSubst.scons_subst = _diag_scons_subst
-        # Also patch scons_subst_list (used for command-line arg splitting)
-        _orig_scons_subst_list = _SSubst.scons_subst_list
-        def _diag_scons_subst_list(*args, **kwargs):
+        def _diag_expand(self, s, lvars):
             try:
-                return _orig_scons_subst_list(*args, **kwargs)
+                return _orig_expand(self, s, lvars)
             except RecursionError:
-                if not _diag_printed[0]:
-                    _diag_printed[0] = True
-                    sys.setrecursionlimit(sys.getrecursionlimit() + 500)
-                    print("=" * 60, file=sys.stderr, flush=True)
-                    print("RECURSION in scons_subst_list:", file=sys.stderr, flush=True)
-                    if args:
-                        print(f"  input: {repr(args[0])[:2000]}", file=sys.stderr, flush=True)
-                    traceback.print_exc(limit=200, file=sys.stderr)
-                    print("=" * 60, file=sys.stderr, flush=True)
+                _print_recursion_diag("StringSubber.expand",
+                    f"s={repr(s)[:500]}")
+                raise
+        _SSubst.StringSubber.substitute = _diag_substitute
+        _SSubst.StringSubber.expand = _diag_expand
+
+        # Patch module-level functions
+        _orig_scons_subst = _SSubst.scons_subst
+        def _diag_scons_subst(*a, **kw):
+            try:
+                return _orig_scons_subst(*a, **kw)
+            except RecursionError:
+                _print_recursion_diag("scons_subst", f"input={repr(a[0])[:500]}" if a else "")
+                raise
+        _SSubst.scons_subst = _diag_scons_subst
+
+        _orig_scons_subst_list = _SSubst.scons_subst_list
+        def _diag_scons_subst_list(*a, **kw):
+            try:
+                return _orig_scons_subst_list(*a, **kw)
+            except RecursionError:
+                _print_recursion_diag("scons_subst_list", f"input={repr(a[0])[:500]}" if a else "")
                 raise
         _SSubst.scons_subst_list = _diag_scons_subst_list
 
-        # Patch CommandAction.execute as a fallback catcher
+        # CRITICAL: Also patch the LOCAL copies in SCons.Action
         import SCons.Action as _SAction
-        if hasattr(_SAction, 'CommandAction'):
-            _orig_cmd_execute = _SAction.CommandAction.execute
-            def _diag_cmd_execute(self, target, source, env, *a, **kw):
-                try:
-                    return _orig_cmd_execute(self, target, source, env, *a, **kw)
-                except RecursionError:
-                    if not _diag_printed[0]:
-                        _diag_printed[0] = True
-                        sys.setrecursionlimit(sys.getrecursionlimit() + 500)
-                        print("=" * 60, file=sys.stderr, flush=True)
-                        print("RECURSION in CommandAction.execute:", file=sys.stderr, flush=True)
-                        print(f"  cmd: {repr(self.cmd_list)[:2000]}", file=sys.stderr, flush=True)
-                        print(f"  target: {target}", file=sys.stderr, flush=True)
-                        traceback.print_exc(limit=200, file=sys.stderr)
-                        print("=" * 60, file=sys.stderr, flush=True)
-                    raise
-            _SAction.CommandAction.execute = _diag_cmd_execute
+        _SAction.scons_subst = _diag_scons_subst
+        _SAction.scons_subst_list = _diag_scons_subst_list
 
-        print("[diag] Patched scons_subst + scons_subst_list + CommandAction.execute for RecursionError capture", flush=True)
+        # Patch Environment.subst too
+        import SCons.Environment as _SEnv
+        if hasattr(_SEnv.Base, 'subst'):
+            _orig_env_subst = _SEnv.Base.subst
+            def _diag_env_subst(self, string, *a, **kw):
+                try:
+                    return _orig_env_subst(self, string, *a, **kw)
+                except RecursionError:
+                    _print_recursion_diag("Environment.subst", f"input={repr(string)[:500]}")
+                    raise
+            _SEnv.Base.subst = _diag_env_subst
+
+        # Patch CommandAction.execute and __call__
+        if hasattr(_SAction, 'CommandAction'):
+            _orig_cmd_call = _SAction.CommandAction.__call__
+            def _diag_cmd_call(self, target, source, env, *a, **kw):
+                try:
+                    return _orig_cmd_call(self, target, source, env, *a, **kw)
+                except RecursionError:
+                    _print_recursion_diag("CommandAction.__call__",
+                        f"cmd={repr(self.cmd_list)[:500]} target={target}")
+                    raise
+            _SAction.CommandAction.__call__ = _diag_cmd_call
+
+        # Patch Node.build as the outermost catch
+        import SCons.Node as _SNode
+        _orig_node_build = _SNode.Node.build
+        def _diag_node_build(self, **kw):
+            try:
+                return _orig_node_build(self, **kw)
+            except RecursionError:
+                _print_recursion_diag("Node.build", f"node={self}")
+                raise
+        _SNode.Node.build = _diag_node_build
+
+        # Patch Executor.__call__
+        import SCons.Executor as _SExec
+        _orig_exec_call = _SExec.Executor.__call__
+        def _diag_exec_call(self, target, **kw):
+            try:
+                return _orig_exec_call(self, target, **kw)
+            except RecursionError:
+                _print_recursion_diag("Executor.__call__", f"target={target}")
+                raise
+        _SExec.Executor.__call__ = _diag_exec_call
+
+        print("[diag] Patched StringSubber + Action + Environment + Node + Executor for RecursionError", flush=True)
     except Exception as e:
         print(f"[diag] Failed to patch SCons: {e}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
 
 env = SConscript("../godot-cpp/SConstruct")
 
