@@ -532,29 +532,46 @@ extern "C" void Godot_Music_Update(float delta)
     }
 
     /* ── Handle triggered music ── */
+    static char s_trig_last_track[MUSIC_MAX_PATH] = {0};
+    static bool s_trig_last_failed = false;
+
     int trig_action = Godot_Sound_GetTriggeredAction();
     if (trig_action != GR_TRIG_NONE && s_triggered_player) {
         switch (trig_action) {
         case GR_TRIG_SETUP:
-            /* Just store — don't auto-play */
+            /* Just store — don't auto-play; reset failure state for new setup */
+            s_trig_last_failed = false;
+            s_trig_last_track[0] = '\0';
             break;
         case GR_TRIG_START: {
             const char *tname = Godot_Sound_GetTriggeredName();
             if (tname && tname[0]) {
+                /* Skip if we already failed to load this exact track */
+                if (s_trig_last_failed && strcmp(s_trig_last_track, tname) == 0) {
+                    break;
+                }
+                strncpy(s_trig_last_track, tname, MUSIC_MAX_PATH - 1);
+                s_trig_last_track[MUSIC_MAX_PATH - 1] = '\0';
+
                 Ref<AudioStreamMP3> stream = load_music_from_vfs(tname);
                 if (stream.is_valid()) {
+                    s_trig_last_failed = false;
                     int loop_count = Godot_Sound_GetTriggeredLoopCount();
                     stream->set_loop(loop_count != 0);
                     s_triggered_player->set_stream(stream);
                     s_triggered_player->set_volume_db(
                         linear_to_db(s_master_volume));
                     s_triggered_player->play();
+                } else {
+                    s_trig_last_failed = true;
                 }
             }
             break;
         }
         case GR_TRIG_STOP:
             s_triggered_player->stop();
+            s_trig_last_failed = false;
+            s_trig_last_track[0] = '\0';
             break;
         case GR_TRIG_PAUSE:
             s_triggered_player->set_stream_paused(true);

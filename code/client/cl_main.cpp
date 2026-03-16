@@ -2697,18 +2697,43 @@ void CL_Frame ( int msec ) {
 #endif
 
 	if (CL_FinishedIntro()) {
+#ifdef GODOT_GDEXTENSION
+		/* Under Godot, UI_MenuEscape("main") fails silently when menu
+		   .urc files aren't loaded (e.g. web skip mode).  Without this
+		   guard the block fires every frame, spamming music-load warnings
+		   and keeping the screen black.  Try once per disconnect. */
+		static qboolean s_disconnected_menu_attempted = qfalse;
+#endif
 		if (clc.state == CA_DISCONNECTED) {
 			if (!UI_MenuActive() && !com_sv_running->integer) {
+#ifdef GODOT_GDEXTENSION
+				if (!s_disconnected_menu_attempted) {
+					s_disconnected_menu_attempted = qtrue;
+					S_StopAllSounds2(qtrue);
+					S_TriggeredMusic_PlayIntroMusic();
+					UI_MenuEscape("main");
+				}
+#else
 				// if disconnected, bring up the menu
 				S_StopAllSounds2(qtrue);
 				S_TriggeredMusic_PlayIntroMusic();
 				UI_MenuEscape("main");
+#endif
 			}
 
             CL_VerifyUpdate();
 		} else if (clc.state == CA_CINEMATIC) {
 			UI_ForceMenuOff(qtrue);
+#ifdef GODOT_GDEXTENSION
+			s_disconnected_menu_attempted = qfalse;
+#endif
 		}
+#ifdef GODOT_GDEXTENSION
+		else {
+			/* No longer disconnected — reset so menu retry works on next disconnect */
+			s_disconnected_menu_attempted = qfalse;
+		}
+#endif
 	}
 
 	// if recording an avi, lock to a fixed fps
