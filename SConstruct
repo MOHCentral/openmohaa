@@ -3,7 +3,7 @@ import os
 import subprocess
 import sys
 
-sys.setrecursionlimit(50000)
+sys.setrecursionlimit(10000)
 
 env = SConscript("../godot-cpp/SConstruct")
 
@@ -469,6 +469,16 @@ elif env["platform"] == "windows":
     else:
         # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
         env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
+        # MSVC tool wraps all compile commands in ${TEMPFILE("...")} which
+        # triggers Python RecursionError during deep SCons variable expansion
+        # on Windows CI.  Compile commands are well under the 32 767-char
+        # CreateProcess limit, so response files are unnecessary.  Strip the
+        # TEMPFILE wrapper from compilation; link commands keep their own
+        # TEMPFILE (set inside mslink.py Action objects, not via env vars).
+        env["CCCOM"]   = "$CC $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $CFLAGS $CCFLAGS $_CCCOMCOM"
+        env["SHCCCOM"] = "$SHCC $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $SHCFLAGS $SHCCFLAGS $_CCCOMCOM"
+        env["CXXCOM"]  = "$CXX $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $CXXFLAGS $CCFLAGS $_CCCOMCOM"
+        env["SHCXXCOM"]= "$SHCXX $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $SHCXXFLAGS $SHCCFLAGS $_CCCOMCOM"
 
 # ── Link system libraries ──
 if env["platform"] == "linux":
