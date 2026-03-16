@@ -447,6 +447,7 @@ extern "C" {
     char *COM_Parse(char **data_p);
     char *COM_ParseExt(char **data_p, int allowLineBreak);
     int   Q_stricmp(const char *s1, const char *s2);
+    int   Q_stricmpn(const char *s1, const char *s2, int n);
 
     // BSP entity string accessor — from godot_bsp_mesh.cpp
     const char *Godot_BSP_GetEntityString(void);
@@ -2101,7 +2102,7 @@ void MoHAARunner::load_static_models() {
         // Build full model path — BSP stores paths relative to models/
         // (mirrors R_InitStaticModels in tr_staticmodels.cpp)
         char full_path[256];
-        if (strncasecmp(def->model, "models", 6) != 0) {
+        if (Q_stricmpn(def->model, "models", 6) != 0) {
             snprintf(full_path, sizeof(full_path), "models/%s", def->model);
         } else {
             snprintf(full_path, sizeof(full_path), "%s", def->model);
@@ -6083,7 +6084,7 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
     if (!sp && num_texture_paths <= 1) {
         if (strcmp(lookup_name, "markShadow") == 0) {
             texture_paths[num_texture_paths++] = "textures/common/shadow";
-        } else if (strcasecmp(lookup_name, "footShadow") == 0 || strcasecmp(lookup_name, "footshadow") == 0) {
+        } else if (Q_stricmp(lookup_name, "footShadow") == 0 || Q_stricmp(lookup_name, "footshadow") == 0) {
             texture_paths[num_texture_paths++] = "textures/decals/footshadow";
         } else if (strcmp(lookup_name, "projectionShadow") == 0) {
             texture_paths[num_texture_paths++] = "*white";
