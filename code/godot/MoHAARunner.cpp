@@ -3260,6 +3260,17 @@ static constexpr int RT_MODEL   = 0;
 static constexpr int RT_SPRITE  = 2;
 static constexpr int RT_BEAM    = 3;
 
+// ── Reusable scratch buffers for CPU skeletal skinning ──────────────────
+// Per-frame mesh skinning used to malloc/free 4 arrays (positions, normals,
+// texcoords, indices) per surface per mesh per entity.  On WASM these system
+// allocator calls are very expensive.  Instead, grow-only vectors are reused
+// across all surfaces within a frame — they grow to peak capacity and stay.
+static std::vector<float> s_skin_positions;
+static std::vector<float> s_skin_normals;
+static std::vector<float> s_skin_texcoords;
+static std::vector<int>   s_skin_indices;
+static std::vector<int>   s_skin_lod_indices;  // LOD collapse scratch
+
 void MoHAARunner::update_entities() {
     if (!game_world) return;
 
@@ -4035,24 +4046,26 @@ void MoHAARunner::update_entities() {
                                     nullptr, 0, nullptr, 0);
                                 if (numVerts <= 0 || numTris <= 0) continue;
 
-                                float *positions = (float *)malloc(numVerts * 3 * sizeof(float));
-                                float *normals   = (float *)malloc(numVerts * 3 * sizeof(float));
-                                float *texcoords = (float *)malloc(numVerts * 2 * sizeof(float));
-                                int   *indices   = (int *)malloc(numTris * 3 * sizeof(int));
+                                // Reuse grow-only scratch buffers instead of malloc/free per surface
+                                size_t pos_need = (size_t)numVerts * 3;
+                                size_t nrm_need = (size_t)numVerts * 3;
+                                size_t uv_need  = (size_t)numVerts * 2;
+                                size_t idx_need = (size_t)numTris * 3;
+                                if (s_skin_positions.size() < pos_need) s_skin_positions.resize(pos_need);
+                                if (s_skin_normals.size()   < nrm_need) s_skin_normals.resize(nrm_need);
+                                if (s_skin_texcoords.size() < uv_need)  s_skin_texcoords.resize(uv_need);
+                                if (s_skin_indices.size()   < idx_need) s_skin_indices.resize(idx_need);
 
-                                if (!positions || !normals || !texcoords || !indices) {
-                                    ::free(positions); ::free(normals);
-                                    ::free(texcoords); ::free(indices);
-                                    continue;
-                                }
+                                float *positions = s_skin_positions.data();
+                                float *normals   = s_skin_normals.data();
+                                float *texcoords = s_skin_texcoords.data();
+                                int   *indices   = s_skin_indices.data();
 
                                 // Get skinned positions + normals (cap at LOD vertex limit)
                                 if (!Godot_Skel_SkinSurface(tikiPtr, mesh, surf,
                                         boneCache, boneCount,
                                         positions, normals, lodVertLimit,
                                         nullptr, 0)) {
-                                    ::free(positions); ::free(normals);
-                                    ::free(texcoords); ::free(indices);
                                     continue;
                                 }
 
@@ -4068,17 +4081,15 @@ void MoHAARunner::update_entities() {
 
  // Apply LOD index collapse if not LOD 0
                                 if (lodLevel > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
-                                    int *collapsedIndices = (int *)malloc(numTris * 3 * sizeof(int));
-                                    if (collapsedIndices) {
-                                        if (Godot_Skel_BuildLodMesh(tikiPtr, mesh, surf, lodVertLimit,
-                                                                     positions, normals, texcoords, numVerts,
-                                                                     indices, numTris, tikiScale,
-                                                                     collapsedIndices, &outNumTris)) {
-                                            outIndices = collapsedIndices;
-                                            outNumVerts = lodVertLimit;
-                                        } else {
-                                            ::free(collapsedIndices);
-                                        }
+                                    if (s_skin_lod_indices.size() < idx_need)
+                                        s_skin_lod_indices.resize(idx_need);
+                                    int *collapsedIndices = s_skin_lod_indices.data();
+                                    if (Godot_Skel_BuildLodMesh(tikiPtr, mesh, surf, lodVertLimit,
+                                                                 positions, normals, texcoords, numVerts,
+                                                                 indices, numTris, tikiScale,
+                                                                 collapsedIndices, &outNumTris)) {
+                                        outIndices = collapsedIndices;
+                                        outNumVerts = lodVertLimit;
                                     }
                                 }
 
@@ -4089,9 +4100,6 @@ void MoHAARunner::update_entities() {
 
                                 // Validate before building arrays
                                 if (outNumVerts <= 0 || outNumTris <= 0) {
-                                    ::free(positions); ::free(normals);
-                                    ::free(texcoords); ::free(indices);
-                                    if (outIndices != indices) ::free(outIndices);
                                     continue;
                                 }
 
@@ -8307,6 +8315,29 @@ void MoHAARunner::_ready() {
 #endif
 #ifdef HAS_DRAW_DISTANCE_MODULE
     Godot_DrawDistance_Init();
+#endif
+
+#ifdef __EMSCRIPTEN__
+    // ── Web performance defaults ──────────────────────────────────────────
+    // WASM CPU skinning is ~10× slower than native.  Apply a conservative
+    // quality preset so the web build is playable out of the box.
+    // Users can raise quality via set_render_quality("medium") etc.
+    set_shadow_quality(0);   // Disable directional shadow atlas entirely
+    set_geometry_quality(0); // Coarser LOD / terrain to reduce vertex count
+    set_effects_quality(0);  // No detail textures, skip sky, no decals
+
+    // Lower the engine's LOD bias so fewer high-poly meshes are drawn.
+    // Also reduce the skeletal LOD cutoff to cull distant animated models.
+    Cbuf_AddText("set r_lodBias 2\nset r_subdivisions 16\nset ter_maxlod 6\n");
+
+    // Disable the entity shadow light entirely on web — the 4-split
+    // directional shadow map is one of the most expensive GPU operations.
+    if (entity_shadow_light) {
+        entity_shadow_light->set_shadow(false);
+        entity_shadow_light->set_visible(false);
+    }
+
+    UtilityFunctions::print("[MoHAA] Web performance defaults applied (low quality).");
 #endif
 
     UtilityFunctions::print("[MoHAA] Engine initialised.");
