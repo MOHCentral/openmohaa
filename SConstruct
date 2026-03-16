@@ -6,16 +6,32 @@ import traceback
 
 sys.setrecursionlimit(10000)
 
-# ── RecursionError diagnostic — print a traceback before SCons swallows it ──
-_orig_excepthook = sys.excepthook
-def _recursion_hook(exc_type, exc_val, exc_tb):
-    if exc_type is RecursionError:
-        print("=" * 60, file=sys.stderr)
-        print("RECURSION ERROR — last 60 frames:", file=sys.stderr)
-        traceback.print_tb(exc_tb, limit=60, file=sys.stderr)
-        print("=" * 60, file=sys.stderr)
-    _orig_excepthook(exc_type, exc_val, exc_tb)
-sys.excepthook = _recursion_hook
+# ── RecursionError diagnostic — capture stack at depth 9000 ──
+if sys.platform == "win32":
+    import threading
+    _trace_depth = [0]
+    _trace_done = [False]
+
+    def _depth_tracer(frame, event, arg):
+        if _trace_done[0]:
+            return None
+        if event == 'call':
+            _trace_depth[0] += 1
+            if _trace_depth[0] >= 9000:
+                _trace_done[0] = True
+                print("=" * 60, file=sys.stderr, flush=True)
+                print(f"DEPTH {_trace_depth[0]} — stack trace:", file=sys.stderr, flush=True)
+                traceback.print_stack(frame, limit=60, file=sys.stderr)
+                print("=" * 60, file=sys.stderr, flush=True)
+                sys.settrace(None)
+                return None
+            return _depth_tracer
+        elif event == 'return':
+            _trace_depth[0] -= 1
+            return _depth_tracer
+        return _depth_tracer
+
+    sys.settrace(_depth_tracer)
 
 env = SConscript("../godot-cpp/SConstruct")
 
