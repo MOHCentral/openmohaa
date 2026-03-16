@@ -13,7 +13,6 @@
  * Both pools pre-create their Godot scene nodes once during
  * Godot_WeaponEffects_Init() and reuse them every frame.
  *
- * Phase 224.
  */
 
 #include "godot_weapon_effects.h"
@@ -395,7 +394,7 @@ void Godot_ShellCasing_Clear() {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
- *  C Accessor Wrappers (Phase 224 Extension)
+ * C Accessor Wrappers (Extension)
  * ───────────────────────────────────────────────────────────────────────── */
 
 static constexpr float MOHAA_UNIT_SCALE_C = 1.0f / 39.37f;

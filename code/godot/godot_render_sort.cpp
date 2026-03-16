@@ -1,7 +1,7 @@
 /*
  * godot_render_sort.cpp — Transparent surface sort order for the OpenMoHAA GDExtension.
  *
- * Phase 251: Correct back-to-front rendering order for transparent surfaces.
+ * Correct back-to-front rendering order for transparent surfaces.
  *
  * idTech 3 sorts transparent surfaces by shader sort key, then by distance
  * from camera.  This module replicates that ordering using Godot's

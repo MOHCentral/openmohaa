@@ -8,7 +8,7 @@
  * using Alias_FindRandom() / Alias_Find() / Alias_GetGlobalList() — no
  * parsing, no parallel data structures.
  *
- * Phase 45 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #include "godot_ubersound.h"

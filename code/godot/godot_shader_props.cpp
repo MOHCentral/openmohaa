@@ -884,7 +884,7 @@ static void parse_stage(char **text, GodotShaderProps *props, int stage_index,
             }
             else if (!Q_stricmp(token, "offset"))
             {
-                /* Phase 144: tcMod offset — static UV shift (MOHAA extension)
+ /* tcMod offset — static UV shift (MOHAA extension)
                  * Format: tcMod offset <s> <t> [randS] [randT]
                  * and supports "fromEntity" sentinel. */
                 char *stok = COM_ParseExt(text, 0);
@@ -955,7 +955,7 @@ static void parse_stage(char **text, GodotShaderProps *props, int stage_index,
         /* ── Unknown stage directive — skip remaining parameters on this line ── */
         else if (!Q_stricmp(token, "depthwrite") || !Q_stricmp(token, "depthmask"))
         {
-            /* Phase 143: explicit depth write enable */
+ /* explicit depth write enable */
             if (stg) {
                 stg->depthWriteExplicit = true;
                 stg->depthWriteEnabled  = true;
@@ -963,7 +963,7 @@ static void parse_stage(char **text, GodotShaderProps *props, int stage_index,
         }
         else if (!Q_stricmp(token, "nodepthwrite") || !Q_stricmp(token, "nodepthmask"))
         {
-            /* Phase 143: explicit depth write disable */
+ /* explicit depth write disable */
             if (stg) {
                 stg->depthWriteExplicit = true;
                 stg->depthWriteEnabled  = false;
@@ -971,7 +971,7 @@ static void parse_stage(char **text, GodotShaderProps *props, int stage_index,
         }
         else if (!Q_stricmp(token, "noDepthTest") || !Q_stricmp(token, "nodepthtest"))
         {
-            /* Phase 143: disable depth testing */
+ /* disable depth testing */
             if (stg) {
                 stg->noDepthTest = true;
             }

@@ -268,7 +268,7 @@ void Godot_InjectMouseButton(int godot_button, int down)
 }
 
 /* ====================================================================
- *  Phase 48: Absolute mouse position injection for UI mode.
+ * Absolute mouse position injection for UI mode.
  *
  *  When the engine's UI system is active, it needs absolute mouse
  *  coordinates rather than relative deltas.  This function injects

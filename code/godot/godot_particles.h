@@ -12,7 +12,7 @@
  * Separates particle rendering from the generic poly buffer to allow
  * specialized handling (GPU particles, instanced meshes, particle pools).
  *
- * Phase 134: Particle Rendering Parity
+ * Particle Rendering Parity
  */
 
 #ifndef GODOT_PARTICLES_H

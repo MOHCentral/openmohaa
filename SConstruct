@@ -53,7 +53,7 @@ if sys.platform.startswith("linux") and env.get("ARCOM") and env.get("platform")
 #  OpenMoHAA GDExtension Build — Full Client + Server
 # ──────────────────────────────────────────────
 #
-# Module breakdown (see copilot-instructions.md for architecture details):
+# Module breakdown:
 #
 #   Core/Network     code/qcommon          cvars, commands, VFS, memory, net
 #   Core C++         code/corepp           C++ helpers (str, containers)

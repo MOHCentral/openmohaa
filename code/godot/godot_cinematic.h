@@ -6,13 +6,13 @@
  * displays a fullscreen black overlay with a "Press ESC to skip" hint.
  *
  * The actual RoQ frame decoding and display is handled by MoHAARunner's
- * cinematic bridge (Phase 11).  This module provides the skip-hint overlay
+ * cinematic bridge. This module provides the skip-hint overlay
  * on a high z-index CanvasLayer so it sits above everything else.
  *
  * Integration: MoHAARunner calls Godot_Cinematic_Init() once during setup
  * and Godot_Cinematic_Update() each frame.
  *
- * Phase 56 — Cinematic Playback Stub.
+ * Cinematic Playback Stub.
  */
 
 #ifndef GODOT_CINEMATIC_H

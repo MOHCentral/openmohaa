@@ -6,7 +6,7 @@
  * sound-emitting entities that use a "noise" key, and creates persistent
  * AudioStreamPlayer3D nodes at their positions.
  *
- * Phase 47 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #include "godot_speaker_entities.h"

@@ -284,7 +284,7 @@ static std::vector<BSPStaticModelDef> s_static_models;
 static std::vector<int>               s_static_model_clusters;  /* per-model PVS cluster */
 static std::vector<Ref<ArrayMesh>>    s_brush_models;  /* 1-based: s_brush_models[0] = submodel *1 */
 
-/* ── Phase 78: Fog volume cache ── */
+/* ── Fog volume cache ── */
 
 /* On-disc fog definition (dfog_t from qfiles.h, 72 bytes) */
 struct bsp_fog_t {
@@ -296,7 +296,7 @@ static_assert(sizeof(bsp_fog_t) == 72, "bsp_fog_t must be 72 bytes");
 
 static std::vector<BSPFogVolume> s_fog_volumes;
 
-/* ── Phase 74: Flare cache ── */
+/* ── Flare cache ── */
 static std::vector<BSPFlare> s_flares;
 
 /* ── PVS cluster mesh tracking ──
@@ -1023,7 +1023,7 @@ static Ref<ArrayMesh> batches_to_array_mesh(
                             break;
                     }
 
-                    // Phase 142: clampMap — disable texture repeat
+ // clampMap — disable texture repeat
                     for (int st = 0; st < sp->stage_count; st++) {
                         if (!sp->stages[st].active) continue;
                         if (sp->stages[st].isLightmap) continue;
@@ -1312,7 +1312,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
     // 4d/4e. Mark data and world metadata are now provided by
     //    renderergl1/godot_bsp_accessors.c reading from tr.world directly.
     //    No BSP raw data retention is needed here.
-    // ── 4f. Phase 78: Parse fog volumes (LUMP_FOGS, BSP ≤ 18 only) ──
+ // ── 4f. Parse fog volumes (LUMP_FOGS, BSP ≤ 18 only) ──
     //
     // LUMP_FOGS was at slot 13 in BSP versions ≤ 18 and was removed in
     // version 19+.  Each fog entry references a brush and a shader that
@@ -1425,7 +1425,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
     int processed      = 0;
     int processed_patches = 0;
 
-    /* Phase 74: Collect flare surface positions */
+ /* Collect flare surface positions */
     s_flares.clear();
 
     for (int s = 0; s < num_surfaces; s++) {
@@ -1438,7 +1438,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             continue;
         }
 
-        /* Phase 74: Collect MST_FLARE surfaces as flare definitions */
+ /* Collect MST_FLARE surfaces as flare definitions */
         if (surf->surfaceType == MST_FLARE) {
             if (surf->shaderNum >= 0 && surf->shaderNum < num_shaders &&
                 surf->numVerts > 0 && surf->firstVert >= 0 &&
@@ -1471,7 +1471,7 @@ godot::Node3D *Godot_BSP_LoadWorld(const char *bsp_path) {
             continue;
         }
 
-        /* Phase 73: Skip portal surfaces — render distinctly elsewhere */
+ /* Skip portal surfaces — render distinctly elsewhere */
         if (surf->shaderNum >= 0 && surf->shaderNum < num_shaders) {
             const GodotShaderProps *sp = Godot_ShaderProps_Find(
                 shaders[surf->shaderNum].shader);
@@ -1869,7 +1869,7 @@ Ref<ArrayMesh> Godot_BSP_GetBrushModelMesh(int submodelIndex) {
 }
 
 /* ===================================================================
- *  Phase 78: Fog volume accessors
+ * Fog volume accessors
  * ================================================================ */
 
 int Godot_BSP_GetFogVolumeCount() {
@@ -1882,7 +1882,7 @@ const BSPFogVolume *Godot_BSP_GetFogVolume(int index) {
 }
 
 /* ===================================================================
- *  Phase 74: Flare accessors
+ * Flare accessors
  * ================================================================ */
 
 int Godot_BSP_GetFlareCount() {

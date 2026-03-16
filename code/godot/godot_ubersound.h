@@ -6,7 +6,7 @@
  * global Aliases list.  This module queries that list via Alias_FindRandom()
  * and Alias_Find() — no parsing, no parallel data structures.
  *
- * Phase 45 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #ifndef GODOT_UBERSOUND_H

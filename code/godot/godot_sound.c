@@ -111,7 +111,7 @@ typedef struct {
 static gr_music_state_t gr_music = {0};
 
 /* ===================================================================
- *  Entity position tracking  (Phase 49)
+ * Entity position tracking
  *  S_UpdateEntity stores per-entity position so MoHAARunner can
  *  update AudioStreamPlayer3D positions for sounds attached to
  *  moving entities.
@@ -147,7 +147,7 @@ int Godot_Sound_GetEntityPosition(int entnum, float *origin, float *velocity)
 }
 
 /* ===================================================================
- *  Global fade state (Phase 50)
+ * Global fade state
  * ================================================================ */
 
 static float gr_sound_fade_time    = 0.0f;   /* seconds to fade over */
@@ -160,7 +160,7 @@ int   Godot_Sound_GetFadeActive(void) { return gr_sound_fade_active; }
 void  Godot_Sound_ClearFade(void)     { gr_sound_fade_active = 0; }
 
 /* ===================================================================
- *  Reverb state (Phase 50)
+ * Reverb state
  * ================================================================ */
 
 static int   gr_reverb_type  = 0;
@@ -170,7 +170,7 @@ int   Godot_Sound_GetReverbType(void)  { return gr_reverb_type; }
 float Godot_Sound_GetReverbLevel(void) { return gr_reverb_level; }
 
 /* ===================================================================
- *  IsSoundPlaying tracking (Phase 49)
+ * IsSoundPlaying tracking
  *  We track recently-started sounds per channel so S_IsSoundPlaying
  *  can return meaningful results.  The Godot side clears entries
  *  when playback finishes.
@@ -249,7 +249,7 @@ static void untrack_playing(int channel)
 }
 
 /* ===================================================================
- *  Music mood tracking (Phase 50)
+ * Music mood tracking
  * ================================================================ */
 
 int Godot_Sound_GetMusicMood(int *current, int *fallback)
@@ -449,7 +449,7 @@ void S_Init(qboolean full_startup)
 void S_Shutdown(qboolean full_shutdown)
 {
     Com_Printf("[GodotSound] S_Shutdown\n");
-    /* Phase 149: Push stop-all event so MoHAARunner stops all Godot AudioStreamPlayers.
+ /* Push stop-all event so MoHAARunner stops all Godot AudioStreamPlayers.
      * Without this, snd_restart/vid_restart leaves ghost sounds playing on the Godot side
      * while the engine-side tables are cleared. */
     push_event(GR_SND_STOP_ALL, NULL, 0, 0, 0,
@@ -524,7 +524,7 @@ void S_EndRegistration(void)
 
 float S_GetSoundTime(sfxHandle_t handle)
 {
-    /* Phase 49: Approximate — we don't track precise playback time yet.
+ /* Approximate — we don't track precise playback time yet.
      * Return 0.0 (start of sound).  When MoHAARunner gets full
      * AudioStreamPlayer tracking, we can query the actual position. */
     (void)handle;
@@ -541,7 +541,7 @@ void S_StartSound(const vec3_t origin, int entnum, int entchannel,
 {
     push_event(GR_SND_START, origin, entnum, entchannel, sfxHandle,
                volume, min_dist, maxDist, pitch, streamed, NULL);
-    /* Phase 49: Track as playing */
+ /* Track as playing */
     const char *name = "";
     int idx = Godot_Sound_FindSfxIndex(sfxHandle);
     if (idx >= 0) name = gr_sfx[idx].name;
@@ -568,7 +568,7 @@ void S_StopSound(int entnum, int channel)
 {
     push_event(GR_SND_STOP, NULL, entnum, channel, 0,
                0, 0, 0, 0, 0, NULL);
-    /* Phase 49: Untrack */
+ /* Untrack */
     untrack_playing(channel);
 }
 
@@ -576,7 +576,7 @@ void S_StopAllSounds(qboolean stop_music)
 {
     push_event(GR_SND_STOP_ALL, NULL, 0, 0, 0,
                0, 0, 0, 0, 0, NULL);
-    gr_playing_count = 0;  /* Phase 49: clear all tracking */
+ gr_playing_count = 0; /* clear all tracking */
     if (stop_music) {
         gr_music.action = GR_MUSIC_STOP;
     }
@@ -637,7 +637,7 @@ void S_Respatialize(int entityNum, const vec3_t head, vec3_t axis[3])
 void S_UpdateEntity(int entityNum, const vec3_t origin, const vec3_t vel,
                     qboolean use_listener)
 {
-    /* Phase 49: Track entity positions for moving sounds */
+ /* Track entity positions for moving sounds */
     if (entityNum < 0 || entityNum >= MAX_SOUND_ENTITIES) return;
     gr_snd_entity_t *e = &gr_snd_entities[entityNum];
     if (origin) {
@@ -664,14 +664,14 @@ float Godot_Sound_GetAmbientVolume(void) { return gr_ambient_volume; }
 
 void S_SetReverb(int reverb_type, float reverb_level)
 {
-    /* Phase 50: Store reverb parameters for MoHAARunner to apply */
+ /* Store reverb parameters for MoHAARunner to apply */
     gr_reverb_type  = reverb_type;
     gr_reverb_level = reverb_level;
 }
 
 void S_FadeSound(float fTime)
 {
-    /* Phase 50: Global sound fade — MoHAARunner reads this and
+ /* Global sound fade — MoHAARunner reads this and
        applies gradual volume reduction over fTime seconds */
     gr_sound_fade_time   = fTime;
     gr_sound_fade_target = 0.0f;
@@ -684,7 +684,7 @@ void S_FadeSound(float fTime)
 
 qboolean S_IsSoundPlaying(int channel_number, const char *sfxName)
 {
-    /* Phase 49: Check if a sound is currently tracked as playing */
+ /* Check if a sound is currently tracked as playing */
     for (int i = 0; i < gr_playing_count; i++) {
         if (channel_number >= 0 && gr_playing[i].channel == channel_number) {
             if (!sfxName || !sfxName[0]) return qtrue;
@@ -740,7 +740,7 @@ qboolean MUSIC_LoadSoundtrackFile(const char *filename)
 
 qboolean MUSIC_SongValid(const char *mood)
 {
-    /* Phase 50: A song is valid if a soundtrack has been loaded */
+ /* A song is valid if a soundtrack has been loaded */
     return (gr_music.name[0] != '\0') ? qtrue : qfalse;
 }
 
@@ -778,13 +778,13 @@ void MUSIC_StopAllSongs(void)  { gr_music.action = GR_MUSIC_STOP; }
 void MUSIC_FreeAllSongs(void)  { gr_music.action = GR_MUSIC_STOP; }
 qboolean MUSIC_Playing(void)
 {
-    /* Phase 50: Report as playing if a soundtrack is active */
+ /* Report as playing if a soundtrack is active */
     return (gr_music.action == GR_MUSIC_PLAY || gr_music.name[0] != '\0') ? qtrue : qfalse;
 }
 
 int MUSIC_FindSong(const char *name)
 {
-    /* Phase 50: Return 0 (found) if the name matches the current soundtrack */
+ /* Return 0 (found) if the name matches the current soundtrack */
     if (name && name[0] && gr_music.name[0]) {
         if (!Q_stricmp(name, gr_music.name)) return 0;
     }
@@ -801,7 +801,7 @@ const char *S_CurrentSoundtrack(void)          { return gr_music.name; }
 void        S_PlaySong(void)                   {}
 
 /* ===================================================================
- *  Triggered music (Phase 51)
+ * Triggered music
  *  Stores triggered-music state for MoHAARunner to pick up and play.
  * ================================================================ */
 
@@ -872,7 +872,7 @@ int          S_GetMusicLoopCount(void)  { return gr_triggered_music.loopCount; }
 unsigned int S_GetMusicOffset(void)     { return (unsigned int)gr_triggered_music.offset; }
 
 /* ===================================================================
- *  MP3-in-WAV detection (Phase 46)
+ * MP3-in-WAV detection
  *  Some MOHAA .wav files use WAVE format tag 0x0055 (MPEG audio inside
  *  a WAV container).  This helper checks the fmt chunk format tag.
  * ================================================================ */

@@ -1,7 +1,7 @@
 /*
  * godot_debug_render.cpp — Debug rendering overlays for developer diagnostics.
  *
- * Phase 84: Implements wireframe overlay (r_showtris), surface normal
+ * Implements wireframe overlay (r_showtris), surface normal
  * visualisation (r_shownormals), performance stats (r_speeds), and
  * entity bounding box display (r_showbbox).
  *

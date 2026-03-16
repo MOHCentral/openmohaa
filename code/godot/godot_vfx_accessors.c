@@ -7,7 +7,7 @@
  * This file filters entities to RT_SPRITE only and presents a flat
  * sprite-specific interface for godot_vfx.cpp.
  *
- * Phase 221: VFX Manager Foundation
+ * VFX Manager Foundation
  */
 
 /* ── Forward declarations of renderer accessors (defined in godot_renderer.c) ── */

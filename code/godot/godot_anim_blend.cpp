@@ -18,7 +18,7 @@
  *   NOT replace the engine's blending.  Use Godot_AnimBlend_DebugLogEntity()
  *   to verify channel weights at runtime.
  *
- * Phase 241 — Animation blending accuracy.
+ * Animation blending accuracy.
  */
 
 #include "../qcommon/q_shared.h"

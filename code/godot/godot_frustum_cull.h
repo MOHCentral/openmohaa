@@ -1,7 +1,7 @@
 /*
  * godot_frustum_cull.h — Camera frustum culling helpers for entities & effects.
  *
- * Phase 258: Extract the six frustum planes from the active Camera3D and
+ * Extract the six frustum planes from the active Camera3D and
  *            provide fast AABB / sphere visibility tests.  Entities and
  *            effects whose bounding volumes are entirely outside the
  *            frustum can be skipped, reducing draw calls when many objects

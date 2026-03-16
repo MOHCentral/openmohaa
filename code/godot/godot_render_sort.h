@@ -30,7 +30,7 @@
  *     3. For each entity, call Godot_RenderSort_ApplyPriority() on its
  *        MeshInstance3D to set the material render_priority.
  *
- * Phase 251 — Transparent Surface Sort Order.
+ * Transparent Surface Sort Order.
  */
 
 #ifndef GODOT_RENDER_SORT_H

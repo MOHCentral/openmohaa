@@ -5,7 +5,7 @@
  * are loaded from the engine VFS (sound/music/*.mp3) as raw bytes and
  * wrapped in Godot AudioStreamMP3 resources.
  *
- * Phase 42 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #include "godot_music.h"

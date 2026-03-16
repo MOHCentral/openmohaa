@@ -7,7 +7,7 @@
  * the dispatcher tracks per-entity playback state and fires events at
  * the correct frame.
  *
- * Phase 241-242 — Animation events.
+ * Animation events.
  */
 
 #ifndef GODOT_ANIMATION_EVENTS_H

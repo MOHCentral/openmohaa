@@ -1,9 +1,9 @@
 /*
  * godot_mesh_cache.cpp — Per-entity mesh & material caching.
  *
- * Phase 60: Entity mesh caching to eliminate redundant ArrayMesh rebuilds.
- * Phase 61: Material caching to share materials across entities.
- * Phase 85: Render performance statistics and logging.
+ * Entity mesh caching to eliminate redundant ArrayMesh rebuilds.
+ * Material caching to share materials across entities.
+ * Render performance statistics and logging.
  */
 
 #include "godot_mesh_cache.h"
@@ -11,11 +11,11 @@
 #include <godot_cpp/classes/time.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
-/* ── Phase 85: Global stats ── */
+/* ── Global stats ── */
 Godot_RenderStats g_render_stats;
 
 /* ===================================================================
- *  Phase 60: Entity Mesh Cache
+ * Entity Mesh Cache
  * ================================================================ */
 
 Godot_MeshCache &Godot_MeshCache::get()
@@ -70,7 +70,7 @@ void Godot_MeshCache::clear()
 }
 
 /* ===================================================================
- *  Phase 61: Material Cache
+ * Material Cache
  * ================================================================ */
 
 Godot_MaterialCache &Godot_MaterialCache::get()
@@ -123,7 +123,7 @@ void Godot_MaterialCache::clear()
 }
 
 /* ===================================================================
- *  Phase 85: Render Performance Stats
+ * Render Performance Stats
  * ================================================================ */
 
 extern "C" {

@@ -34,7 +34,7 @@ const char *Godot_Renderer_GetShaderRemap( const char *shaderName );
 refimport_t ri;                /* engine → renderer callbacks */
 
 /* -------------------------------------------------------------------
- *  Model table (Phase 7f — TIKI model registration)
+ * Model table (TIKI model registration)
  *
  *  Mirrors the renderer's tr.models[] to provide valid qhandle_t →
  *  dtiki_t* mapping.  Without this, GR_Model_GetHandle returns NULL
@@ -210,7 +210,7 @@ static int next_skin_handle   = 1;
 static int gr_fontHandlesDirty = 0;
 
 /* -------------------------------------------------------------------
- *  Shader name table (Phase 7h — 2D overlay rendering)
+ * Shader name table (2D overlay rendering)
  *
  *  Maps qhandle_t → shader name so MoHAARunner can load textures
  *  via the engine VFS and display 2D HUD elements in Godot.
@@ -227,7 +227,7 @@ static gr_shader_t gr_shaders[GR_MAX_SHADERS];
 static int         gr_numShaders = 1;  /* slot 0 = sentinel */
 
 /* -------------------------------------------------------------------
- *  2D draw command buffer (Phase 7h)
+ * 2D draw command buffer
  *
  *  Each frame, GR_DrawStretchPic / GR_DrawBox / GR_SetColor calls
  *  append commands here.  GR_ClearScene resets the count.
@@ -239,7 +239,7 @@ static int         gr_numShaders = 1;  /* slot 0 = sentinel */
 typedef enum {
     GR_2D_STRETCHPIC,  /* textured quad */
     GR_2D_BOX,         /* solid colour box */
-    GR_2D_SCISSOR,     /* Phase 45: scissor region change */
+ GR_2D_SCISSOR, /* scissor region change */
     GR_2D_TRIANGLE,    /* textured triangle (compass, needle, circle, spinner) */
 } gr_2d_type_t;
 
@@ -260,7 +260,7 @@ static int         gr_num2DCmds = 0;
 static float current_color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 /* -------------------------------------------------------------------
- *  Cinematic frame buffer (Phase 11)
+ * Cinematic frame buffer
  *
  *  GR_DrawStretchRaw stores decoded RoQ frames here.
  *  MoHAARunner reads via Godot_Renderer_GetCinematic* accessors
@@ -311,7 +311,7 @@ static int gr_skel_index[MAX_GENTITIES];
 /* Scratch glconfig filled during BeginRegistration */
 static glconfig_t stored_glconfig;
 
-/* Phase 149: vid_restart detection — set in GR_BeginRegistration, consumed by MoHAARunner */
+/* vid_restart detection — set in GR_BeginRegistration, consumed by MoHAARunner */
 static int gr_vidRestarted = 0;
 static int gr_vidRestart_fullscreen = 0;    /* r_fullscreen value at restart time */
 static int gr_vidRestart_width  = 0;        /* resolved window width */
@@ -380,7 +380,7 @@ static int gr_viewport_width  = 0;
 static int gr_viewport_height = 0;
 
 /* -------------------------------------------------------------------
- *  Camera bridge — captured refdef_t data (Phase 7a)
+ * Camera bridge — captured refdef_t data
  *
  *  GR_RenderScene stores the latest viewpoint here each frame.
  *  MoHAARunner.cpp reads it via the Godot_Renderer_* C accessors
@@ -406,7 +406,7 @@ static char     gr_worldMapName[MAX_QPATH] = {0};
 static qboolean gr_worldMapLoaded   = qfalse;
 
 /* -------------------------------------------------------------------
- *  Entity capture — ring buffer for scene entities (Phase 7e)
+ * Entity capture — ring buffer for scene entities
  *
  *  GR_AddRefEntityToScene copies entity transform data into a buffer
  *  each frame.  MoHAARunner.cpp reads it via Godot_Renderer_* accessors.
@@ -433,7 +433,7 @@ typedef struct {
     float   lightingOrigin[3]; /* RF_LIGHTING_ORIGIN override point */
     float   shadowPlane;     /* shadow projection plane height (id Z) */
 
-    /* Skeletal animation data (Phase 13) */
+ /* Skeletal animation data */
     frameInfo_t frameInfo[MAX_FRAMEINFOS];
     float       actionWeight;
     int         bone_tag[5];         /* controller bone indices */
@@ -465,7 +465,7 @@ static gr_dlight_t gr_dlights[GR_MAX_DLIGHTS];
 static int         gr_numDlights  = 0;
 
 /* -------------------------------------------------------------------
- *  HUD model render requests (Phase 148)
+ * HUD model render requests
  *
  *  CL_Draw3DModel() calls ClearScene + AddEntity + RenderScene with
  *  RDF_HUD | RDF_NOWORLDMODEL to render a 3D model preview into a
@@ -490,7 +490,7 @@ static int            gr_mainSceneRendered = 0;
 static int            gr_hudEntityStart = 0;
 
 /* -------------------------------------------------------------------
- *  Poly capture — scene polys for particles, decals, effects (Phase 16)
+ * Poly capture — scene polys for particles, decals, effects
  *
  *  GR_AddPolyToScene stores quads/tris here each frame.
  *  MoHAARunner.cpp reads via Godot_Renderer_GetPoly* accessors.
@@ -517,7 +517,7 @@ static int           gr_numPolys     = 0;
 static int           gr_numPolyVerts = 0;
 
 /* -------------------------------------------------------------------
- *  Shader remapping table (Phase 26)
+ * Shader remapping table
  * ---------------------------------------------------------------- */
 #define GR_MAX_SHADER_REMAPS 128
 typedef struct {
@@ -529,7 +529,7 @@ static gr_shaderRemap_t gr_shaderRemaps[GR_MAX_SHADER_REMAPS];
 static int              gr_numShaderRemaps = 0;
 
 /* -------------------------------------------------------------------
- *  Swipe effect capture (Phase 24)
+ * Swipe effect capture
  * ---------------------------------------------------------------- */
 #define GR_MAX_SWIPE_POINTS 64
 typedef struct {
@@ -548,7 +548,7 @@ typedef struct {
 static gr_swipe_t gr_currentSwipe;
 
 /* -------------------------------------------------------------------
- *  Terrain mark capture (Phase 25)
+ * Terrain mark capture
  * ---------------------------------------------------------------- */
 #define GR_MAX_TERRAIN_MARKS 256
 #define GR_MAX_TERRAIN_MARK_VERTS 4096
@@ -570,7 +570,7 @@ static int                  gr_numTerrainMarks     = 0;
 static int                  gr_numTerrainMarkVerts = 0;
 
 /* -------------------------------------------------------------------
- *  Scissor state (Phase 32)
+ * Scissor state
  * ---------------------------------------------------------------- */
 static int gr_scissorX      = 0;
 static int gr_scissorY      = 0;
@@ -578,7 +578,7 @@ static int gr_scissorWidth  = 0;
 static int gr_scissorHeight = 0;
 
 /* -------------------------------------------------------------------
- *  Shader dimension cache (Phase 38) — declarations
+ * Shader dimension cache — declarations
  *  The full implementation is further down near GetShaderWidth/Height.
  * ---------------------------------------------------------------- */
 #define GR_DIM_UNKNOWN  (-1)
@@ -588,7 +588,7 @@ static int GR_GetShaderWidth( qhandle_t hShader );
 static int GR_GetShaderHeight( qhandle_t hShader );
 
 /* -------------------------------------------------------------------
- *  Background image capture (Phase 33)
+ * Background image capture
  * ---------------------------------------------------------------- */
 #define GR_MAX_BG_PIXELS (1024 * 1024 * 4)
 static unsigned char gr_bgData[GR_MAX_BG_PIXELS];
@@ -599,7 +599,7 @@ static int gr_bgActive   = 0;
 static int gr_bgCmdIndex = 0;   /* 2D cmd count when GR_DrawBackground was called */
 
 /* -------------------------------------------------------------------
- *  Frame/render timing (Phase 37 perf)
+ * Frame/render timing (perf)
  * ---------------------------------------------------------------- */
 static int   gr_frameNumber = 0;
 static int   gr_renderTime  = 0;
@@ -716,7 +716,7 @@ static void GR_BeginRegistration( glconfig_t *config )
     memset( gr_shaders, 0, sizeof( gr_shaders ) );
     gr_numShaders = 1;  /* slot 0 = sentinel */
 
-    /* Phase 38: Reset shader dimension cache */
+ /* Reset shader dimension cache */
     for ( int i = 0; i < GR_MAX_SHADERS; i++ ) {
         gr_shaderWidths[i]  = GR_DIM_UNKNOWN;
         gr_shaderHeights[i] = GR_DIM_UNKNOWN;
@@ -1060,7 +1060,7 @@ static void GR_EndFrame( int *frontEndMsec, int *backEndMsec )
 static void GR_ClearScene( void )
 {
     if ( gr_mainSceneRendered ) {
-        /* Phase 148: World scene already rendered this frame.
+ /* World scene already rendered this frame.
          * This ClearScene is for a HUD model sub-render (CL_Draw3DModel).
          * Don't clear world entities — note where HUD entities start. */
         gr_hudEntityStart = gr_numEntities;
@@ -1119,7 +1119,7 @@ static void GR_AddRefEntityToScene( const refEntity_t *re, int parentEntityNumbe
     ge->skinNum = re->skinNum;
     memcpy( ge->surfaces, re->surfaces, sizeof( ge->surfaces ) );
 
-    /* Skeletal animation data (Phase 13) */
+ /* Skeletal animation data */
     memcpy( ge->frameInfo, re->frameInfo, sizeof(ge->frameInfo) );
     ge->actionWeight = re->actionWeight;
     ge->tiki         = (void *)re->tiki;
@@ -1207,7 +1207,7 @@ static void GR_AddLightToScene( const vec3_t org, float intensity,
 static void GR_AddAdditiveLightToScene( const vec3_t org, float intensity,
                                         float r, float g, float b )
 {
-    /* Phase 40: Treat additive lights the same as regular lights */
+ /* Treat additive lights the same as regular lights */
     if ( gr_numDlights >= GR_MAX_DLIGHTS ) return;
     gr_dlight_t *dl = &gr_dlights[gr_numDlights++];
     VectorCopy( org, dl->origin );
@@ -1222,7 +1222,7 @@ static void GR_RenderScene( const refdef_t *fd )
 {
     if ( !fd ) return;
 
-    /* Phase 148: HUD model render (CL_Draw3DModel) — capture into
+ /* HUD model render (CL_Draw3DModel) — capture into
      * separate buffer, don't overwrite world camera/entities. */
     if ( fd->rdflags & 0x0001 /* RDF_NOWORLDMODEL */ ) {
         if ( gr_numHudModels < GR_MAX_HUD_MODELS ) {
@@ -1292,7 +1292,7 @@ static void GR_RenderScene( const refdef_t *fd )
 
 static void GR_AddRefSpriteToScene( const refEntity_t *ent )
 {
-    /* Phase 46: Capture sprites the same way as entities — they have
+ /* Capture sprites the same way as entities — they have
        a shader handle and transform.  MoHAARunner renders them as
        camera-facing billboard quads. */
     if ( !ent ) return;
@@ -1443,7 +1443,7 @@ static void GR_UploadCinematic( int w, int h, int cols, int rows,
 static void GR_DrawTilePic( float x, float y, float w, float h,
                             qhandle_t hShader )
 {
-    /* Phase 44: Tile UV based on real texture dimensions */
+ /* Tile UV based on real texture dimensions */
     int tw = GR_GetShaderWidth( hShader );
     int th = GR_GetShaderHeight( hShader );
     float s1 = (tw > 0) ? w / (float)tw : 1.0f;
@@ -1454,7 +1454,7 @@ static void GR_DrawTilePic( float x, float y, float w, float h,
 static void GR_DrawTilePicOffset( float x, float y, float w, float h,
                                   qhandle_t hShader, int offsetX, int offsetY )
 {
-    /* Phase 44: Tile UV with offset */
+ /* Tile UV with offset */
     int tw = GR_GetShaderWidth( hShader );
     int th = GR_GetShaderHeight( hShader );
     float s0 = (tw > 0) ? (float)offsetX / (float)tw : 0.0f;
@@ -1563,7 +1563,7 @@ static void GR_DrawBox( float x, float y, float w, float h )
 
 static void GR_AddBox( float x, float y, float w, float h )
 {
-    /* Phase 42: Treat AddBox same as DrawBox — accumulated box drawing */
+ /* Treat AddBox same as DrawBox — accumulated box drawing */
     GR_DrawBox( x, y, w, h );
 }
 
@@ -1574,7 +1574,7 @@ static void GR_Scissor( int x, int y, int width, int height )
     gr_scissorWidth  = width;
     gr_scissorHeight = height;
 
-    /* Phase 45: Emit a scissor-change command into the 2D stream so
+ /* Emit a scissor-change command into the 2D stream so
        MoHAARunner can clip subsequent draws to this region.
 
        Note: The x,y from the engine are in GL pixel space (Y=0 at bottom).
@@ -1593,7 +1593,7 @@ static void GR_Scissor( int x, int y, int width, int height )
 static void GR_DrawLineLoop( const vec2_t *points, int count,
                              int stippleFactor, int stippleMask )
 {
-    /* Phase 47: Approximate line loop with box commands for the segments.
+ /* Approximate line loop with box commands for the segments.
      * Each segment is drawn as a thin 1px rectangle.  This is used
      * sparingly (e.g., selection outlines in UI editors). */
     if ( !points || count < 2 ) return;
@@ -1629,7 +1629,7 @@ static void GR_Set2DWindow( int x, int y, int w, int h,
 static void GR_DebugLine( const vec3_t start, const vec3_t end,
                           float r, float g, float b, float alpha )
 {
-    /* Phase 48: Store debug lines for 3D rendering by MoHAARunner.
+ /* Store debug lines for 3D rendering by MoHAARunner.
      * These are viewable via cg_debuglines or developer cheats.
      * For now, log at developer level — proper ImmediateMesh
      * rendering is added when we build the debug overlay system. */
@@ -1638,7 +1638,7 @@ static void GR_DebugLine( const vec3_t start, const vec3_t end,
 }
 
 /* -------------------------------------------------------------------
- *  Fonts & text (Phase 7i)
+ * Fonts & text
  *
  *  Parses .RitualFont files from the VFS, stores glyph metrics,
  *  and emits GR_DrawStretchPic calls for each character so all text
@@ -2252,7 +2252,7 @@ static dtiki_t *GR_Model_GetHandle( qhandle_t handle )
 
 static refEntity_t *GR_GetRenderEntity( int entityNumber )
 {
-    /* Phase 43: Return captured entity data if available */
+ /* Return captured entity data if available */
     memset( &scratch_entity, 0, sizeof( scratch_entity ) );
     for ( int i = 0; i < gr_numEntities; i++ ) {
         if ( gr_entities[i].entityNumber == entityNumber ) {
@@ -2295,7 +2295,7 @@ static refEntity_t *GR_GetRenderEntity( int entityNumber )
  * ---------------------------------------------------------------- */
 
 /* -------------------------------------------------------------------
- *  Shader dimension cache (Phase 38)
+ * Shader dimension cache
  *
  *  First call for a given shader loads the image from VFS, reads
  *  the dimensions, caches them, and frees the data.  Subsequent
@@ -2805,7 +2805,7 @@ static void GR_SetFullscreen( qboolean fullScreen )
     (void)fullScreen;  /* Godot manages window mode */
 }
 
-/* Phase 149: ter_restart command handler — terrain quality changes are
+/* ter_restart command handler — terrain quality changes are
  * applied on next map load, so this is effectively a no-op. */
 static void GR_TerrainRestart_f( void )
 {
@@ -2817,7 +2817,7 @@ static void GR_SetRenderTime( int t )
     gr_renderTime = t;
 }
 
-/* Phase 27: Perlin noise — 3D+time noise for shader effects */
+/* Perlin noise — 3D+time noise for shader effects */
 static float GR_Noise( float x, float y, float z, double t )
 {
     /* Simple pseudo-random hash-based noise.
@@ -2833,7 +2833,7 @@ static float GR_Noise( float x, float y, float z, double t )
 }
 
 /* -------------------------------------------------------------------
- *  Raw image loading (Phase 34)
+ * Raw image loading
  *
  *  Loads TGA/JPG images through the engine VFS for cgame/UI use.
  *  Tries multiple extensions (.tga, .jpg) as the engine normally does.
@@ -2965,7 +2965,7 @@ static void GR_Set2DInitialShaderTime( float startTime )
 }
 
 /* -------------------------------------------------------------------
- *  Weapon effects (Phase 224)
+ * Weapon effects
  * ---------------------------------------------------------------- */
 
 extern void Godot_MuzzleFlash_Spawn_C(float *pos, float *dir, float intensity);
@@ -2982,7 +2982,7 @@ static void GR_AddShellCasing( const vec3_t origin, const vec3_t velocity, int t
 }
 
 /* ===================================================================
- *  Camera bridge C accessors (Phase 7a)
+ * Camera bridge C accessors
  *
  *  Called from MoHAARunner.cpp (via extern "C") after each Com_Frame()
  *  to read the latest viewpoint data captured by GR_RenderScene.
@@ -3058,7 +3058,7 @@ int Godot_Renderer_GetRenderTerrain( void )
 }
 
 /* ===================================================================
- *  Entity bridge C accessors (Phase 7e)
+ * Entity bridge C accessors
  *
  *  Give MoHAARunner.cpp read access to the entities, sprites, and
  *  dynamic lights captured during the current frame.
@@ -3132,14 +3132,14 @@ void Godot_Renderer_GetEntitySprite( int index,
     if ( customShader ) *customShader = ge->customShader;
 }
 
-/* Phase 35: Entity parenting accessor */
+/* Entity parenting accessor */
 int Godot_Renderer_GetEntityParent( int index )
 {
     if ( index < 0 || index >= gr_numEntities ) return -1;
     return gr_entities[index].parentEntity;
 }
 
-/* Phase 268: Entity lighting origin accessor */
+/* Entity lighting origin accessor */
 void Godot_Renderer_GetEntityLightingOrigin( int index, float *out )
 {
     if ( index < 0 || index >= gr_numEntities || !out ) return;
@@ -3205,7 +3205,7 @@ int Godot_Model_GetSpriteDims( int hModel,
     return 1;
 }
 
-/* Phase 26: Shader remap query — check if a shader name has been remapped */
+/* Shader remap query — check if a shader name has been remapped */
 const char *Godot_Renderer_GetShaderRemap( const char *shaderName )
 {
     if ( !shaderName ) return NULL;
@@ -3217,7 +3217,7 @@ const char *Godot_Renderer_GetShaderRemap( const char *shaderName )
     return NULL;
 }
 
-/* Phase 24: Swipe effect accessor */
+/* Swipe effect accessor */
 int Godot_Renderer_GetSwipeData( float *thisTime, float *life,
                                  int *hShader, int *numPoints )
 {
@@ -3239,7 +3239,7 @@ void Godot_Renderer_GetSwipePoint( int index, float *point1, float *point2,
     if ( time )   *time = sp->time;
 }
 
-/* Phase 25: Terrain mark accessor */
+/* Terrain mark accessor */
 int Godot_Renderer_GetTerrainMarkCount( void )
 {
     return gr_numTerrainMarks;
@@ -3271,7 +3271,7 @@ void Godot_Renderer_GetTerrainMarkVert( int markIndex, int vertIndex,
     if ( rgba ) { rgba[0] = v->rgba[0]; rgba[1] = v->rgba[1]; rgba[2] = v->rgba[2]; rgba[3] = v->rgba[3]; }
 }
 
-/* Phase 32: Scissor state accessor */
+/* Scissor state accessor */
 void Godot_Renderer_GetScissor( int *x, int *y, int *width, int *height )
 {
     if ( x )      *x      = gr_scissorX;
@@ -3280,7 +3280,7 @@ void Godot_Renderer_GetScissor( int *x, int *y, int *width, int *height )
     if ( height ) *height = gr_scissorHeight;
 }
 
-/* Phase 33: Background image accessor */
+/* Background image accessor */
 int Godot_Renderer_GetBackground( int *cols, int *rows, int *bgr,
                                   const unsigned char **data )
 {
@@ -3324,7 +3324,7 @@ void Godot_Renderer_GetDlight( int index,
 }
 
 /* ===================================================================
- *  Poly C accessors (Phase 16)
+ * Poly C accessors
  *
  *  Give MoHAARunner.cpp read access to captured polys for particle/
  *  smoke/explosion/decal rendering.
@@ -3374,7 +3374,7 @@ int Godot_Renderer_GetPoly( int index,
 }
 
 /* ===================================================================
- *  2D overlay C accessors (Phase 7h)
+ * 2D overlay C accessors
  *
  *  Give MoHAARunner.cpp read access to the 2D draw command buffer
  *  and shader name table for HUD overlay rendering.
@@ -3533,7 +3533,7 @@ void Godot_Renderer_Get2DWindow( float *left, float *right,
 }
 
 /* ===================================================================
- *  Skeletal model accessors (Phase 9)
+ * Skeletal model accessors
  *
  *  Expose the dtiki_t pointer and model type so the skeletal model
  *  module (godot_skel_model_accessors.cpp) can extract mesh data.
@@ -3586,7 +3586,7 @@ int Godot_Model_Register( const char *name )
 }
 
 /* ===================================================================
- *  Cinematic accessors (Phase 11)
+ * Cinematic accessors
  *
  *  Allow MoHAARunner to read decoded RoQ frames for display.
  * ================================================================ */
@@ -3626,7 +3626,7 @@ void Godot_Renderer_SetCinematicInactive( void )
 }
 
 /* ===================================================================
- *  Skeletal animation ri wrappers (Phase 13)
+ * Skeletal animation ri wrappers
  *
  *  Thin C functions that forward to engine ri.* callbacks.
  *  Called from godot_skel_model_accessors.cpp (C++) which cannot
@@ -3716,7 +3716,7 @@ int Godot_Renderer_GetEntityAnim( int index,
 }
 
 /* ===================================================================
- *  HUD model render request accessors (Phase 148)
+ * HUD model render request accessors
  *
  *  Give MoHAARunner.cpp read access to the HUD model render requests
  *  captured from CL_Draw3DModel() calls during UI rendering.
@@ -3793,7 +3793,7 @@ int Godot_Renderer_GetHudModelDrawOrder( int index )
     return gr_hudModels[index].draw_order;
 }
 
-/* Phase 149: Vid_restart state — consumed by MoHAARunner after Com_Frame().
+/* Vid_restart state — consumed by MoHAARunner after Com_Frame().
  * Returns 1 if a vid_restart happened this frame, and fills output params.
  * Resets the flag so it only fires once. */
 int Godot_Renderer_ConsumeVidRestart( int *out_fullscreen, int *out_width, int *out_height )
@@ -4003,7 +4003,7 @@ refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp )
     re.AddShellCasing      = GR_AddShellCasing;
 #endif
 
-    /* Phase 149: Register ter_restart command — the original renderer registers this
+ /* Register ter_restart command — the original renderer registers this
      * in tr_terrain.c which we don't compile. The menu's CheckRestart() issues
      * "ter_restart" when CVAR_TERRAIN_LATCH cvars change. We handle it as a no-op
      * since terrain quality changes apply automatically on next map load. */

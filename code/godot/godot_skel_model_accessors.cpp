@@ -9,7 +9,7 @@
  * (skelChannelList_c).  All exported functions are extern "C" for
  * easy consumption from the Godot module.
  *
- * Phase 9 — Skeletal model rendering.
+ * Skeletal model rendering.
  */
 
 #include "../qcommon/q_shared.h"
@@ -415,7 +415,7 @@ const char *Godot_Skel_GetName(void *tikiPtr)
 }
 
 /* ===================================================================
- *  Skeletal animation — CPU skinning (Phase 13)
+ * Skeletal animation — CPU skinning
  *
  *  Implements the same bone computation and vertex skinning as the
  *  GL1 renderer's R_AddSkelSurfaces + RB_SkelMesh, but outputs
@@ -706,7 +706,7 @@ int Godot_Skel_SkinSurface(void *tikiPtr, int meshIndex, int surfIndex,
 }
 
 /* ===================================================================
- *  LOD data accessors (Phase 59)
+ * LOD data accessors
  *
  *  Expose skelHeaderGame_t.lodIndex[], skelSurfaceGame_t.pCollapse[],
  *  and pCollapseIndex[] to the Godot-side LOD system.

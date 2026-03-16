@@ -9,8 +9,8 @@
  * for efficient batching.  Each unique shader gets one MultiMeshInstance3D
  * with a shared material and per-instance transforms + vertex colours.
  *
- * Phase 221: VFX Manager Foundation
- * Phase 39: Rewritten for MultiMesh batching, vertex colour parity, and
+ * VFX Manager Foundation
+ * Rewritten for MultiMesh batching, vertex colour parity, and
  *           correct blend mode detection.
  */
 

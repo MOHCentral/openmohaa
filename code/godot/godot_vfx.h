@@ -5,7 +5,7 @@
  * the sprite-based VFX pipeline, plus C-linkage accessor functions used
  * by the VFX manager to read sprite data from the renderer entity buffer.
  *
- * Phase 221: VFX Manager Foundation
+ * VFX Manager Foundation
  */
 
 #ifndef GODOT_VFX_H

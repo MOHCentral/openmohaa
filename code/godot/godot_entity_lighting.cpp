@@ -1,9 +1,9 @@
 /*
  * godot_entity_lighting.cpp — Lightgrid + dynamic light sampling for entities.
  *
- * Phase 63: Lightgrid entity lighting.
- * Phase 64: Dynamic lights on entities.
- * Phase 39: Rewritten to use Godot_EntityGridLighting() which replicates
+ * Lightgrid entity lighting.
+ * Dynamic lights on entities.
+ * Rewritten to use Godot_EntityGridLighting() which replicates
  *           RB_GetEntityGridLighting() exactly (lightgrid + dlights +
  *           overbright + normalise + clamp).
  */
@@ -21,7 +21,7 @@ extern "C" {
 }
 
 /* ===================================================================
- *  Phase 63: Lightgrid Entity Lighting — now delegates to the real
+ * Lightgrid Entity Lighting — now delegates to the real
  *  engine R_GetLightingGridValue() via the accessor.
  * ================================================================ */
 
@@ -36,7 +36,7 @@ void Godot_EntityLight_Sample(const float id_origin[3],
 }
 
 /* ===================================================================
- *  Phase 64: Dynamic Lights on Entities — now handled inside
+ * Dynamic Lights on Entities — now handled inside
  *  Godot_EntityGridLighting() using the engine's exact dlight formula.
  *  This function is kept for API compatibility but returns zero since
  *  dlights are already included in the lightgrid result.

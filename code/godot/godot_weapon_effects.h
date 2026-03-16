@@ -19,7 +19,6 @@
  *   // on map change / shutdown:
  *   Godot_ShellCasing_Clear();
  *
- * Phase 224.
  */
 
 #ifndef GODOT_WEAPON_EFFECTS_H

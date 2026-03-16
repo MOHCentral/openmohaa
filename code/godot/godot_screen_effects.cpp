@@ -8,7 +8,7 @@
  * All overlays live on a single CanvasLayer (z_index 100) using separate
  * ColorRect nodes so they stack and fade independently.
  *
- * Phase 227 — Screen Post-Processing Effects.
+ * Screen Post-Processing Effects.
  */
 
 #include "godot_screen_effects.h"

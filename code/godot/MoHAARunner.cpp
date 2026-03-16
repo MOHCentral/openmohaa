@@ -129,7 +129,7 @@ extern "C" {
     void Godot_VFS_FreeFileList(char **list);
     const char *Godot_VFS_GetGamedir(void);
 
-    // Input bridge (Phase 6) — from godot_input_bridge.c
+ // Input bridge — from godot_input_bridge.c
     int  Godot_InjectKeyEvent(int godot_key, int down);
     void Godot_InjectCharEvent(int unicode);
     void Godot_InjectMouseMotion(int dx, int dy);
@@ -137,7 +137,7 @@ extern "C" {
     void Godot_InjectMousePosition(int x, int y);
     void Godot_ResetMousePosition(void);
 
-    // Renderer / camera bridge (Phase 7a) — from godot_renderer.c
+ // Renderer / camera bridge — from godot_renderer.c
     int  Godot_Renderer_HasNewFrame(void);
     void Godot_Renderer_ClearNewFrame(void);
     int  Godot_Renderer_GetFrameCount(void);
@@ -149,7 +149,7 @@ extern "C" {
     const char *Godot_Renderer_GetWorldMapName(void);
     int  Godot_Renderer_IsWorldMapLoaded(void);
 
-    // Phase 39 parity: terrain visibility flag from refdef_t
+ // parity: terrain visibility flag from refdef_t
     int  Godot_Renderer_GetRenderTerrain(void);
 
     // Terrain visibility — from tr_world.c and tr_terrain.c
@@ -159,7 +159,7 @@ extern "C" {
     int  Godot_Terrain_IsPatchMarked(int patchIdx);
     int  Godot_Terrain_GetRendererPatchCount(void);
 
-    // Entity/light bridge (Phase 7e) — from godot_renderer.c
+ // Entity/light bridge — from godot_renderer.c
     int  Godot_Renderer_GetEntityCount(void);
     int  Godot_Renderer_GetEntity(int index,
                                   float *origin, float *axis, float *out_scale,
@@ -172,17 +172,17 @@ extern "C" {
                                   float *origin, float *intensity,
                                   float *r, float *g, float *b, int *type);
 
-    // Poly bridge (Phase 16) — from godot_renderer.c
+ // Poly bridge — from godot_renderer.c
     int  Godot_Renderer_GetPolyCount(void);
     int  Godot_Renderer_GetPoly(int index, int *hShader,
                                 float *positions, float *texcoords,
                                 unsigned char *colors, int maxVerts);
 
-    // Sprite entity data (Phase 16) — from godot_renderer.c
+ // Sprite entity data — from godot_renderer.c
     void Godot_Renderer_GetEntitySprite(int index, float *radius,
                                         float *rotation, int *customShader);
 
-    // 2D overlay bridge (Phase 7h) — from godot_renderer.c
+ // 2D overlay bridge — from godot_renderer.c
     int  Godot_Renderer_Get2DCmdCount(void);
     int  Godot_Renderer_Get2DCmd(int index,
                                  int *type,
@@ -203,9 +203,9 @@ extern "C" {
                                      float *top, float *bottom,
                                      int *vp_x, int *vp_y,
                                      int *vp_w, int *vp_h);
-    /* Phase 52 remap uses Godot_Renderer_GetShaderRemap declared below */
+ /* remap uses Godot_Renderer_GetShaderRemap declared below */
 
-    // Sound bridge (Phase 8) — from godot_sound.c
+ // Sound bridge — from godot_sound.c
     int  Godot_Sound_GetSfxCount(void);
     const char *Godot_Sound_GetSfxName(int index);
     int  Godot_Sound_GetSfxHandle(int index);
@@ -227,7 +227,7 @@ extern "C" {
     float Godot_Sound_GetMusicFadeTime(void);
     void Godot_Sound_ClearMusicAction(void);
 
-    // Phase 49-51: New sound accessors
+ // New sound accessors
     int   Godot_Sound_GetEntityPosition(int entnum, float *origin, float *velocity);
     float Godot_Sound_GetFadeTime(void);
     float Godot_Sound_GetFadeTarget(void);
@@ -247,7 +247,7 @@ extern "C" {
     void  Godot_Sound_ClearTriggeredAction(void);
     int   Godot_Sound_FindSfxIndex(int handle);
 
-    // Sound occlusion (Phase 48) — from godot_sound_occlusion.c
+ // Sound occlusion — from godot_sound_occlusion.c
     float Godot_SoundOcclusion_Check(float listener_x, float listener_y,
                                      float listener_z,
                                      float origin_x, float origin_y,
@@ -255,13 +255,13 @@ extern "C" {
     void  Godot_SoundOcclusion_SetEnabled(int enabled);
     int   Godot_SoundOcclusion_IsEnabled(void);
 
-    // Model bridge (Phase 9) — from godot_renderer.c + godot_skel_model_accessors.cpp
+ // Model bridge — from godot_renderer.c + godot_skel_model_accessors.cpp
     void *Godot_Model_GetTikiPtr(int hModel);
     int   Godot_Model_GetType(int hModel);
     int   Godot_Model_Register(const char *name);
     const char *Godot_Model_GetName(int hModel);
 
-    // Client diagnostics (Phase 6 debug) — from godot_client_accessors.cpp
+ // Client diagnostics (debug) — from godot_client_accessors.cpp
     int  Godot_Client_GetState(void);
     const char *Godot_Client_GetMapName(void);
     int  Godot_Client_GetKeyCatchers(void);
@@ -291,13 +291,13 @@ extern "C" {
     void Godot_Save_LoadFromSlot(int slot);
     int  Godot_Save_SlotExists(int slot);
 
-    // Cinematic bridge (Phase 11) — from godot_renderer.c
+ // Cinematic bridge — from godot_renderer.c
     int  Godot_Renderer_IsCinematicActive(void);
     int  Godot_Renderer_GetCinematicFrame(const unsigned char **out_data,
                                           int *out_width, int *out_height);
     void Godot_Renderer_SetCinematicInactive(void);
 
-    // Skeletal animation bridge (Phase 13) — from godot_renderer.c + godot_skel_model_accessors.cpp
+ // Skeletal animation bridge — from godot_renderer.c + godot_skel_model_accessors.cpp
     int   Godot_Renderer_GetEntityAnim(int index,
                                         void **outTiki, int *outEntityNumber,
                                         void *outFrameInfo, int *outBoneTag,
@@ -333,10 +333,10 @@ extern "C" {
     int   Godot_Skel_GetSurfaceIndices(void *tikiPtr, int meshIndex, int surfIndex,
                                         int *indices);
 
-    // Phase 35: Entity parenting — from godot_renderer.c
+ // Entity parenting — from godot_renderer.c
     int   Godot_Renderer_GetEntityParent(int index);
 
-    // Phase 268: Entity lighting origin — from godot_renderer.c
+ // Entity lighting origin — from godot_renderer.c
     void  Godot_Renderer_GetEntityLightingOrigin(int index, float *out);
 
     // Entity grid lighting — from godot_bsp_accessors.c
@@ -357,7 +357,7 @@ extern "C" {
                                      float *outHeight, float *outSpriteScale);
 
     // Render commands and polygons
-    // Phase 148: HUD model render request accessors — from godot_renderer.c
+ // HUD model render request accessors — from godot_renderer.c
     int   Godot_Renderer_GetHudModelCount(void);
     int   Godot_Renderer_GetHudModel(int index,
                                      float *origin, float *axis, float *out_scale,
@@ -370,23 +370,23 @@ extern "C" {
                                          float *outScale);
     int   Godot_Renderer_GetHudModelDrawOrder(int index);
 
-    // Phase 149: Vid_restart detection + settings accessors
+ // Vid_restart detection + settings accessors
     int   Godot_Renderer_ConsumeVidRestart(int *out_fullscreen, int *out_width, int *out_height);
     void  Godot_Renderer_SetDesktopResolution(int w, int h);
     void  Godot_Renderer_SetScreenResolution(int w, int h);
     int   Godot_Renderer_GetNumVidModes(void);
     int   Godot_Renderer_GetVidMode(int mode, int *w, int *h);
 
-    // Phase 26: Shader remap query — from godot_renderer.c
+ // Shader remap query — from godot_renderer.c
     const char *Godot_Renderer_GetShaderRemap(const char *shaderName);
 
-    // Phase 24: Swipe effect accessor — from godot_renderer.c
+ // Swipe effect accessor — from godot_renderer.c
     int   Godot_Renderer_GetSwipeData(float *thisTime, float *life,
                                       int *hShader, int *numPoints);
     void  Godot_Renderer_GetSwipePoint(int index, float *point1, float *point2,
                                        float *time);
 
-    // Phase 25: Terrain mark accessor — from godot_renderer.c
+ // Terrain mark accessor — from godot_renderer.c
     int   Godot_Renderer_GetTerrainMarkCount(void);
     void  Godot_Renderer_GetTerrainMark(int index, int *hShader, int *numVerts,
                                         int *terrainIndex, int *renderfx);
@@ -394,15 +394,15 @@ extern "C" {
                                             float *xyz, float *st,
                                             unsigned char *rgba);
 
-    // Phase 32: Scissor state — from godot_renderer.c
+ // Scissor state — from godot_renderer.c
     void  Godot_Renderer_GetScissor(int *x, int *y, int *width, int *height);
 
-    // Phase 33: Background image accessor — from godot_renderer.c
+ // Background image accessor — from godot_renderer.c
     int   Godot_Renderer_GetBackground(int *cols, int *rows, int *bgr,
                                        const unsigned char **data);
     int   Godot_Renderer_GetBackgroundCmdIndex(void);
 
-    // Phase 59: UI system — from godot_ui_system.cpp / godot_ui_input.cpp
+ // UI system — from godot_ui_system.cpp / godot_ui_input.cpp
     // Fallback declarations in case headers are absent:
 #ifndef HAS_UI_SYSTEM_MODULE
     int   Godot_UI_Update(void);
@@ -420,7 +420,7 @@ extern "C" {
     int   Godot_UI_ShouldCaptureInput(void);
 #endif
 
-    // Phase 59: Mouse reset — from godot_input_bridge.c
+ // Mouse reset — from godot_input_bridge.c
     void  Godot_ResetMousePosition(void);
 
     // Cursor image accessor — from stubs.cpp
@@ -631,7 +631,7 @@ MoHAARunner::MoHAARunner() {
     Godot_Renderer_SetForceRenderCallback(godot_loading_frame_callback);
 }
 
-// ── Coordinate conversion helpers (Phase 7a) ──
+// ── Coordinate conversion helpers ──
 //
 // id Tech 3 (MOHAA): X = Forward, Y = Left, Z = Up  (right-handed, Z-up)
 // Godot 4:           X = Right,   Y = Up,   -Z = Forward  (right-handed, Y-up)
@@ -859,21 +859,21 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_list_files", "directory", "extension"), &MoHAARunner::vfs_list_files);
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_get_gamedir"), &MoHAARunner::vfs_get_gamedir);
 
-    // Input control (Phase 6)
+ // Input control
     godot::ClassDB::bind_method(godot::D_METHOD("set_mouse_captured", "captured"), &MoHAARunner::set_mouse_captured);
     godot::ClassDB::bind_method(godot::D_METHOD("is_mouse_captured"), &MoHAARunner::is_mouse_captured);
     godot::ClassDB::bind_method(godot::D_METHOD("set_hud_visible", "visible"), &MoHAARunner::set_hud_visible);
     godot::ClassDB::bind_method(godot::D_METHOD("is_hud_visible"), &MoHAARunner::is_hud_visible);
 
-    // Game flow state (Phase 261)
+ // Game flow state
     godot::ClassDB::bind_method(godot::D_METHOD("get_game_flow_state"), &MoHAARunner::get_game_flow_state);
     godot::ClassDB::bind_method(godot::D_METHOD("get_game_flow_state_string"), &MoHAARunner::get_game_flow_state_string);
 
-    // New game flow (Phase 262)
+ // New game flow
     godot::ClassDB::bind_method(godot::D_METHOD("start_new_game", "difficulty"), &MoHAARunner::start_new_game);
     godot::ClassDB::bind_method(godot::D_METHOD("set_difficulty", "difficulty"), &MoHAARunner::set_difficulty);
 
-    // Save / load game (Phase 264)
+ // Save / load game
     godot::ClassDB::bind_method(godot::D_METHOD("quick_save"), &MoHAARunner::quick_save);
     godot::ClassDB::bind_method(godot::D_METHOD("quick_load"), &MoHAARunner::quick_load);
     godot::ClassDB::bind_method(godot::D_METHOD("save_game", "slot_name"), &MoHAARunner::save_game);
@@ -886,7 +886,7 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("connect_to_server", "address"), &MoHAARunner::connect_to_server);
     godot::ClassDB::bind_method(godot::D_METHOD("disconnect_from_server"), &MoHAARunner::disconnect_from_server);
 
-    // Multiplayer server browser + hosting (Phase 263)
+ // Multiplayer server browser + hosting
     godot::ClassDB::bind_method(godot::D_METHOD("host_server", "map", "maxplayers", "gametype"), &MoHAARunner::host_server);
     godot::ClassDB::bind_method(godot::D_METHOD("refresh_server_list"), &MoHAARunner::refresh_server_list);
     godot::ClassDB::bind_method(godot::D_METHOD("refresh_lan"), &MoHAARunner::refresh_lan);
@@ -922,7 +922,7 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("set_vsync_mode", "mode"), &MoHAARunner::set_vsync_mode);
     godot::ClassDB::bind_method(godot::D_METHOD("get_vsync_mode"), &MoHAARunner::get_vsync_mode);
 
-    // Menu control (Phase 261)
+ // Menu control
     godot::ClassDB::bind_method(godot::D_METHOD("open_main_menu"), &MoHAARunner::open_main_menu);
     godot::ClassDB::bind_method(godot::D_METHOD("close_menu"), &MoHAARunner::close_menu);
     godot::ClassDB::bind_method(godot::D_METHOD("push_menu", "menu_name"), &MoHAARunner::push_menu);
@@ -1157,7 +1157,7 @@ void MoHAARunner::force_loading_frame_render() {
 }
 
 // ──────────────────────────────────────────────
-//  3D scene setup (Phase 7a)
+// 3D scene setup
 // ──────────────────────────────────────────────
 
 void MoHAARunner::setup_3d_scene() {
@@ -1195,7 +1195,7 @@ void MoHAARunner::setup_3d_scene() {
     env->set_ambient_light_color(Color(1.0, 1.0, 1.0));
     env->set_ambient_light_energy(0.5);
 
-    // Phase 81: Tonemap and exposure to match MOHAA's overbright/gamma
+ // Tonemap and exposure to match MOHAA's overbright/gamma
     // Set to linear. The real overbright math is baked directly into the
     // lightmap build pipeline (godot_bsp_mesh load_lightmaps)
     env->set_tonemapper(Environment::TONE_MAPPER_LINEAR);
@@ -1231,7 +1231,7 @@ void MoHAARunner::setup_3d_scene() {
 
     UtilityFunctions::print("[MoHAA] 3D scene created (Camera3D + light + environment).");
 
-    // ── Weapon viewport (Phase 62) ──
+ // ── Weapon viewport ──
     // Render first-person weapon entities in a separate SubViewport with
     // its own depth buffer, then composite on top of the main scene.
     // This replicates id Tech 3's RF_DEPTHHACK (depth range 0–0.3).
@@ -1287,7 +1287,7 @@ void MoHAARunner::setup_3d_scene() {
 }
 
 // ──────────────────────────────────────────────
-//  Camera update (Phase 7a)
+// Camera update
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_camera() {
@@ -1399,7 +1399,7 @@ void MoHAARunner::update_camera() {
 }
 
 // ──────────────────────────────────────────────
-//  BSP world loading (Phase 7b)
+// BSP world loading
 // ──────────────────────────────────────────────
 
 void MoHAARunner::check_world_load() {
@@ -1418,8 +1418,8 @@ void MoHAARunner::check_world_load() {
             static_model_pvs.clear();
             loaded_bsp_name = "";
             GodotSkelModelCache::get().clear();  // Invalidate model cache
-            skel_mesh_cache.clear();              // Phase 60: Clear skinned mesh cache
-            tinted_mat_cache.clear();             // Phase 61: Clear tinted material cache
+ skel_mesh_cache.clear(); // Clear skinned mesh cache
+ tinted_mat_cache.clear(); // Clear tinted material cache
             tiki_mat_cache.clear();               // Clear TIKI entity material cache
             shader_textures.clear();              // Shader handles are re-registered on next map
             s_shader_texture_loaded_names.clear();  // Clear name tracking alongside texture cache
@@ -1496,7 +1496,7 @@ void MoHAARunner::check_world_load() {
     // Load new BSP geometry
     UtilityFunctions::print(String("[MoHAA] Loading BSP world: ") + new_bsp);
 
-    // Phase 59: Notify UI system that a map load has started
+ // Notify UI system that a map load has started
     Godot_UI_OnMapLoad();
 
     // Clear texture caches before loading — BeginRegistration resets shader
@@ -1541,10 +1541,10 @@ void MoHAARunner::check_world_load() {
         load_static_models();
         UtilityFunctions::print(String("[MoHAA] Static models loaded for: ") + new_bsp);
 
-        // Load flare surfaces (Phase 74)
+ // Load flare surfaces
         load_flares();
 
-        // Load skybox cubemap from sky shader (Phase 12)
+ // Load skybox cubemap from sky shader
         load_skybox();
         UtilityFunctions::print(String("[MoHAA] Loading load_skybox: ") + new_bsp);
 
@@ -1792,7 +1792,7 @@ void MoHAARunner::update_terrain_visibility() {
     int tp_count = Godot_BSP_GetTerrainPatchCount();
     if (tp_count <= 0) return;
 
-    // Phase 39 parity: respect renderTerrain flag from refdef_t.
+ // parity: respect renderTerrain flag from refdef_t.
     // When false (e.g. during certain cinematics or UI screens), hide all terrain.
     if (!Godot_Renderer_GetRenderTerrain()) {
         for (int pi = 0; pi < tp_count; pi++) {
@@ -1845,7 +1845,7 @@ void MoHAARunner::update_terrain_visibility() {
 }
 
 // ──────────────────────────────────────────────
-//  Static BSP model loading (Phase 10)
+// Static BSP model loading
 // ──────────────────────────────────────────────
 
 /// Check whether a shader handle uses additive blending.
@@ -1961,7 +1961,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
             break;
     }
 
-    // Phase 36: tcMod scale — apply UV scale if non-default
+ // tcMod scale — apply UV scale if non-default
     if (sp->has_tcmod) {
         if (sp->tcmod_scale_s != 1.0f || sp->tcmod_scale_t != 1.0f) {
             mat->set_uv1_scale(Vector3(sp->tcmod_scale_s, sp->tcmod_scale_t, 1.0f));
@@ -1969,7 +1969,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
         // tcMod scroll — UV offset is animated per-frame by update_shader_animations()
     }
 
-    // Phase 56/57: rgbGen/alphaGen baseline material state
+ // rgbGen/alphaGen baseline material state
     if (sp->rgbgen_type == 4) { // const
         Color a = mat->get_albedo();
         mat->set_albedo(Color(clamp01(sp->rgbgen_const[0]),
@@ -1989,12 +1989,12 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
         }
     }
 
-    // Phase 65: Fullbright rendering for nolightmap surfaces
+ // Fullbright rendering for nolightmap surfaces
     if (sp->no_lightmap) {
         mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
     }
 
-    // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
+ // deformVertexes autosprite/autosprite2 billboard mode
     if (sp->has_deform) {
         if (sp->deform_type == 3) { // autosprite
             mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
@@ -2003,7 +2003,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
         }
     }
 
-    // Phase 142: clampMap — disable texture repeat if the first diffuse stage
+ // clampMap — disable texture repeat if the first diffuse stage
     // uses clampMap instead of map.  Mirrors R_FindShader() image loading which
     // passes GL_CLAMP for clampMap stages.
     if (sp->stage_count > 0) {
@@ -2013,7 +2013,7 @@ static void apply_shader_props_to_material(Ref<StandardMaterial3D> &mat,
             if (sp->stages[st].isClampMap) {
                 mat->set_flag(BaseMaterial3D::FLAG_USE_TEXTURE_REPEAT, false);
             }
-            // Phase 143: depthWrite / nodepthwrite / noDepthTest
+ // depthWrite / nodepthwrite / noDepthTest
             if (sp->stages[st].depthWriteExplicit) {
                 if (sp->stages[st].depthWriteEnabled) {
                     mat->set_depth_draw_mode(BaseMaterial3D::DEPTH_DRAW_ALWAYS);
@@ -2245,7 +2245,7 @@ void MoHAARunner::load_static_models() {
                 mat->set_albedo(Color(0.5, 0.6, 0.4, 1.0));
             }
 
-            // Apply shader transparency / cull properties (Phase 11)
+ // Apply shader transparency / cull properties
             if (!shader_name.is_empty()) {
                 CharString cs = shader_name.ascii();
                 apply_shader_props_to_material(mat, cs.get_data());
@@ -2414,7 +2414,7 @@ void MoHAARunner::load_static_models() {
 }
 
 // ──────────────────────────────────────────────
-//  Flare loading (Phase 74)
+// Flare loading
 // ──────────────────────────────────────────────
 
 void MoHAARunner::load_flares() {
@@ -2527,7 +2527,7 @@ void MoHAARunner::load_flares() {
 }
 
 // ──────────────────────────────────────────────
-//  Skybox loading (Phase 12)
+// Skybox loading
 // ──────────────────────────────────────────────
 
 void MoHAARunner::load_skybox() {
@@ -3216,7 +3216,7 @@ void MoHAARunner::update_sun_flare() {
 }
 
 // ──────────────────────────────────────────────
-//  Wave function evaluation (Phase 141)
+// Wave function evaluation
 // ──────────────────────────────────────────────
 
 // Evaluate a wave function (mirrors renderergl1 EvalWaveForm).
@@ -3250,7 +3250,7 @@ static float eval_wave(MohaaWaveFunc func, float base, float amp,
 }
 
 // ──────────────────────────────────────────────
-//  Entity rendering (Phase 7e)
+// Entity rendering
 // ──────────────────────────────────────────────
 
 // Entity type constants matching refEntityType_t (tr_types.h)
@@ -3344,7 +3344,7 @@ void MoHAARunner::update_entities() {
         // entities in multiplayer (players at spawn points that are in different
         // PVS leaves from the camera position).
 
-        // Phase 133: Draw distance culling — skip entities beyond the far-plane cull distance.
+ // Draw distance culling — skip entities beyond the far-plane cull distance.
         // First-person entities (RF_FIRST_PERSON / RF_DEPTHHACK) are always visible.
         // NOTE: Entity frustum culling is handled automatically by Godot's scene tree AABB
         // culling per MeshInstance3D — no manual sphere test is needed or correct here.
@@ -3363,7 +3363,7 @@ void MoHAARunner::update_entities() {
         }
 #endif
 
-        // RT_SPRITE: billboard quad at entity origin (Phase 16)
+ // RT_SPRITE: billboard quad at entity origin
         // MOHAA .spr sprites are sized by image dimensions × scale, NOT by
         // refEntity_t.radius (which is only used for frustum culling).
         // See RB_DrawSprite in tr_sprite.c for the original sizing logic.
@@ -3557,7 +3557,7 @@ void MoHAARunner::update_entities() {
             continue;
         }
 
-        // ── Phase 23: RT_BEAM — line between two points (e.g. tracers, lasers) ──
+ // ── RT_BEAM — line between two points (e.g. tracers, lasers) ──
         if (reType == RT_BEAM) {
             float from[3], to[3], diameter = 1.0f;
             Godot_Renderer_GetEntityBeam(i, from, to, &diameter);
@@ -3896,7 +3896,7 @@ void MoHAARunner::update_entities() {
                 }
             }
 
-            // ── Phase 59: LOD Selection ──
+ // ── LOD Selection ──
             int lodLevel = 0;
             // First-person weapons/hands (RF_FIRST_PERSON) are always LOD 0.
             if (!is_first_person) {
@@ -3976,7 +3976,7 @@ void MoHAARunner::update_entities() {
             }
 
             if (has_anim && tikiPtr) {
-                // Phase 60: Compute FNV-1a hash of animation state to
+ // Compute FNV-1a hash of animation state to
                 // skip mesh rebuild when the pose hasn't changed.
                 // Include LOD level in the hash since different LODs need different meshes!
                 uint64_t anim_hash = 14695981039346656037ULL;
@@ -4065,7 +4065,7 @@ void MoHAARunner::update_entities() {
                                 int outNumTris  = numTris;
                                 int *outIndices = indices;
 
-                                // Phase 59: Apply LOD index collapse if not LOD 0
+ // Apply LOD index collapse if not LOD 0
                                 if (lodLevel > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
                                     int *collapsedIndices = (int *)malloc(numTris * 3 * sizeof(int));
                                     if (collapsedIndices) {
@@ -4182,7 +4182,7 @@ void MoHAARunner::update_entities() {
                         ::free(boneCache);
                     }
 
-                    // Phase 60: Cache the newly built skinned mesh
+ // Cache the newly built skinned mesh
                     if (!skip_cache && skinned_mesh.is_valid() && skinned_mesh->get_surface_count() > 0) {
                         auto &entry = skel_mesh_cache[entNum];
                         entry.anim_hash = anim_hash;
@@ -4263,7 +4263,7 @@ void MoHAARunner::update_entities() {
                         csmat->set_meta("shader_name", Variant(String(csn)));
                     }
 
-                    // Phase 39: customShader effect material blend-mode fallback.
+ // customShader effect material blend-mode fallback.
                     // customShader on RT_MODEL entities is used overwhelmingly for
                     // VFX overlays: muzzle flashes, damage indicators, powerup
                     // glows, etc.  These effects have dark/black backgrounds that
@@ -4390,7 +4390,7 @@ void MoHAARunner::update_entities() {
             mi->set_global_transform(Transform3D(basis, pos));
         }
 
-        // ── Phase 62: Weapon viewport for first-person entities (depth-hack) ──
+ // ── Weapon viewport for first-person entities (depth-hack) ──
         // RF_FIRST_PERSON (0x02) or RF_DEPTHHACK (0x04) → weapon_root (separate
         // SubViewport with its own depth buffer, composited on top of the main
         // scene).  This prevents the viewmodel from clipping into walls.
@@ -4463,8 +4463,8 @@ void MoHAARunner::update_entities() {
             }
         }
 
-        // ── Phase 21+22+268: Entity colour tinting + alpha + entity lighting ──
-        // Phase 134: Correct rgbGen/alphaGen entity application per shader directive
+ // ── Phase 21+22+268: Entity colour tinting + alpha + entity lighting ──
+ // Correct rgbGen/alphaGen entity application per shader directive
         // Only apply shaderRGBA when the shader explicitly requests it via rgbGen/alphaGen entity.
         Color light_mul(1.0f, 1.0f, 1.0f, 1.0f);
 #ifdef HAS_ENTITY_LIGHTING_MODULE
@@ -4495,7 +4495,7 @@ void MoHAARunner::update_entities() {
                               fabsf(light_mul.g - 1.0f) > 0.02f ||
                               fabsf(light_mul.b - 1.0f) > 0.02f;
 
-        // Phase 134: Check if we need per-surface shader analysis for rgbGen/alphaGen entity
+ // Check if we need per-surface shader analysis for rgbGen/alphaGen entity
         bool needs_material_update = has_light_tint;
         if (!needs_material_update) {
             // Quick pre-check: do we have any non-default shaderRGBA or RF_ALPHAFADE?
@@ -4506,7 +4506,7 @@ void MoHAARunner::update_entities() {
         if (needs_material_update) {
             Ref<Mesh> mesh = mi->get_mesh();
             if (mesh.is_valid()) {
-                // Phase 61: Quantise light to 4-bit for cache key
+ // Quantise light to 4-bit for cache key
                 uint8_t lr = (uint8_t)(light_mul.r * 15.0f + 0.5f);
                 uint8_t lg = (uint8_t)(light_mul.g * 15.0f + 0.5f);
                 uint8_t lb = (uint8_t)(light_mul.b * 15.0f + 0.5f);
@@ -4529,7 +4529,7 @@ void MoHAARunner::update_entities() {
                     Ref<StandardMaterial3D> smat = base_mat;
                     if (!smat.is_valid()) continue;
 
-                    // Phase 134: Determine per-surface shader rgbGen/alphaGen directives
+ // Determine per-surface shader rgbGen/alphaGen directives
                     String shader_name = smat->get_meta("shader_name", "");
                     const GodotShaderProps *sp = nullptr;
                     if (!shader_name.is_empty()) {
@@ -4602,7 +4602,7 @@ void MoHAARunner::update_entities() {
                         has_entity_tint = true;
                     }
 
-                    // Phase 135: Apply rgbGen/alphaGen wave animation (pulsing color/alpha effects)
+ // Apply rgbGen/alphaGen wave animation (pulsing color/alpha effects)
                     // Mirrors update_shader_animations() wave logic but applied per-entity
                     if (sp) {
                         if (sp->rgbgen_type == 2) { // wave
@@ -4656,7 +4656,7 @@ void MoHAARunner::update_entities() {
                             dup->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
                         }
 
-                        // Phase 136: deformVertexes autosprite/autosprite2 billboard mode
+ // deformVertexes autosprite/autosprite2 billboard mode
                         if (sp && sp->has_deform) {
                             if (sp->deform_type == 3) { // autosprite
                                 dup->set_billboard_mode(BaseMaterial3D::BILLBOARD_ENABLED);
@@ -4710,7 +4710,7 @@ void MoHAARunner::update_entities() {
 
     active_entity_count = ent_count;
 
-    // ── Phase 35: Entity parenting — DISABLED ──
+ // ── Entity parenting — DISABLED ──
     // CG_AttachEntity (in cgame) already computes world-space positions
     // for child entities before submitting them via R_AddRefEntityToScene.
     // The parentEntity field is metadata for lighting origin inheritance,
@@ -4770,7 +4770,7 @@ void MoHAARunner::update_dlights() {
 }
 
 // ──────────────────────────────────────────────
-//  Poly/particle rendering (Phase 16)
+// Poly/particle rendering
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_polys() {
@@ -5017,7 +5017,7 @@ void MoHAARunner::update_polys() {
 }
 
 // ──────────────────────────────────────────────
-//  Swipe effects (Phase 24)
+// Swipe effects
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_swipe_effects() {
@@ -5116,13 +5116,13 @@ void MoHAARunner::update_swipe_effects() {
 }
 
 // ──────────────────────────────────────────────
-//  Terrain mark decals (Phase 25)
+// Terrain mark decals
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_terrain_marks() {
     if (!game_world) return;
 
-    // Phase 150: honour r_drawmarks cvar — when 0, hide all marks
+ // honour r_drawmarks cvar — when 0, hide all marks
     if (Cvar_VariableIntegerValue("r_drawmarks") == 0) {
         for (int i = 0; i < active_terrain_mark_count; i++) {
             if (i < (int)terrain_mark_meshes.size())
@@ -5615,7 +5615,7 @@ void MoHAARunner::update_shadow_blobs() {
 }
 
 // ──────────────────────────────────────────────
-//  Shader UV animation (Phase 36)
+// Shader UV animation
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_shader_animations(double delta) {
@@ -5683,7 +5683,7 @@ void MoHAARunner::update_shader_animations(double delta) {
             if (sp->has_tcmod) {
                 float offS = 0.0f;
                 float offT = 0.0f;
-                /* Phase 144: tcMod offset — static UV shift */
+ /* tcMod offset — static UV shift */
                 offS += sp->tcmod_offset_s;
                 offT += sp->tcmod_offset_t;
                 if (sp->tcmod_scroll_s != 0.0f || sp->tcmod_scroll_t != 0.0f) {
@@ -5719,7 +5719,7 @@ void MoHAARunner::update_shader_animations(double delta) {
                 }
             }
 
-            // Phase 55: animMap frame swap — uses cached shader_handle (O(1))
+ // animMap frame swap — uses cached shader_handle (O(1))
             if (sp->has_animmap && sp->animmap_num_frames > 0 && sp->animmap_freq > 0.0f) {
                 int shader_handle = sc.shader_handle;
 
@@ -5762,7 +5762,7 @@ void MoHAARunner::update_shader_animations(double delta) {
                 }
             }
 
-            // Phase 56/57 + Phase 141: runtime rgbGen/alphaGen wave animation
+ // + runtime rgbGen/alphaGen wave animation
             // Uses eval_wave() to support all wave function types (sin, triangle,
             // square, sawtooth, inverse_sawtooth) — not just sine.
             if (sp->rgbgen_type == 2 || sp->alphagen_type == 2) {
@@ -5792,11 +5792,11 @@ void MoHAARunner::update_shader_animations(double delta) {
 }
 
 // ──────────────────────────────────────────────
-//  2D HUD overlay (Phase 7h)
+// 2D HUD overlay
 // ──────────────────────────────────────────────
 
 Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
-    // Look up shader name (Phase 52: apply shader remap if active)
+ // Look up shader name (apply shader remap if active)
     const char *raw_name = Godot_Renderer_GetShaderName(shader_handle);
     const char *remapped = Godot_Renderer_GetShaderRemap(raw_name);
     const char *name = (remapped && remapped[0]) ? remapped : raw_name;
@@ -6484,7 +6484,7 @@ void MoHAARunner::update_2d_overlay() {
         return seg.item;
     };
 
-    // Phase 58: Prepare loading background image (map preview from
+ // Prepare loading background image (map preview from
     // RE_DrawStretchRaw).  We build a texture here but DON'T draw it yet.
     // It will be drawn inside the 2D command loop at the correct Z-position
     // (bg_cmd_index) so that widget backgrounds render UNDER the preview
@@ -7226,7 +7226,7 @@ void MoHAARunner::update_2d_overlay() {
 }
 
 // ──────────────────────────────────────────────
-//  Audio bridge (Phase 8)
+// Audio bridge
 // ──────────────────────────────────────────────
 
 void MoHAARunner::setup_audio() {
@@ -7268,23 +7268,23 @@ void MoHAARunner::setup_audio() {
                             String::num_int64(MAX_3D_PLAYERS) + " 3D + " +
                             String::num_int64(MAX_2D_PLAYERS) + " 2D players.");
 
-    // Initialise player slot tracking (Phase 41)
+ // Initialise player slot tracking
     player_slot_info.resize(MAX_3D_PLAYERS);
 
-    // Music player (Phase 17)
+ // Music player
     music_player = memnew(AudioStreamPlayer);
     music_player->set_name("MusicPlayer");
     music_player->set_bus(StringName("Master"));
     add_child(music_player);
     UtilityFunctions::print("[MoHAA] Music player initialised.");
 
-    // ── Phase 45: Initialise ubersound alias system ──
+ // ── Initialise ubersound alias system ──
 #ifdef HAS_UBERSOUND_MODULE
     Godot_Ubersound_Init();
     UtilityFunctions::print("[MoHAA] Ubersound accessor ready (aliases loaded by cgame at map load).");
 #endif
 
-    // ── Phase 48: Enable sound occlusion ──
+ // ── Enable sound occlusion ──
 #ifdef HAS_SOUND_OCCLUSION_MODULE
     Godot_SoundOcclusion_SetEnabled(1);
 #endif
@@ -7313,7 +7313,7 @@ Ref<AudioStream> MoHAARunner::load_wav_from_vfs(int sfxHandle) {
         len = Godot_VFS_ReadFile(prefixed, &buf);
     }
 
-    // ── Phase 45: Try ubersound alias resolution if direct load failed ──
+ // ── Try ubersound alias resolution if direct load failed ──
 #ifdef HAS_UBERSOUND_MODULE
     if (len <= 0 && Godot_Ubersound_IsLoaded()) {
         char resolved_path[512];
@@ -7404,7 +7404,7 @@ Ref<AudioStream> MoHAARunner::load_wav_from_vfs(int sfxHandle) {
                        (data[fmt_offset + 6] << 16) | (data[fmt_offset + 7] << 24);
     int bits_per_sample = data[fmt_offset + 14] | (data[fmt_offset + 15] << 8);
 
-    // Phase 43: Handle MP3-in-WAV (format tag 0x0055)
+ // Handle MP3-in-WAV (format tag 0x0055)
     if (audio_format == 0x0055) {
         // Clamp data_size to available data
         if (data_offset + data_size > (int)len) {
@@ -7500,7 +7500,7 @@ void MoHAARunner::update_scoreboard() {
 }
 
 /* ===================================================================
- *  Phase 148: HUD model preview rendering
+ * HUD model preview rendering
  *
  *  CL_Draw3DModel() renders 3D model previews into UI widget rects
  *  (e.g., player model selection in multiplayer options).  We capture
@@ -7898,7 +7898,7 @@ void MoHAARunner::update_audio(double delta) {
         if (wav.is_null()) continue;
 
         if (type == 0) {
-            // Phase 41: Try to evict a player on the same entity+channel first
+ // Try to evict a player on the same entity+channel first
             int pi = -1;
             if (entnum > 0 && channel > 0) {
                 for (int s = 0; s < MAX_3D_PLAYERS; s++) {
@@ -7931,7 +7931,7 @@ void MoHAARunner::update_audio(double delta) {
             float vol_db = (volume > 0.001f) ? (20.0f * log10f(volume)) : -80.0f;
 #ifdef HAS_SOUND_OCCLUSION_MODULE
             {
-                // Phase 48: Apply sound occlusion attenuation for 3D sounds
+ // Apply sound occlusion attenuation for 3D sounds
                 float lo[3], la[9]; int lent;
                 Godot_Sound_GetListener(lo, la, &lent);
                 float occ = Godot_SoundOcclusion_Check(lo[0], lo[1], lo[2],
@@ -7961,7 +7961,7 @@ void MoHAARunner::update_audio(double delta) {
     }
     Godot_Sound_ClearEvents();
 
-    // -- 3. Update looping sounds (Phase 40: position-aware tracking) --
+ // -- 3. Update looping sounds (position-aware tracking) --
     int loop_count = Godot_Sound_GetLoopCount();
     // Build a composite key = sfxHandle * 65537 + quantised position hash
     // This allows the same sfxHandle to loop at multiple positions
@@ -8003,7 +8003,7 @@ void MoHAARunner::update_audio(double delta) {
         } else {
             Ref<AudioStream> wav = load_wav_from_vfs(sfxHandle);
             if (wav.is_null()) continue;
-            // Phase 43: Handle looping for both WAV and MP3 streams
+ // Handle looping for both WAV and MP3 streams
             Ref<AudioStream> loop_stream;
             Ref<AudioStreamWAV> wav_ref = wav;
             Ref<AudioStreamMP3> mp3_ref = wav;
@@ -8066,7 +8066,7 @@ void MoHAARunner::update_audio(double delta) {
         }
     }
 
-    // -- 4. Sound fade (Phase 50) --
+ // -- 4. Sound fade --
     if (Godot_Sound_GetFadeActive()) {
         float fade_time = Godot_Sound_GetFadeTime();
         if (fade_time > 0.0f) {
@@ -8090,7 +8090,7 @@ void MoHAARunner::update_audio(double delta) {
 }
 
 // ──────────────────────────────────────────────
-//  Cinematic bridge (Phase 11)
+// Cinematic bridge
 // ──────────────────────────────────────────────
 
 void MoHAARunner::setup_cinematic() {
@@ -8282,16 +8282,16 @@ void MoHAARunner::_ready() {
         }
     }
 
-    // Create 3D scene nodes (Phase 7a — camera bridge)
+ // Create 3D scene nodes (camera bridge)
     setup_3d_scene();
 
-    // Create audio player pools (Phase 8 — sound bridge)
+ // Create audio player pools (sound bridge)
     setup_audio();
 
-    // Create cinematic video display (Phase 11 — cinematic bridge)
+ // Create cinematic video display (cinematic bridge)
     setup_cinematic();
 
-    // Initialise game flow state (Phase 261)
+ // Initialise game flow state
     game_flow_state = GameFlowState::BOOT;
 
     // ── Module init hooks (defensive — only called if module exists) ──
@@ -8502,7 +8502,7 @@ void MoHAARunner::_process(double delta) {
     // On web this is a no-op duplicate that ensures any lingering state is clean.
     poll_mouse_input_web(overlay_active_now);
 
-    // ── Phase 149: Apply engine cvar settings to Godot systems ──
+ // ── Apply engine cvar settings to Godot systems ──
     // Audio volume: read s_volume / s_musicvolume and apply to Godot AudioServer bus
     {
         AudioServer *as = AudioServer::get_singleton();
@@ -8761,19 +8761,19 @@ void MoHAARunner::_process(double delta) {
         }
     }
 
-    // ── Phase 85: Begin per-frame render statistics ──
+ // ── Begin per-frame render statistics ──
 #ifdef HAS_MESH_CACHE_MODULE
     Godot_RenderStats_BeginFrame();
 #endif
 
-    // ── Phase 59: Poll UI state machine before rendering/input ──
+ // ── Poll UI state machine before rendering/input ──
     Godot_UI_Update();
 
     // NOTE: Cursor management moved to after Com_Frame() so that state
     // changes during the frame (menu open/close, map load, etc.) are
     // reflected immediately without a 1-frame lag.
 
-    // ── Phase 146: Custom cursor from engine (gfx/2d/mouse_cursor.tga) ──
+ // ── Custom cursor from engine (gfx/2d/mouse_cursor.tga) ──
     // The engine's UI system calls IN_SetCursorFromImage() with raw RGBA
     // pixel data.  We pick it up here and set Godot's custom cursor.
     {
@@ -8817,15 +8817,15 @@ void MoHAARunner::_process(double delta) {
         }
     }
 
-    // ── Update 3D camera from engine viewpoint (Phase 7a) ──
+ // ── Update 3D camera from engine viewpoint ──
     update_camera();
 
-    // ── Phase 133: Frustum culling — extract planes after camera update ──
+ // ── Frustum culling — extract planes after camera update ──
 #ifdef HAS_FRUSTUM_CULL_MODULE
     Godot_FrustumCull_UpdateCamera(camera);
 #endif
 
-    // ── Phase 133: Draw distance — apply near/far planes and fog from cvars ──
+ // ── Draw distance — apply near/far planes and fog from cvars ──
 #ifdef HAS_DRAW_DISTANCE_MODULE
     if (camera && world_env) {
         Ref<Environment> dd_env = world_env->get_environment();
@@ -8835,12 +8835,12 @@ void MoHAARunner::_process(double delta) {
     }
 #endif
 
-    // ── Sync weapon viewport camera (Phase 62) ──
+ // ── Sync weapon viewport camera ──
 #ifdef HAS_WEAPON_VIEWPORT_MODULE
     Godot_WeaponViewport::get().sync_camera();
 #endif
 
-    // ── Load BSP world geometry if a new map was loaded (Phase 7b) ──
+ // ── Load BSP world geometry if a new map was loaded ──
     check_world_load();
 
     // ── PVS cluster visibility culling ──
@@ -8849,12 +8849,12 @@ void MoHAARunner::_process(double delta) {
     // ── Per-frame terrain visibility (engine BSP tree walk + frustum + ter_cull) ──
     update_terrain_visibility();
 
-    // ── Update entity debug meshes from captured render data (Phase 7e) ──
+ // ── Update entity debug meshes from captured render data ──
     update_entities();
     update_dlights();
     update_polys();
-    update_swipe_effects();     // Phase 24: swipe/melee trails
-    update_terrain_marks();     // Phase 25: terrain mark decals
+ update_swipe_effects(); // swipe/melee trails
+ update_terrain_marks(); // terrain mark decals
     update_shadow_blobs();      // Shadow blob projection under RF_SHADOW entities
     update_shader_animations(delta);
 
@@ -8869,19 +8869,19 @@ void MoHAARunner::_process(double delta) {
     // Update planar reflections early before drawing HUD
     // update_mirrors(); // Vanity mirror hack (Phase FUN) - Commented out as requested.
 
-    // ── Update 2D HUD overlay from captured draw commands (Phase 7h) ──
+ // ── Update 2D HUD overlay from captured draw commands ──
     update_2d_overlay();
 
     // ── Update scoreboard overlay (TAB key) ──
     update_scoreboard();
 
-    // ── Update HUD model previews (Phase 148) ──
+ // ── Update HUD model previews ──
     update_hud_models();
 
-    // ── Update audio from captured sound events (Phase 8) ──
+ // ── Update audio from captured sound events ──
     update_audio(delta);
 
-    // ── Update cinematic video display (Phase 11) ──
+ // ── Update cinematic video display ──
     update_cinematic();
 
     // ── Module update hooks (defensive — only called if module exists) ──
@@ -8898,7 +8898,7 @@ void MoHAARunner::_process(double delta) {
     Godot_DebugRender_Update(delta);
 #endif
 
-    // ── Phase 60/61: Evict stale mesh and material cache entries ──
+ // ── Evict stale mesh and material cache entries ──
 #ifdef HAS_MESH_CACHE_MODULE
     {
         static uint64_t frame_counter = 0;
@@ -8908,15 +8908,15 @@ void MoHAARunner::_process(double delta) {
     }
 #endif
 
-    // ── Phase 85: End per-frame render statistics ──
+ // ── End per-frame render statistics ──
 #ifdef HAS_MESH_CACHE_MODULE
     Godot_RenderStats_EndFrame();
 #endif
 
-    // ── Update game flow state machine (Phase 261) ──
+ // ── Update game flow state machine ──
     update_game_flow_state();
 
-    // ── Phase 59: Input mode enforcement now handled by UI state machine ──
+ // ── Input mode enforcement now handled by UI state machine ──
     // Godot_UI_Update() + Godot_UI_ShouldShowCursor() above manage the
     // cursor mode automatically.  The engine's keyCatchers-based UI
     // routing (cl_keys.c) handles console/menu/game input dispatch.
@@ -9133,7 +9133,7 @@ godot::String MoHAARunner::vfs_get_gamedir() const {
 }
 
 // ──────────────────────────────────────────────
-//  Input bridge (Phase 6)
+// Input bridge
 // ──────────────────────────────────────────────
 
 void MoHAARunner::set_mouse_captured(bool p_captured) {
@@ -9227,7 +9227,7 @@ void MoHAARunner::poll_mouse_input_web(bool overlay_active) {
 }
 
 // ──────────────────────────────────────────────
-//  Game flow state machine (Phase 261)
+// Game flow state machine
 // ──────────────────────────────────────────────
 
 void MoHAARunner::update_game_flow_state() {
@@ -9356,7 +9356,7 @@ godot::String MoHAARunner::get_game_flow_state_string() const {
 }
 
 // ──────────────────────────────────────────────
-//  New game flow (Phase 262)
+// New game flow
 // ──────────────────────────────────────────────
 
 void MoHAARunner::start_new_game(int difficulty) {
@@ -9380,7 +9380,7 @@ void MoHAARunner::set_difficulty(int difficulty) {
 }
 
 // ──────────────────────────────────────────────
-//  Save / load game (Phase 264)
+// Save / load game
 // ──────────────────────────────────────────────
 
 void MoHAARunner::quick_save() {
@@ -9487,7 +9487,7 @@ void MoHAARunner::disconnect_from_server() {
 }
 
 // ──────────────────────────────────────────────
-//  Multiplayer server browser + hosting (Phase 263)
+// Multiplayer server browser + hosting
 // ──────────────────────────────────────────────
 
 void MoHAARunner::host_server(const godot::String &p_map, int maxplayers, int gametype) {
@@ -9771,7 +9771,7 @@ int MoHAARunner::get_vsync_mode() const {
 }
 
 // ──────────────────────────────────────────────
-//  Menu control (Phase 261)
+// Menu control
 // ──────────────────────────────────────────────
 
 void MoHAARunner::open_main_menu() {

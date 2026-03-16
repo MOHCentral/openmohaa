@@ -2,9 +2,9 @@
  * godot_explosion_effects.cpp — Explosion visual effects and camera shake.
  *
  * Implements a pooled explosion system with three visual phases:
- *   Phase 1 (0–0.2s): Expanding bright-orange fireball sphere.
- *   Phase 2 (0.1–0.8s): Dark smoke ring expanding outward, alpha fading.
- *   Phase 3 (0–0.5s): 5–10 debris chunks flying outward with gravity.
+ * (0–0.2s): Expanding bright-orange fireball sphere.
+ * (0.1–0.8s): Dark smoke ring expanding outward, alpha fading.
+ * (0–0.5s): 5–10 debris chunks flying outward with gravity.
  * Each explosion also spawns a short-lived OmniLight3D and triggers
  * camera shake.
  *
@@ -195,15 +195,15 @@ struct ExplosionInstance {
     float   elapsed;
     bool    active;
 
-    /* Fireball (Phase 1) */
+ /* Fireball */
     MeshInstance3D          *fireball;
     Ref<StandardMaterial3D>  fireball_mat;  /* per-instance for alpha */
 
-    /* Smoke ring (Phase 2) */
+ /* Smoke ring */
     MeshInstance3D          *smoke;
     Ref<StandardMaterial3D>  smoke_mat;     /* per-instance for alpha */
 
-    /* Debris (Phase 3) */
+ /* Debris */
     DebrisChunk debris[MAX_DEBRIS_PER_EXPL];
     int         debris_count;
 

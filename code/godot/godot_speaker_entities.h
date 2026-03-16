@@ -7,7 +7,7 @@
  * the entity data (noise, wait, random keys) and maintaining persistent
  * AudioStreamPlayer3D nodes.
  *
- * Phase 47 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #ifndef GODOT_SPEAKER_ENTITIES_H

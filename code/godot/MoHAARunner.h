@@ -166,7 +166,7 @@
 
 using namespace godot;
 
-// ── Game flow state machine (Phase 261) ──
+// ── Game flow state machine ──
 // Tracks the high-level game state for title screen, menus, gameplay, etc.
 enum class GameFlowState {
     BOOT,               // Engine just initialised, no map loaded yet
@@ -192,11 +192,11 @@ private:
     int last_client_state = 0;   // CA_UNINITIALIZED
     String last_map_name;
 
-    // Game flow state machine (Phase 261)
+ // Game flow state machine
     GameFlowState game_flow_state = GameFlowState::BOOT;
     void update_game_flow_state();  // Called each frame to advance the state machine
 
-    // Input state (Phase 6)
+ // Input state
     bool mouse_captured = false;  // Whether mouse is in relative/captured mode
     bool mouse_poll_initialised = false;
     Vector2 mouse_poll_prev_pos;
@@ -217,7 +217,7 @@ private:
     bool hud_visible = true;        // F9 toggles HUD overlay visibility
     bool debug_fog_off = false;     // F5 toggles fog off for debugging
     bool debug_notex = false;       // F8 toggles textures off for debugging
-    bool last_ui_cursor_shown = false; // Phase 59: track cursor state for mode transitions
+ bool last_ui_cursor_shown = false; // track cursor state for mode transitions
 
     // Scoreboard overlay (TAB key)
     bool scoreboard_visible = false;       // True while TAB is held
@@ -238,7 +238,7 @@ private:
     void update_input_routing();       // Called each frame to sync cursor mode with engine state
     void poll_mouse_input_web(bool overlay_active);
 
-    // 3D scene nodes (Phase 7a — camera bridge)
+ // 3D scene nodes (camera bridge)
     Node3D *game_world = nullptr;            // Root for all 3D content
     Camera3D *camera = nullptr;              // Driven by engine refdef_t each frame
     DirectionalLight3D *sun_light = nullptr;  // Basic directional light
@@ -257,7 +257,7 @@ private:
     int cached_entity_shadow_mode = -1;                 // Last applied r_shadows value (detects cvar changes)
     int cached_dlight_shadows = -1;                     // Last applied r_dlight_shadows value
 
-    // BSP world geometry (Phase 7b)
+ // BSP world geometry
     Node3D *bsp_map_node = nullptr;          // Currently loaded BSP mesh tree
     String loaded_bsp_name;                  // Path of the currently loaded BSP
 
@@ -268,7 +268,7 @@ private:
     void update_pvs_visibility();            // Toggle per-cluster mesh visibility
     void update_terrain_visibility();        // Per-frame terrain marking via engine BSP tree walk
 
-    // Static BSP models (Phase 10)
+ // Static BSP models
     Node3D *static_model_root = nullptr;     // Container for TIKI static models from BSP
     struct StaticModelPVS {
         MeshInstance3D *mesh = nullptr;
@@ -276,7 +276,7 @@ private:
     };
     std::vector<StaticModelPVS> static_model_pvs;  // Per-model PVS data
 
-    // Weapon SubViewport (Phase 62) — renders FPS weapon in a separate
+ // Weapon SubViewport — renders FPS weapon in a separate
     // depth buffer so they never clip into world geometry.
     SubViewport *weapon_viewport = nullptr;    // Separate pass for FPS entities
     Camera3D *weapon_camera = nullptr;         // Mirrors main camera each frame
@@ -284,23 +284,23 @@ private:
     CanvasLayer *weapon_canvas_layer = nullptr; // Overlay canvas for weapon texture
     TextureRect *weapon_overlay = nullptr;     // Displays weapon SubViewport on top
 
-    // Entity rendering (Phase 7e)
+ // Entity rendering
     Node3D *entity_root = nullptr;                        // Container for entity debug meshes
     std::vector<MeshInstance3D *> entity_meshes;           // Pooled debug mesh instances
     std::vector<OmniLight3D *> dlight_nodes;              // Pooled dynamic light nodes
     int active_entity_count = 0;                          // Entities visible this frame
     int active_dlight_count = 0;                          // Dynamic lights this frame
 
-    // Poly/particle rendering (Phase 16)
+ // Poly/particle rendering
     Node3D *poly_root = nullptr;                          // Container for poly meshes
     std::vector<MeshInstance3D *> poly_meshes;             // Pooled poly mesh instances
     int active_poly_count = 0;                            // Polys rendered this frame
 
-    // Swipe effects (Phase 24)
+ // Swipe effects
     Node3D *swipe_root = nullptr;
     MeshInstance3D *swipe_mesh = nullptr;
 
-    // Terrain marks (Phase 25)
+ // Terrain marks
     Node3D *terrain_mark_root = nullptr;
     std::vector<MeshInstance3D *> terrain_mark_meshes;
     int active_terrain_mark_count = 0;
@@ -311,10 +311,10 @@ private:
     int active_shadow_blob_count = 0;
     Ref<StandardMaterial3D> shadow_blob_material;      // Shared dark semi-transparent material
 
-    // Shader animation tracking (Phase 36)
+ // Shader animation tracking
     double shader_anim_time = 0.0;
 
-    // AnimMap texture cycling (Phase 71)
+ // AnimMap texture cycling
     // shader_handle → vector of loaded texture frames
     std::unordered_map<int, std::vector<Ref<ImageTexture>>> animmap_frames;
     // shader_handle → {freq, num_frames}
@@ -336,8 +336,8 @@ private:
     void update_mirrors(); // Update mirror camera positions
 
 
-    // Sound entity position tracking (Phase 49 rendering side)
-    // Sound fade state (Phase 50 rendering side)
+ // Sound entity position tracking (rendering side)
+ // Sound fade state (rendering side)
     float sound_fade_elapsed = 0.0f;
     float sound_fade_duration = 0.0f;
     bool sound_fading = false;
@@ -350,7 +350,7 @@ private:
     // Screen effect trigger state — track health to detect damage
     int prev_health = -1;  // Previous frame's player health (-1 = uninitialised)
 
-    // Entity mesh caching (Phase 37, improved Phase 60)
+ // Entity mesh caching (Phase 37, improved Phase 60)
     // Track per-entity state hash to avoid rebuilding meshes each frame
     struct EntityCacheKey {
         int hModel;
@@ -367,10 +367,10 @@ private:
     };
     std::vector<EntityCacheKey> entity_cache_keys;
 
-    // Phase 60/61: Frame counter for singleton mesh & material cache eviction
+ // Frame counter for singleton mesh & material cache eviction
     uint64_t frame_counter_ = 0;
 
-    // Phase 60: Skeletal mesh caching by entity number + animation state hash
+ // Skeletal mesh caching by entity number + animation state hash
     struct SkelMeshCacheEntry {
         uint64_t anim_hash = 0;
         int hModel = 0;
@@ -379,7 +379,7 @@ private:
     };
     std::unordered_map<int, SkelMeshCacheEntry> skel_mesh_cache; // entityNumber → cached skinned mesh
 
-    // Phase 61: Tinted material cache — avoid per-frame material duplication
+ // Tinted material cache — avoid per-frame material duplication
     // Key = (hModel << 20) | (surfIdx << 12) | quantised_rgba
     std::unordered_map<uint64_t, Ref<StandardMaterial3D>> tinted_mat_cache;
 
@@ -395,7 +395,7 @@ private:
     };
     std::unordered_map<uint64_t, TikiMatSet> tiki_mat_cache;
 
-    // 2D HUD overlay (Phase 7h)
+ // 2D HUD overlay
     CanvasLayer *hud_layer = nullptr;                     // Overlay layer for 2D elements
     Control *hud_control = nullptr;                       // Control node for custom draw
     std::unordered_map<int, Ref<ImageTexture>> shader_textures; // shader handle → loaded texture
@@ -448,7 +448,7 @@ private:
     Ref<ShaderMaterial> gamma_material;
     float gamma_current = 1.0f;
 
-    // HUD model preview SubViewports (Phase 148)
+ // HUD model preview SubViewports
     // mpoptions can request multiple previews (allies + axis), so we keep
     // one slot per HUD render request index.
     std::vector<SubViewport *> hud_model_viewports;
@@ -470,13 +470,13 @@ private:
     int ui_vid_h = 480;            // Engine virtual resolution height
     void update_ui_transform();    // Calculate ui_scale/offset based on viewport size
 
-    // Audio bridge (Phase 8)
+ // Audio bridge
     Node3D *audio_root = nullptr;                                    // Container for audio player nodes
     AudioListener3D *audio_listener = nullptr;                       // 3D listener driven by engine camera
     std::vector<AudioStreamPlayer3D *> sfx_players_3d;               // Pool of 3D audio players
     std::vector<AudioStreamPlayer *>   sfx_players_2d;               // Pool of 2D audio players
     std::unordered_map<int, Ref<AudioStream>> sfx_cache;              // sfxHandle → loaded audio stream (WAV or MP3)
-    // Looping sound tracking (Phase 40): key = composite of sfxHandle + quantised position
+ // Looping sound tracking: key = composite of sfxHandle + quantised position
     std::unordered_map<int64_t, int> active_loops;                   // loop key → 3D player index
     std::unordered_map<int64_t, int> new_loops_64;                   // reused per-frame to avoid heap alloc
     int next_3d_player = 0;                                          // Round-robin index for 3D pool
@@ -484,7 +484,7 @@ private:
     static const int MAX_3D_PLAYERS = 32;
     static const int MAX_2D_PLAYERS = 16;
 
-    // Sound channel tracking for priority eviction (Phase 41)
+ // Sound channel tracking for priority eviction
     // Tracks which entity+channel is using each 3D player slot
     struct PlayerSlotInfo {
         int entnum = -1;
@@ -507,7 +507,7 @@ private:
     Ref<AudioStream> load_wav_from_vfs(int sfxHandle);                // Load WAV/MP3 via engine VFS
     Ref<AudioStream> load_music_from_vfs(const char *name);           // Load music file via engine VFS
 
-    // Cinematic display (Phase 11)
+ // Cinematic display
     CanvasLayer *cin_layer = nullptr;                                // Overlay for cinematic video
     TextureRect *cin_rect = nullptr;                                 // Fullscreen texture rect
     Ref<ImageTexture> cin_texture;                                   // Cinematic frame texture
@@ -523,17 +523,17 @@ private:
     void update_entities();   // Read captured entities and update debug meshes
     void update_dlights();    // Read captured dynamic lights and update OmniLight3D
     void update_polys();      // Render captured polys (particles, effects)
-    void update_swipe_effects(); // Render swipe trails (Phase 24)
-    void update_terrain_marks(); // Render terrain mark decals (Phase 25)
+ void update_swipe_effects(); // Render swipe trails
+ void update_terrain_marks(); // Render terrain mark decals
     void update_shadow_blobs();  // Project shadow blobs under RF_SHADOW entities
     void apply_player_shadow_mode(int mode);            // Apply r_shadows mode (0=blobs, 1=dynamic)
     void apply_sun_light_direction();                    // Orient entity_shadow_light from map sundirection/suncolor
-    void update_shader_animations(double delta); // Animate tcMod scrolling (Phase 36)
+ void update_shader_animations(double delta); // Animate tcMod scrolling
     void update_2d_overlay(); // Read 2D draw commands and queue redraw
-    void update_hud_models(); // Render HUD model previews (Phase 148)
+ void update_hud_models(); // Render HUD model previews
     void update_scoreboard(); // Draw scoreboard overlay when TAB is held
-    void load_flares();  // Render BSP flare surfaces as billboarded MultiMesh (Phase 74)
-    void load_skybox();  // Load skybox cubemap from BSP sky shader (Phase 12)
+ void load_flares(); // Render BSP flare surfaces as billboarded MultiMesh
+ void load_skybox(); // Load skybox cubemap from BSP sky shader
     void load_sun_flare();  // Parse sun flare data from entity string + lensflaredefs.txt
     void update_sun_flare();  // Render sun flare 2D overlay each frame
 
@@ -590,7 +590,7 @@ public:
     // Godot-side cache clearing after Com_GameRestart (switchgame command)
     void clear_godot_caches_for_game_switch(int target_game);
 
-    // Input control (Phase 6)
+ // Input control
     void set_mouse_captured(bool p_captured);
     bool is_mouse_captured() const;
     void set_hud_visible(bool p_visible);
@@ -618,15 +618,15 @@ public:
     PackedStringArray vfs_list_files(const String &p_directory, const String &p_extension) const;
     String vfs_get_gamedir() const;
 
-    // Game flow state (Phase 261)
+ // Game flow state
     int get_game_flow_state() const;
     String get_game_flow_state_string() const;
 
-    // New game flow (Phase 262)
+ // New game flow
     void start_new_game(int difficulty);
     void set_difficulty(int difficulty);
 
-    // Save / load game (Phase 264)
+ // Save / load game
     void quick_save();
     void quick_load();
     void save_game(const String &p_slot_name);
@@ -639,7 +639,7 @@ public:
     void connect_to_server(const String &p_address);
     void disconnect_from_server();
 
-    // Multiplayer server browser + hosting (Phase 263)
+ // Multiplayer server browser + hosting
     void host_server(const String &p_map, int maxplayers, int gametype);
     void refresh_server_list();
     void refresh_lan();
@@ -675,7 +675,7 @@ public:
     void set_vsync_mode(int mode);
     int get_vsync_mode() const;
 
-    // Main menu control (Phase 261)
+ // Main menu control
     void open_main_menu();
     void close_menu();
     void push_menu(const String &menu_name);

@@ -1,9 +1,9 @@
 /*
  * godot_entity_lighting.h — Lightgrid + dynamic light sampling for entities.
  *
- * Phase 63: Sample BSP lightgrid at entity positions for ambient/directed
+ * Sample BSP lightgrid at entity positions for ambient/directed
  *           light modulation.
- * Phase 64: Accumulate nearby dynamic lights (muzzle flashes, explosions)
+ * Accumulate nearby dynamic lights (muzzle flashes, explosions)
  *           for per-entity light contribution.
  *
  * Coordinate convention:

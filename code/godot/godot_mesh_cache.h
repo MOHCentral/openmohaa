@@ -1,13 +1,13 @@
 /*
  * godot_mesh_cache.h — Per-entity mesh & material caching.
  *
- * Phase 60: Entity mesh caching keyed on (hModel, animation state, LOD).
- * Phase 61: Material caching keyed on (shader_handle, RGBA, blend_mode).
+ * Entity mesh caching keyed on (hModel, animation state, LOD).
+ * Material caching keyed on (shader_handle, RGBA, blend_mode).
  *
  * Eliminates redundant ArrayMesh rebuilds for animated entities and
  * redundant Material allocations for entities sharing appearance.
  *
- * Phase 85: Performance statistics for render audit.
+ * Performance statistics for render audit.
  */
 
 #ifndef GODOT_MESH_CACHE_H
@@ -23,7 +23,7 @@
 
 using namespace godot;
 
-/* ── Phase 60: Entity Mesh Cache ── */
+/* ── Entity Mesh Cache ── */
 
 /*
  * EntityMeshCacheKey — uniquely identifies a skinned mesh pose.
@@ -98,7 +98,7 @@ public:
     /* Clear the entire cache (map change / shutdown). */
     void clear();
 
-    /* Phase 85: statistics */
+ /* statistics */
     uint64_t stat_hits()   const { return hits_;   }
     uint64_t stat_misses() const { return misses_; }
     size_t   stat_size()   const { return cache_.size(); }
@@ -114,7 +114,7 @@ private:
     uint64_t misses_;
 };
 
-/* ── Phase 61: Material Cache ── */
+/* ── Material Cache ── */
 
 /*
  * MaterialCacheKey — uniquely identifies a material appearance.
@@ -181,7 +181,7 @@ public:
     /* Clear the entire cache. */
     void clear();
 
-    /* Phase 85: statistics */
+ /* statistics */
     uint64_t stat_hits()   const { return hits_;   }
     uint64_t stat_misses() const { return misses_; }
     size_t   stat_size()   const { return cache_.size(); }
@@ -197,7 +197,7 @@ private:
     uint64_t misses_;
 };
 
-/* ── Phase 85: Performance Statistics ── */
+/* ── Performance Statistics ── */
 
 /*
  * Godot_RenderStats — per-frame counters for the render performance audit.

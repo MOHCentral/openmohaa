@@ -9,7 +9,7 @@
  * All music state is read from godot_sound.c via the Godot_Sound_GetMusic*()
  * and Godot_Sound_GetTriggered*() accessor functions.
  *
- * Phase 42 — Audio Completeness.
+ * Audio Completeness.
  */
 
 #ifndef GODOT_MUSIC_H

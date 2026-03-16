@@ -6,7 +6,7 @@
  * the event's trigger frame.  Fired events are queued in a fixed-size
  * buffer that MoHAARunner.cpp drains each frame.
  *
- * Phase 241-242 — Animation events.
+ * Animation events.
  */
 
 #include "godot_animation_events.h"

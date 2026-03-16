@@ -40,7 +40,7 @@ typedef enum GodotShaderCull {
     SHADER_CULL_NONE  = 2,   /* cull none / cull twosided / cull disable */
 } GodotShaderCull;
 
-/* ── Phase 66–72: Per-stage enums and structs ── */
+/* ── Per-stage enums and structs ── */
 
 #define MOHAA_SHADER_STAGE_MAX          8
 #define MOHAA_SHADER_STAGE_MAX_TCMODS   4
@@ -197,12 +197,12 @@ typedef struct MohaaShaderStage {
     bool hasAlphaFunc;               /* alphaFunc present in this stage */
     float alphaFuncThreshold;        /* 0.01 for GT0, 0.5 for GE128/LT128 */
 
-    /* Phase 143: depth write control */
+ /* depth write control */
     bool depthWriteExplicit;         /* true if depthwrite/nodepthwrite was specified */
     bool depthWriteEnabled;          /* true = force depth write; false = disable depth write */
     bool noDepthTest;                /* true = disable depth testing (noDepthTest) */
 
-    /* Phase 39: alphaMin/alphaMax — used by DOT, DOT_VIEW, DIST_FADE, HEIGHT_FADE alphaGen types */
+ /* alphaMin/alphaMax — used by DOT, DOT_VIEW, DIST_FADE, HEIGHT_FADE alphaGen types */
     float alphaMin;                  /* lower bound / near distance */
     float alphaMax;                  /* upper bound / range */
     float specOrigin[3];             /* for AGEN_LIGHTING_SPECULAR */
@@ -220,7 +220,7 @@ typedef struct GodotShaderProps {
     char sky_env[64];        /* skyParms env basename (e.g. "env/m5l2") */
     float sky_cloud_height;  /* skyParms cloudHeight (0 = no clouds) */
 
-    /* Phase 36: tcMod scroll/rotate/scale animation parameters */
+ /* tcMod scroll/rotate/scale animation parameters */
     float tcmod_scroll_s;    /* texcoord S scroll speed (units/sec) */
     float tcmod_scroll_t;    /* texcoord T scroll speed (units/sec) */
     float tcmod_rotate;      /* texcoord rotation speed (degrees/sec) */
@@ -228,20 +228,20 @@ typedef struct GodotShaderProps {
     float tcmod_scale_t;     /* texcoord T scale factor (1.0 = no change) */
     float tcmod_turb_amp;    /* turbulence amplitude */
     float tcmod_turb_freq;   /* turbulence frequency */
-    float tcmod_offset_s;    /* Phase 144: static UV S offset */
-    float tcmod_offset_t;    /* Phase 144: static UV T offset */
+ float tcmod_offset_s; /* static UV S offset */
+ float tcmod_offset_t; /* static UV T offset */
     bool  has_tcmod;         /* true if any tcMod directive was found */
 
-    /* Phase 61: animMap — animated texture sequence */
+ /* animMap — animated texture sequence */
     float animmap_freq;             /* frames per second */
     int   animmap_num_frames;       /* number of textures in sequence */
     char  animmap_frames[8][64];    /* up to 8 texture names */
     bool  has_animmap;
 
-    /* Phase 62: tcGen environment — cubic environment mapping */
+ /* tcGen environment — cubic environment mapping */
     bool  tcgen_environment;
 
-    /* Phase 63: deformVertexes */
+ /* deformVertexes */
     bool  has_deform;
     int   deform_type;              /* 0=wave, 1=bulge, 2=move, 3=autosprite, 4=autosprite2 */
     float deform_div;               /* wave divisor */
@@ -250,25 +250,25 @@ typedef struct GodotShaderProps {
     float deform_frequency;
     float deform_phase;
 
-    /* Phase 64: rgbGen */
+ /* rgbGen */
     int   rgbgen_type;              /* 0=identity, 1=vertex, 2=wave, 3=entity, 4=const */
-    MohaaWaveFunc rgbgen_wave_func; /* Phase 141: wave function type (sin/triangle/square/sawtooth/inversesawtooth) */
+ MohaaWaveFunc rgbgen_wave_func; /* wave function type (sin/triangle/square/sawtooth/inversesawtooth) */
     float rgbgen_wave_base;
     float rgbgen_wave_amp;
     float rgbgen_wave_freq;
     float rgbgen_wave_phase;
     float rgbgen_const[3];
 
-    /* Phase 65: alphaGen */
+ /* alphaGen */
     int   alphagen_type;            /* 0=identity, 1=vertex, 2=wave, 3=entity, 4=const */
-    MohaaWaveFunc alphagen_wave_func; /* Phase 141: wave function type */
+ MohaaWaveFunc alphagen_wave_func; /* wave function type */
     float alphagen_wave_base;
     float alphagen_wave_amp;
     float alphagen_wave_freq;
     float alphagen_wave_phase;
     float alphagen_const;
 
-    /* Phase 66: tcMod stretch */
+ /* tcMod stretch */
     bool  has_tcmod_stretch;
     MohaaWaveFunc tcmod_stretch_func;
     float tcmod_stretch_base;
@@ -276,17 +276,17 @@ typedef struct GodotShaderProps {
     float tcmod_stretch_freq;
     float tcmod_stretch_phase;
 
-    /* Phase 67: sort hint */
+ /* sort hint */
     int   sort_key;                 /* 0=default, 1-16 explicit sort order */
 
-    /* Phase 68: nomipmaps / nopicmip */
+ /* nomipmaps / nopicmip */
     bool  no_mipmaps;
     bool  no_picmip;
 
-    /* Phase 69: multi-stage count (first stage is primary) */
+ /* multi-stage count (first stage is primary) */
     int   num_stages;
 
-    /* Phase 70: fog parameters */
+ /* fog parameters */
     bool  has_fog;
     float fog_color[3];
     float fog_distance;
@@ -294,7 +294,7 @@ typedef struct GodotShaderProps {
     /* Sprite model scaling — from "spritescale" keyword (default 1.0) */
     float sprite_scale;
 
-    /* Phase 66–72: Per-stage shader data (all stages parsed) */
+ /* Per-stage shader data (all stages parsed) */
     MohaaShaderStage stages[MOHAA_SHADER_STAGE_MAX];
     int stage_count;             /* number of parsed stages (== num_stages) */
 } GodotShaderProps;

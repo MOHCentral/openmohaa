@@ -8,7 +8,7 @@
  *
  * Must be .cpp because dtiki_t contains C++ members (skelChannelList_c).
  *
- * Phase 241-242 — Animation events.
+ * Animation events.
  */
 
 #include "../corepp/tiki.h"

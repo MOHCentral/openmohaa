@@ -4,8 +4,8 @@
  * Builds Godot ArrayMesh instances from engine TIKI/SKD skeletal model
  * data.  Meshes are cached per hModel so geometry is only extracted once.
  *
- * Phase 9  — Skeletal model rendering.
- * Phase 59 — Entity LOD system (distance-based vertex collapse).
+ * Skeletal model rendering.
+ * Entity LOD system (distance-based vertex collapse).
  */
 
 #ifndef GODOT_SKEL_MODEL_H
@@ -51,7 +51,7 @@ private:
     CachedModel *build_model(int hModel);
 };
 
-/* ── Phase 59: LOD utility functions ── */
+/* ── LOD utility functions ── */
 
 /*
  * Godot_Skel_SelectLodLevel — select LOD level based on distance.

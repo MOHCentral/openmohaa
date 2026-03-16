@@ -63,7 +63,7 @@ int Godot_BSP_GetBrushModelCount();
 /// Returns an empty Ref if the index is out of range or the mesh is empty.
 godot::Ref<godot::ArrayMesh> Godot_BSP_GetBrushModelMesh(int submodelIndex);
 
-/* ── Phase 78: BSP fog volume definition ── */
+/* ── BSP fog volume definition ── */
 struct BSPFogVolume {
     char  shader[64];       /* Fog shader name */
     int   brushNum;         /* BSP brush defining the fog region */
@@ -79,7 +79,7 @@ int Godot_BSP_GetFogVolumeCount();
 /// Returns nullptr if index is out of range.
 const BSPFogVolume *Godot_BSP_GetFogVolume(int index);
 
-/* ── Phase 74: Flare surface definition ── */
+/* ── Flare surface definition ── */
 struct BSPFlare {
     float origin[3];        /* Flare position in Godot coordinates */
     float color[3];         /* Flare colour (RGB, 0–1) */

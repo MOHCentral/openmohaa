@@ -11,7 +11,7 @@
  * cinematic frame display (layer 11) and HUD — so the hint is always
  * visible during a cinematic.
  *
- * Phase 56 — Cinematic Playback Stub.
+ * Cinematic Playback Stub.
  */
 
 #include "godot_cinematic.h"
@@ -98,7 +98,7 @@ void Godot_Cinematic_Init(Node *parent) {
     s_was_active = false;
     s_pulse_time = 0.0f;
 
-    UtilityFunctions::print("[MoHAA] Cinematic skip-hint overlay initialised (Phase 56).");
+ UtilityFunctions::print("[MoHAA] Cinematic skip-hint overlay initialised.");
 }
 
 /* ===================================================================

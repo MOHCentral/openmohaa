@@ -11,7 +11,7 @@
  * functions when the engine signals the corresponding events (via
  * cgame view damage state or content detection).
  *
- * Phase 227 — Screen Post-Processing Effects.
+ * Screen Post-Processing Effects.
  */
 
 #ifndef GODOT_SCREEN_EFFECTS_H

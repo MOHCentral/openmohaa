@@ -9,7 +9,7 @@
  *   Godot.x = -id.Y    Godot.y = id.Z    Godot.z = -id.X
  *   Scale: id inches → Godot metres (÷ 39.37)
  *
- * Phase 9 — Skeletal model rendering.
+ * Skeletal model rendering.
  */
 
 #include "godot_skel_model.h"
@@ -53,7 +53,7 @@ extern "C" {
     int         Godot_Skel_GetBoneParent(void *tikiPtr, int meshIndex, int boneIndex);
     const char *Godot_Skel_GetName(void *tikiPtr);
 
-    /* Phase 59: LOD data accessors */
+ /* LOD data accessors */
     int  Godot_Skel_GetLodIndexCount(void);
     int  Godot_Skel_GetLodIndex(void *tikiPtr, int meshIndex, int *outLodIndex);
     int  Godot_Skel_GetCollapseData(void *tikiPtr, int meshIndex, int surfIndex,
@@ -212,7 +212,7 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
                 int outNumTris  = numTris;
                 int *outIndices = indices;
 
-                /* Phase 59: LOD Collapse */
+ /* LOD Collapse */
                 if (lod > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
                     int *collapsedIndices = (int *)malloc(numTris * 3 * sizeof(int));
                     if (collapsedIndices) {
@@ -406,7 +406,7 @@ GodotSkelModelCache::CachedModel *GodotSkelModelCache::build_model(int hModel)
 }
 
 /* ===================================================================
- *  Phase 59: Entity LOD System
+ * Entity LOD System
  *
  *  Distance-based LOD selection using skelHeaderGame_t::lodIndex[]
  *  and progressive mesh vertex collapse via pCollapse/pCollapseIndex.

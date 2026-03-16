@@ -10,7 +10,7 @@
  * with a fixed attenuation factor of 0.3.  More sophisticated multi-
  * ray or material-based approaches are left for future work.
  *
- * Phase 48 — Audio Completeness (optional).
+ * Audio Completeness (optional).
  */
 
 #include "godot_sound_occlusion.h"

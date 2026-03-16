@@ -6,7 +6,7 @@
  * using the engine's collision model (CM_BoxTrace).  Occluded sounds
  * should be attenuated by the returned factor.
  *
- * Phase 48 — Audio Completeness (optional).
+ * Audio Completeness (optional).
  */
 
 #ifndef GODOT_SOUND_OCCLUSION_H

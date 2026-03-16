@@ -14,7 +14,7 @@
  *   Group B: channels [FRAMEINFO_BLEND .. MAX_FRAMEINFOS-1] (legs/movement)
  * actionWeight blends Group A vs Group B (0.0 = all A, 1.0 = all B).
  *
- * Phase 241 — Animation blending accuracy.
+ * Animation blending accuracy.
  */
 
 #ifndef GODOT_ANIM_BLEND_H
