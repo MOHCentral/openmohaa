@@ -2,42 +2,6 @@
 import os
 import subprocess
 import sys
-import traceback
-import threading
-import time
-
-# Windows MSVC builds hit deep recursion in SCons internals with 1400+ source files.
-# Increase limit to accommodate. On Linux/macOS this is harmless.
-if sys.platform == "win32":
-    sys.setrecursionlimit(100000)
-
-    # ── diagnostic: monitor main thread stack depth ──────────────────────
-    _main_tid = threading.get_ident()
-    _stack_dumped = False
-
-    def _monitor_stack():
-        global _stack_dumped
-        while True:
-            time.sleep(0.05)  # Sample 20x/sec
-            frames = sys._current_frames()
-            main_frame = frames.get(_main_tid)
-            if main_frame is None:
-                continue
-            # Count depth
-            depth = 0
-            f = main_frame
-            while f is not None:
-                depth += 1
-                f = f.f_back
-            if depth > 200 and not _stack_dumped:
-                _stack_dumped = True
-                print(f"\n=== STACK DEPTH MONITOR: depth={depth} ===", file=sys.stderr, flush=True)
-                traceback.print_stack(main_frame, limit=80, file=sys.stderr)
-                print("=== END STACK DUMP ===\n", file=sys.stderr, flush=True)
-
-    _t = threading.Thread(target=_monitor_stack, daemon=True)
-    _t.start()
-    # ────────────────────────────────────────────────────────────────────
 
 env = SConscript("../godot-cpp/SConstruct")
 
@@ -503,16 +467,6 @@ elif env["platform"] == "windows":
     else:
         # MSVC linker allows multiple definitions by default (/FORCE:MULTIPLE)
         env.Append(LINKFLAGS=["/FORCE:MULTIPLE"])
-        # MSVC tool wraps all compile commands in ${TEMPFILE("...")} which
-        # triggers Python RecursionError during deep SCons variable expansion
-        # on Windows CI.  Compile commands are well under the 32 767-char
-        # CreateProcess limit, so response files are unnecessary.  Strip the
-        # TEMPFILE wrapper from compilation; link commands keep their own
-        # TEMPFILE (set inside mslink.py Action objects, not via env vars).
-        env["CCCOM"]   = "$CC $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $CFLAGS $CCFLAGS $_CCCOMCOM"
-        env["SHCCCOM"] = "$SHCC $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $SHCFLAGS $SHCCFLAGS $_CCCOMCOM"
-        env["CXXCOM"]  = "$CXX $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $CXXFLAGS $CCFLAGS $_CCCOMCOM"
-        env["SHCXXCOM"]= "$SHCXX $_MSVC_OUTPUT_FLAG /c $CHANGED_SOURCES $SHCXXFLAGS $SHCCFLAGS $_CCCOMCOM"
 
 # ── Link system libraries ──
 if env["platform"] == "linux":
