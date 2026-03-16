@@ -105,12 +105,29 @@ env.Append(CPPPATH=[
 ])
 
 # code/fgame/ contains a "windows.h" header (WindowObject entity class) that
-# shadows the system <windows.h> on Windows when added via -I.  On Windows we
-# use -iquote instead, which is only searched for #include "file" (quoted),
-# NOT for #include <file> (angled).  sys_loadlib.h uses #include <windows.h>
-# so the system header is found correctly.
+# shadows the system <windows.h> on Windows when added via -I.
+# On GCC/MinGW we use -iquote which is only searched for #include "file"
+# (quoted), NOT for #include <file> (angled).
+# On MSVC, -iquote is not supported.  Instead we prepend the Windows SDK
+# um/ include directory before code/fgame in the /I search order so that
+# #include <windows.h> finds the system header first, while
+# #include "windows.h" from within code/fgame/ still finds the local copy
+# via MSVC's "search parent directory of the including file" rule.
 if env.get("platform") == "windows":
-    env.Append(CCFLAGS=["-iquote", "code/fgame"])
+    _is_mingw = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower()
+    if not _is_mingw and os.name != "nt":
+        _is_mingw = True  # Cross-compiling from Linux → assume MinGW
+    if _is_mingw:
+        env.Append(CCFLAGS=["-iquote", "code/fgame"])
+    else:
+        # MSVC: prepend Windows SDK um/ directory so <windows.h> resolves to
+        # the system header before /I code/fgame.
+        _sdk_dir = os.environ.get("WindowsSdkDir", "")
+        _sdk_ver = os.environ.get("WindowsSDKVersion", "").rstrip("\\")
+        if _sdk_dir and _sdk_ver:
+            _sdk_um = os.path.join(_sdk_dir, "include", _sdk_ver, "um")
+            env.Prepend(CPPPATH=[_sdk_um])
+        env.Append(CPPPATH=["code/fgame"])
 else:
     env.Append(CPPPATH=["code/fgame"])
 
@@ -572,9 +589,20 @@ cgame_env.Append(CPPPATH=[
     "generated",
 ])
 
-# Same -iquote treatment as main env — see comment in global CPPPATH block.
+# Same -iquote / MSVC treatment as main env — see comment in global CPPPATH block.
 if env.get("platform") == "windows":
-    cgame_env.Append(CCFLAGS=["-iquote", "code/fgame"])
+    _is_mingw_cgame = "mingw" in env.get("CC", "").lower() or "mingw" in env.get("CXX", "").lower()
+    if not _is_mingw_cgame and os.name != "nt":
+        _is_mingw_cgame = True
+    if _is_mingw_cgame:
+        cgame_env.Append(CCFLAGS=["-iquote", "code/fgame"])
+    else:
+        _sdk_dir = os.environ.get("WindowsSdkDir", "")
+        _sdk_ver = os.environ.get("WindowsSDKVersion", "").rstrip("\\")
+        if _sdk_dir and _sdk_ver:
+            _sdk_um = os.path.join(_sdk_dir, "include", _sdk_ver, "um")
+            cgame_env.Prepend(CPPPATH=[_sdk_um])
+        cgame_env.Append(CPPPATH=["code/fgame"])
 else:
     cgame_env.Append(CPPPATH=["code/fgame"])
 
@@ -767,10 +795,11 @@ Default(cgame_lib)
 # Test for godot_render_sort
 test_env = env.Clone()
 test_env.Append(CPPPATH=["code/godot"])
+test_env.VariantDir("build/test_render_sort", "code", duplicate=0)
 
 test_render_sort_sources = [
-    "code/godot/tests/test_render_sort.cpp",
-    "code/godot/godot_render_sort.cpp",
+    "build/test_render_sort/godot/tests/test_render_sort.cpp",
+    "build/test_render_sort/godot/godot_render_sort.cpp",
 ]
 
 test_render_sort_prog = test_env.Program(
