@@ -754,9 +754,9 @@ static void GR_BeginRegistration( glconfig_t *config )
      * HUD elements from 640×480 virtual space to this real resolution. */
     {
         cvar_t *r_mode_cv       = ri.Cvar_Get( "r_mode",         "-2", 0 );
-        cvar_t *r_fullscreen_cv = ri.Cvar_Get( "r_fullscreen",   "0",  0 );
-        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1280", 0 );
-        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "720",  0 );
+        cvar_t *r_fullscreen_cv = ri.Cvar_Get( "r_fullscreen",   "1",    0 );
+        cvar_t *r_customw_cv    = ri.Cvar_Get( "r_customwidth",  "1600",  0 );
+        cvar_t *r_customh_cv    = ri.Cvar_Get( "r_customheight", "1024",  0 );
 
         /* Register r_gamma so the config value is loaded and accessible
          * from the Godot side for full-screen gamma correction. */
@@ -789,8 +789,8 @@ static void GR_BeginRegistration( glconfig_t *config )
             h = gr_vidModes[mode].height;
         } else if ( mode == -1 ) {
             /* Custom mode */
-            w = r_customw_cv ? r_customw_cv->integer : 1280;
-            h = r_customh_cv ? r_customh_cv->integer : 720;
+            w = r_customw_cv ? r_customw_cv->integer : 1600;
+            h = r_customh_cv ? r_customh_cv->integer : 1024;
         } else if ( mode == -2 ) {
             /* Desktop resolution — use value set by MoHAARunner */
             w = gr_desktopWidth;
