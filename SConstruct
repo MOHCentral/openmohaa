@@ -435,6 +435,9 @@ elif env["platform"] == "web":
     # -fwasm-exceptions would import __cpp_exception WebAssembly.Tag which
     # Godot's main module does not provide.
     env.Append(LINKFLAGS=["-fexceptions"])
+    # Optimise aggressively — WASM is slower than native so we need -O3.
+    env.Append(CCFLAGS=["-O3"])
+    env.Append(LINKFLAGS=["-O3"])
     # Note: wasm-ld does not support -z muldefs. Duplicate symbols between
     # tr_godot_gl_stubs.c and real renderer files are resolved by
     # #ifndef GODOT_GDEXTENSION guards in the real renderer source files.

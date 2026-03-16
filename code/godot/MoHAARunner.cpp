@@ -4117,9 +4117,6 @@ void MoHAARunner::update_entities() {
                                     }
                                 }
                                 if (bad_idx) {
-                                    ::free(positions); ::free(normals);
-                                    ::free(texcoords); ::free(indices);
-                                    if (outIndices != indices) ::free(outIndices);
                                     continue;
                                 }
 
@@ -4154,9 +4151,6 @@ void MoHAARunner::update_entities() {
                                 }
 
                                 if (has_bad_float) {
-                                    ::free(positions); ::free(normals);
-                                    ::free(texcoords); ::free(indices);
-                                    if (outIndices != indices) ::free(outIndices);
                                     continue;
                                 }
 
@@ -4178,13 +4172,7 @@ void MoHAARunner::update_entities() {
                                 skinned_mesh->add_surface_from_arrays(
                                     Mesh::PRIMITIVE_TRIANGLES, arrays);
 
-                                ::free(positions);
-                                ::free(normals);
-                                ::free(texcoords);
-                                ::free(indices);
-                                if (outIndices != indices) {
-                                    ::free(outIndices);
-                                }
+                                // Buffers are static vectors — no free needed
                             }
                         }
 
@@ -6548,79 +6536,6 @@ void MoHAARunner::update_2d_overlay() {
 
     Rect2 scissor_rect;
 
-    // ── 2D overlay frame dump — triggered by cvar or periodic interval ──
-    {
-        static double s_dump_timer = 0.0;
-        bool do_dump = (Godot_Debug_Dump2D() != 0);
-        int dump_interval = Godot_Debug_Dump2DInterval();
-        if (dump_interval > 0) {
-            s_dump_timer += get_process_delta_time();
-            if (s_dump_timer >= (double)dump_interval) {
-                s_dump_timer = 0.0;
-                do_dump = true;
-            }
-        }
-        if (do_dump && cmd_count > 0) {
-            UtilityFunctions::print(String("[2D-DUMP] Frame dump: ") +
-                                    String::num_int64(cmd_count) + String(" commands"));
-            for (int di = 0; di < cmd_count && di < 400; di++) {
-                int dtype, dshader;
-                float dx, dy, dw, dh, ds1, dt1, ds2, dt2, dcol[4];
-                if (!Godot_Renderer_Get2DCmd(di, &dtype, &dx, &dy, &dw, &dh,
-                                              &ds1, &dt1, &ds2, &dt2, dcol, &dshader)) continue;
-                const char *tname = "";
-                if ((dtype == 0 || dtype == 3) && dshader > 0)
-                    tname = Godot_Renderer_GetShaderName(dshader);
-                if (!tname) tname = "";
-
-                // For textured draws, also show blend mode info
-                String blend_info;
-                if (dshader > 0) {
-                    const GodotShaderProps *sp_d = Godot_ShaderProps_Find_ByHandle(dshader);
-                    if (sp_d) {
-                        blend_info = String(" transp=") + String::num_int64(sp_d->transparency) +
-                                     String(" stages=") + String::num_int64(sp_d->stage_count);
-                        for (int st = 0; st < sp_d->stage_count && st < 4; st++) {
-                            if (!sp_d->stages[st].active) continue;
-                            blend_info += String(" s") + String::num_int64(st) + String("=");
-                            if (sp_d->stages[st].hasBlendFunc)
-                                blend_info += String::num_int64(sp_d->stages[st].blendSrc) +
-                                              String("/") + String::num_int64(sp_d->stages[st].blendDst);
-                            else
-                                blend_info += String("noblend");
-                            if (sp_d->stages[st].isLightmap) blend_info += String("(lm)");
-                            blend_info += String(" map='") + String(sp_d->stages[st].map) + String("'");
-                            if (sp_d->stages[st].rgbGen == STAGE_RGBGEN_GLOBAL_COLOR)
-                                blend_info += String(" rgb=GLOBAL");
-                            if (sp_d->stages[st].alphaGen == STAGE_ALPHAGEN_CONST)
-                                blend_info += String(" alphaConst=") + String::num(sp_d->stages[st].alphaConst, 3);
-                        }
-                    } else {
-                        blend_info = String(" <no shader props>");
-                    }
-                }
-
-                String type_str;
-                if (dtype == 0) type_str = "PIC";
-                else if (dtype == 1) type_str = "BOX";
-                else if (dtype == 2) type_str = "SCIS";
-                else if (dtype == 3) type_str = "TRI";
-                else type_str = String("?") + String::num_int64(dtype);
-
-                UtilityFunctions::print(String("[2D-DUMP] [") + String::num_int64(di) +
-                                        String("] ") + type_str +
-                                        String(" pos=(") + String::num(dx, 1) + String(",") +
-                                        String::num(dy, 1) + String(") sz=(") +
-                                        String::num(dw, 1) + String(",") + String::num(dh, 1) +
-                                        String(") col=(") + String::num(dcol[0], 3) + String(",") +
-                                        String::num(dcol[1], 3) + String(",") + String::num(dcol[2], 3) +
-                                        String(",") + String::num(dcol[3], 3) + String(") sh=") +
-                                        String::num_int64(dshader) + String(" '") + String(tname) +
-                                        String("'") + blend_info);
-            }
-        }
-    }
-
     /* Gather HUD model draw orders so we can inject viewport textures
      * at the correct position in the 2D command stream. */
     int hud_model_count = Godot_Renderer_GetHudModelCount();
@@ -7711,22 +7626,23 @@ void MoHAARunner::update_hud_models() {
                             shaderName, sizeof(shaderName));
                         if (numVerts <= 0 || numTris <= 0) continue;
 
-                        float *positions = (float *)malloc(numVerts * 3 * sizeof(float));
-                        float *normals   = (float *)malloc(numVerts * 3 * sizeof(float));
-                        float *texcoords = (float *)malloc(numVerts * 2 * sizeof(float));
-                        int   *indices   = (int *)malloc(numTris * 3 * sizeof(int));
-
-                        if (!positions || !normals || !texcoords || !indices) {
-                            ::free(positions); ::free(normals);
-                            ::free(texcoords); ::free(indices);
-                            continue;
-                        }
+                        // Reuse static scratch buffers (same as entity skinning)
+                        size_t pos_need = (size_t)numVerts * 3;
+                        size_t nrm_need = (size_t)numVerts * 3;
+                        size_t tc_need  = (size_t)numVerts * 2;
+                        size_t idx_need = (size_t)numTris  * 3;
+                        if (s_skin_positions.size() < pos_need) s_skin_positions.resize(pos_need);
+                        if (s_skin_normals.size()   < nrm_need) s_skin_normals.resize(nrm_need);
+                        if (s_skin_texcoords.size() < tc_need)  s_skin_texcoords.resize(tc_need);
+                        if (s_skin_indices.size()   < (int)idx_need) s_skin_indices.resize(idx_need);
+                        float *positions = s_skin_positions.data();
+                        float *normals   = s_skin_normals.data();
+                        float *texcoords = s_skin_texcoords.data();
+                        int   *indices   = s_skin_indices.data();
 
                         if (!Godot_Skel_SkinSurface(tiki, m, s,
                                 boneCache, boneCount, positions, normals, -1,
                                 nullptr, 0)) {
-                            ::free(positions); ::free(normals);
-                            ::free(texcoords); ::free(indices);
                             continue;
                         }
 
@@ -7795,8 +7711,7 @@ void MoHAARunner::update_hud_models() {
                             mesh->surface_set_material(mesh->get_surface_count() - 1, mat);
                         }
 
-                        ::free(positions); ::free(normals);
-                        ::free(texcoords); ::free(indices);
+                        // Buffers are static vectors — no free needed
                     }
                 }
 

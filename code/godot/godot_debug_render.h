@@ -29,8 +29,6 @@ int Godot_Debug_GetShowNormals(void);
 int Godot_Debug_GetSpeeds(void);
 int Godot_Debug_GetLockPVS(void);
 int Godot_Debug_GetDrawBBox(void);
-int Godot_Debug_Dump2D(void);
-int Godot_Debug_Dump2DInterval(void);
 
 #ifdef __cplusplus
 }
