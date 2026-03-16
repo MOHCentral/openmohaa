@@ -350,7 +350,7 @@ private:
     // Screen effect trigger state — track health to detect damage
     int prev_health = -1;  // Previous frame's player health (-1 = uninitialised)
 
- // Entity mesh caching (Phase 37, improved Phase 60)
+ // Entity mesh caching
     // Track per-entity state hash to avoid rebuilding meshes each frame
     struct EntityCacheKey {
         int hModel;
@@ -633,7 +633,7 @@ public:
     void load_game(const String &p_slot_name);
     PackedStringArray get_save_list() const;
 
-    // Multiplayer helpers (Phases 265-266)
+    // Multiplayer helpers
     PackedStringArray list_available_maps() const;
     void start_server(const String &p_map, const String &p_gametype, int max_clients);
     void connect_to_server(const String &p_address);
@@ -645,7 +645,7 @@ public:
     void refresh_lan();
     int get_server_count() const;
 
-    // Settings helpers (Phases 267-270)
+    // Settings helpers
     void set_audio_volume(float master, float music, float dialog);
     void set_video_fullscreen(bool fullscreen);
     void set_video_resolution(int width, int height);

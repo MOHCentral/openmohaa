@@ -1,6 +1,6 @@
 /* godot_shader_material.cpp — Multi-stage shader → Godot ShaderMaterial builder
  *
- * Phases 66–68, 71–72: Generates .gdshader code from parsed MOHAA
+ * Generates .gdshader code from parsed MOHAA
  * multi-stage shader definitions and creates ShaderMaterial instances.
  *
  * The generated shader composites multiple texture stages using their

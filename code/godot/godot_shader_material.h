@@ -1,6 +1,6 @@
 /* godot_shader_material.h — Multi-stage shader → Godot ShaderMaterial builder
  *
- * Phases 66–68, 71–72: Generates Godot ShaderMaterial instances from
+ * Generates Godot ShaderMaterial instances from
  * parsed MOHAA multi-stage shader definitions.  Composites multiple
  * texture stages with per-stage blendFunc, rgbGen/alphaGen wave
  * functions, tcGen environment/lightmap/vector, tcMod animations,

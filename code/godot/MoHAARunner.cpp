@@ -880,7 +880,7 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("load_game", "slot_name"), &MoHAARunner::load_game);
     godot::ClassDB::bind_method(godot::D_METHOD("get_save_list"), &MoHAARunner::get_save_list);
 
-    // Multiplayer helpers (Phases 265-266)
+    // Multiplayer helpers
     godot::ClassDB::bind_method(godot::D_METHOD("list_available_maps"), &MoHAARunner::list_available_maps);
     godot::ClassDB::bind_method(godot::D_METHOD("start_server", "map", "gametype", "max_clients"), &MoHAARunner::start_server);
     godot::ClassDB::bind_method(godot::D_METHOD("connect_to_server", "address"), &MoHAARunner::connect_to_server);
@@ -892,7 +892,7 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("refresh_lan"), &MoHAARunner::refresh_lan);
     godot::ClassDB::bind_method(godot::D_METHOD("get_server_count"), &MoHAARunner::get_server_count);
 
-    // Settings helpers (Phases 267-270)
+    // Settings helpers
     godot::ClassDB::bind_method(godot::D_METHOD("set_audio_volume", "master", "music", "dialog"), &MoHAARunner::set_audio_volume);
     godot::ClassDB::bind_method(godot::D_METHOD("set_video_fullscreen", "fullscreen"), &MoHAARunner::set_video_fullscreen);
     godot::ClassDB::bind_method(godot::D_METHOD("set_video_resolution", "width", "height"), &MoHAARunner::set_video_resolution);
@@ -4463,7 +4463,7 @@ void MoHAARunner::update_entities() {
             }
         }
 
- // ── Phase 21+22+268: Entity colour tinting + alpha + entity lighting ──
+ // ── Entity colour tinting + alpha + entity lighting ──
  // Correct rgbGen/alphaGen entity application per shader directive
         // Only apply shaderRGBA when the shader explicitly requests it via rgbGen/alphaGen entity.
         Color light_mul(1.0f, 1.0f, 1.0f, 1.0f);
@@ -8867,7 +8867,7 @@ void MoHAARunner::_process(double delta) {
     update_sun_flare();         // Sun lens flare 2D overlay
 
     // Update planar reflections early before drawing HUD
-    // update_mirrors(); // Vanity mirror hack (Phase FUN) - Commented out as requested.
+    // update_mirrors(); // Vanity mirror hack — disabled.
 
  // ── Update 2D HUD overlay from captured draw commands ──
     update_2d_overlay();
@@ -9428,7 +9428,7 @@ godot::PackedStringArray MoHAARunner::get_save_list() const {
 }
 
 // ──────────────────────────────────────────────
-//  Multiplayer helpers (Phases 265-266)
+//  Multiplayer helpers
 // ──────────────────────────────────────────────
 
 godot::PackedStringArray MoHAARunner::list_available_maps() const {
@@ -9520,7 +9520,7 @@ int MoHAARunner::get_server_count() const {
 }
 
 // ──────────────────────────────────────────────
-//  Settings helpers (Phases 267-270)
+//  Settings helpers
 // ──────────────────────────────────────────────
 
 void MoHAARunner::set_audio_volume(float master, float music, float dialog) {

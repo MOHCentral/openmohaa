@@ -9,7 +9,7 @@
  * files to load, then extracts alphaFunc, blendFunc, surfaceparm trans,
  * and cull directives from each shader definition.
  *
- * Phases 66–72: Extended to parse ALL stages per shader (not just the
+ * Extended to parse ALL stages per shader (not just the
  * first), with per-stage rgbGen, alphaGen, tcGen, tcMod, animMap, and
  * blend function data.  The MohaaShaderStage struct holds per-stage data;
  * GodotShaderProps::stages[] stores up to MOHAA_SHADER_STAGE_MAX stages.
