@@ -71,22 +71,12 @@ void GLimp_Init( qboolean fixedFunction )
     Com_Printf( "[GodotInput] GLimp_Init (Godot owns the display)\n" );
 }
 
-void GLimp_Shutdown( void )
-{
-    Com_Printf( "[GodotInput] GLimp_Shutdown\n" );
-}
 #ifndef __APPLE__
 void GLimp_EndFrame( void )
 {
     /* No buffer swap needed — Godot handles presentation */
 }
 #endif
-
-void GLimp_SetGamma( unsigned char red[256], unsigned char green[256],
-                     unsigned char blue[256] )
-{
-    /* Gamma ramp — not applicable under Godot */
-}
 
 #ifndef __APPLE__
 void GLimp_Minimize( void )

@@ -484,6 +484,7 @@ char *Sys_DefaultHomeStatePath(void)
 
 #endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_SteamPath
@@ -505,6 +506,7 @@ char *Sys_GogPath( void )
 	// GOG doesn't let you install Quake 3 on Mac/Linux
 	return "";
 }
+#endif /* !GODOT_GDEXTENSION */
 
 #ifndef GODOT_GDEXTENSION
 /*
@@ -611,6 +613,7 @@ qboolean Sys_LowPhysicalMemory( void )
 	return qfalse;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Basename
@@ -621,7 +624,6 @@ const char *Sys_Basename( char *path )
 	return basename( path );
 }
 
-#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Dirname
@@ -1193,6 +1195,7 @@ dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *t
 }
 #endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_GLimpSafeInit
@@ -1216,6 +1219,7 @@ void Sys_GLimpInit( void )
 {
 	// NOP
 }
+#endif /* !GODOT_GDEXTENSION */
 
 void Sys_SetFloatEnv(void)
 {
@@ -1248,6 +1252,7 @@ void Sys_PlatformInit( void )
 }
 #endif /* !GODOT_GDEXTENSION */
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_PlatformExit
@@ -1258,6 +1263,7 @@ Unix specific deinitialisation
 void Sys_PlatformExit( void )
 {
 }
+#endif /* !GODOT_GDEXTENSION */
 
 #ifndef GODOT_GDEXTENSION
 /*

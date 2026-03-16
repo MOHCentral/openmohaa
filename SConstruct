@@ -426,6 +426,10 @@ if env["platform"] == "linux":
     env.Append(LINKFLAGS=["-z", "muldefs"])
     # Bind template symbols locally within each .so to prevent ELF interposition
     env.Append(LINKFLAGS=["-Wl,-Bsymbolic-functions"])
+elif env["platform"] == "android":
+    # Android NDK uses lld which supports the same flags as Linux ld.
+    env.Append(LINKFLAGS=["-z", "muldefs"])
+    env.Append(LINKFLAGS=["-Wl,-Bsymbolic-functions"])
 elif env["platform"] == "web":
     # Use Emscripten JS-based exception handling (invoke_* wrappers).
     # -fwasm-exceptions would import __cpp_exception WebAssembly.Tag which
@@ -471,6 +475,8 @@ elif env["platform"] == "windows":
 # ── Link system libraries ──
 if env["platform"] == "linux":
     env.Append(LIBS=["z", "dl"])  # zlib, dlopen
+elif env["platform"] == "android":
+    env.Append(LIBS=["z", "log"])  # zlib, Android log
 elif env["platform"] == "macos":
     env.Append(LIBS=["z", "dl"])  # zlib, dlopen
     # Cross-compiling from Linux: SCons defaults SHLIBSUFFIX to ".so".
