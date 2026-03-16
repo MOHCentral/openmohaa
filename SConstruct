@@ -2,8 +2,20 @@
 import os
 import subprocess
 import sys
+import traceback
 
 sys.setrecursionlimit(10000)
+
+# ── RecursionError diagnostic — print a traceback before SCons swallows it ──
+_orig_excepthook = sys.excepthook
+def _recursion_hook(exc_type, exc_val, exc_tb):
+    if exc_type is RecursionError:
+        print("=" * 60, file=sys.stderr)
+        print("RECURSION ERROR — last 60 frames:", file=sys.stderr)
+        traceback.print_tb(exc_tb, limit=60, file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+    _orig_excepthook(exc_type, exc_val, exc_tb)
+sys.excepthook = _recursion_hook
 
 env = SConscript("../godot-cpp/SConstruct")
 
