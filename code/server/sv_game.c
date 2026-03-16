@@ -31,11 +31,21 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/alias.h"
 
 #ifdef GODOT_GDEXTENSION
-/* In the monolithic Godot build these are owned by fgame/debuglines.cpp. */
+#if defined(_MSC_VER)
+/* MSVC mangles C++ globals differently; keep C-linkage definitions here
+   and let /FORCE:MULTIPLE resolve the duplicate from debuglines.cpp. */
+debugline_t *DebugLines;
+int numDebugLines;
+debugstring_t *DebugStrings;
+int numDebugStrings;
+#else
+/* GCC/Clang: fgame/debuglines.cpp owns these (Itanium ABI doesn't
+   mangle plain globals, so C and C++ linkage is compatible). */
 extern debugline_t *DebugLines;
 extern int numDebugLines;
 extern debugstring_t *DebugStrings;
 extern int numDebugStrings;
+#endif
 #else
 debugline_t *DebugLines;
 int numDebugLines;

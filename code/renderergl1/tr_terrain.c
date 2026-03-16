@@ -71,12 +71,21 @@ typedef struct poolInfo_s {
 static int modeTable[8];
 
 #ifdef GODOT_GDEXTENSION
+#if defined(_MSC_VER)
+/* MSVC mangles C++ globals; keep C-linkage definitions here.
+   /FORCE:MULTIPLE resolves duplicates from navigation_bsp_load_terrain.cpp. */
+terraTri_t    *g_pTris;
+terrainVert_t *g_pVert;
+poolInfo_t g_tri;
+poolInfo_t g_vert;
+#else
 /* Under GODOT_GDEXTENSION these are defined in navigation_bsp_load_terrain.cpp;
  * use extern to avoid duplicate symbol errors with wasm-ld. */
 extern terraTri_t    *g_pTris;
 extern terrainVert_t *g_pVert;
 extern poolInfo_t g_tri;
 extern poolInfo_t g_vert;
+#endif
 #else
 terraTri_t    *g_pTris;
 terrainVert_t *g_pVert;
