@@ -3,11 +3,41 @@ import os
 import subprocess
 import sys
 import traceback
+import threading
+import time
 
 # Windows MSVC builds hit deep recursion in SCons internals with 1400+ source files.
 # Increase limit to accommodate. On Linux/macOS this is harmless.
 if sys.platform == "win32":
     sys.setrecursionlimit(100000)
+
+    # ── diagnostic: monitor main thread stack depth ──────────────────────
+    _main_tid = threading.get_ident()
+    _stack_dumped = False
+
+    def _monitor_stack():
+        global _stack_dumped
+        while True:
+            time.sleep(0.05)  # Sample 20x/sec
+            frames = sys._current_frames()
+            main_frame = frames.get(_main_tid)
+            if main_frame is None:
+                continue
+            # Count depth
+            depth = 0
+            f = main_frame
+            while f is not None:
+                depth += 1
+                f = f.f_back
+            if depth > 200 and not _stack_dumped:
+                _stack_dumped = True
+                print(f"\n=== STACK DEPTH MONITOR: depth={depth} ===", file=sys.stderr, flush=True)
+                traceback.print_stack(main_frame, limit=80, file=sys.stderr)
+                print("=== END STACK DUMP ===\n", file=sys.stderr, flush=True)
+
+    _t = threading.Thread(target=_monitor_stack, daemon=True)
+    _t.start()
+    # ────────────────────────────────────────────────────────────────────
 
 env = SConscript("../godot-cpp/SConstruct")
 
