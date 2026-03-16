@@ -140,8 +140,10 @@ list(APPEND ALL_SOURCES
 
 set(_EXCLUDED "")
 foreach(SRC ${ALL_SOURCES})
-    # Normalise to forward slashes for pattern matching
+    # Normalise to forward slashes and lowercase for case-insensitive matching
+    # (matches SConstruct's fp = str(filepath).lower() approach)
     string(REPLACE "\\" "/" _SN "${SRC}")
+    string(TOLOWER "${_SN}" _SN)
 
     set(_EXCL FALSE)
 
@@ -429,6 +431,6 @@ set_target_properties(cgame PROPERTIES
 )
 
 if(MSVC)
-    target_compile_options(cgame PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc> /O2)
+    target_compile_options(cgame PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
     target_link_options(cgame PRIVATE /FORCE:MULTIPLE)
 endif()
