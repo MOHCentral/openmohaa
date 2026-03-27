@@ -84,6 +84,20 @@ char	*com_argv[MAX_NUM_ARGVS+1];
 
 jmp_buf abortframe;		// an ERR_DROP occured, exit the entire frame
 
+#ifdef GODOT_GDEXTENSION
+// ERR_DROP notification for Godot — polled by MoHAARunner after Com_Frame().
+static qboolean godot_error_drop_pending = qfalse;
+static char     godot_error_drop_msg[MAXPRINTMSG];
+
+qboolean Godot_GetErrorDrop(char *buf, int bufsize) {
+	if (!godot_error_drop_pending) return qfalse;
+	godot_error_drop_pending = qfalse;
+	if (buf && bufsize > 0) {
+		Q_strncpyz(buf, godot_error_drop_msg, bufsize);
+	}
+	return qtrue;
+}
+#endif
 
 FILE *debuglogfile;
 static fileHandle_t pipefile;
@@ -546,6 +560,11 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		longjmp (abortframe, -1);
 	} else if (code == ERR_DROP) {
 		Com_Printf ("********************\nERROR: %s\n********************\n", com_errorMessage);
+#ifdef GODOT_GDEXTENSION
+		// Notify Godot of the ERR_DROP — polled by MoHAARunner after Com_Frame().
+		Q_strncpyz(godot_error_drop_msg, com_errorMessage, sizeof(godot_error_drop_msg));
+		godot_error_drop_pending = qtrue;
+#endif
         SV_Shutdown(va("Server crashed: %s", com_errorMessage));
 #ifndef DEDICATED
 		if (com_cl_running && com_cl_running->integer) {

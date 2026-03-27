@@ -128,6 +128,13 @@ extern "C" {
     char **Godot_VFS_ListFiles(const char *directory, const char *extension, int *out_count);
     void Godot_VFS_FreeFileList(char **list);
     const char *Godot_VFS_GetGamedir(void);
+    const char *Godot_VFS_GetWritableGamedir(void);
+
+    // VFS restart — rescan pk3 files after installing new content
+    void FS_Restart(int checksumFeed);
+
+    // ERR_DROP notification — from common.c (polled after Com_Frame)
+    int Godot_GetErrorDrop(char *buf, int bufsize);
 
  // Input bridge — from godot_input_bridge.c
     int  Godot_InjectKeyEvent(int godot_key, int down);
@@ -859,6 +866,8 @@ void MoHAARunner::_bind_methods() {
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_file_exists", "qpath"), &MoHAARunner::vfs_file_exists);
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_list_files", "directory", "extension"), &MoHAARunner::vfs_list_files);
     godot::ClassDB::bind_method(godot::D_METHOD("vfs_get_gamedir"), &MoHAARunner::vfs_get_gamedir);
+    godot::ClassDB::bind_method(godot::D_METHOD("vfs_get_writable_gamedir"), &MoHAARunner::vfs_get_writable_gamedir);
+    godot::ClassDB::bind_method(godot::D_METHOD("vfs_restart"), &MoHAARunner::vfs_restart);
 
  // Input control
     godot::ClassDB::bind_method(godot::D_METHOD("set_mouse_captured", "captured"), &MoHAARunner::set_mouse_captured);
@@ -8324,6 +8333,19 @@ void MoHAARunner::_process(double delta) {
     Godot_Renderer_ResetEndFrameCount();
     godot_jmpbuf_valid = false;
 
+    // ── Poll for ERR_DROP errors (non-fatal, engine continues running) ──
+    // Com_Error(ERR_DROP) longjmps to abortframe inside Com_Frame, so
+    // Com_Frame returns normally.  We check the notification flag here
+    // and emit engine_error so GDScript (e.g. MapDownloader) can react.
+    {
+        char drop_msg[1024];
+        if (Godot_GetErrorDrop(drop_msg, sizeof(drop_msg))) {
+            godot::String err_msg(drop_msg);
+            UtilityFunctions::printerr(godot::String("[MoHAA] ERR_DROP: ") + err_msg);
+            emit_signal("engine_error", err_msg);
+        }
+    }
+
     // Dismiss the native loading screen once we've left the LOADING state
     // and no deferred BSP load is pending.  During map transitions the
     // loading screen stays visible so the user has visual feedback instead
@@ -9077,6 +9099,21 @@ godot::String MoHAARunner::vfs_get_gamedir() const {
     if (!initialized) return "";
     const char *dir = Godot_VFS_GetGamedir();
     return godot::String(dir ? dir : "");
+}
+
+godot::String MoHAARunner::vfs_get_writable_gamedir() const {
+    if (!initialized) return "";
+    const char *dir = Godot_VFS_GetWritableGamedir();
+    return godot::String(dir ? dir : "");
+}
+
+void MoHAARunner::vfs_restart() {
+    if (!initialized) {
+        UtilityFunctions::printerr("[MoHAA] Engine not initialised, cannot restart VFS.");
+        return;
+    }
+    UtilityFunctions::print("[MoHAA] Restarting VFS (FS_Restart) to rescan pk3 files…");
+    FS_Restart(0);
 }
 
 // ──────────────────────────────────────────────

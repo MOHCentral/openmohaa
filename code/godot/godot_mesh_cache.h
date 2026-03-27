@@ -18,6 +18,7 @@
 #include <godot_cpp/variant/string.hpp>
 
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include <cstring>
 

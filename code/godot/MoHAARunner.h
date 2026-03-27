@@ -617,6 +617,8 @@ public:
     bool vfs_file_exists(const String &p_qpath) const;
     PackedStringArray vfs_list_files(const String &p_directory, const String &p_extension) const;
     String vfs_get_gamedir() const;
+    String vfs_get_writable_gamedir() const;
+    void vfs_restart();
 
  // Game flow state
     int get_game_flow_state() const;

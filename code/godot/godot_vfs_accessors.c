@@ -118,3 +118,34 @@ const char *Godot_VFS_GetBasepath(void) {
 const char *Godot_VFS_GetGamedir(void) {
     return FS_Gamedir();
 }
+
+/*
+ * Godot_VFS_GetWritableGamedir — return the absolute writable game directory.
+ *
+ * This combines fs_homedatapath (writable user data root) with the game
+ * directory name to produce a path like "/home/user/.local/share/openmohaa/main".
+ * Use this for installing downloaded pk3 files — it points to the directory
+ * that FS_Restart will scan.
+ */
+static char vfs_writable_gamedir[MAX_OSPATH];
+
+const char *Godot_VFS_GetWritableGamedir(void) {
+    cvar_t *hdp = Cvar_Get("fs_homedatapath", "", 0);
+    const char *gamedir = FS_Gamedir();
+
+    if (hdp && hdp->string[0] && gamedir && gamedir[0]) {
+        Com_sprintf(vfs_writable_gamedir, sizeof(vfs_writable_gamedir),
+                    "%s/%s", hdp->string, gamedir);
+        return vfs_writable_gamedir;
+    }
+
+    /* Fallback: try fs_basepath + gamedir. */
+    cvar_t *bp = Cvar_Get("fs_basepath", "", 0);
+    if (bp && bp->string[0] && gamedir && gamedir[0]) {
+        Com_sprintf(vfs_writable_gamedir, sizeof(vfs_writable_gamedir),
+                    "%s/%s", bp->string, gamedir);
+        return vfs_writable_gamedir;
+    }
+
+    return "";
+}
