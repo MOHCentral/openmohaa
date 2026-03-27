@@ -280,8 +280,16 @@ private:
     int pvs_current_cluster = -1;            // Camera's current PVS cluster
     float pvs_last_origin[3] = {0, 0, 0};   // Camera origin used for last PVS update (id coords)
     int pvs_log_count = 0;                   // Limits PVS debug log messages per map
+    std::vector<bool> pvs_cluster_visible;   // Per-cluster visibility (from PVS update)
     void update_pvs_visibility();            // Toggle per-cluster mesh visibility
     void update_terrain_visibility();        // Per-frame terrain marking via engine BSP tree walk
+
+    // UI transform cache — avoid recalculating when viewport size is unchanged
+    float cached_vp_width = 0.0f;
+    float cached_vp_height = 0.0f;
+
+    // 2D overlay command hash — skip full redraw when unchanged
+    uint64_t last_2d_cmd_hash = 0;
 
  // Static BSP models
     Node3D *static_model_root = nullptr;     // Container for TIKI static models from BSP
@@ -381,6 +389,19 @@ private:
         }
     };
     std::vector<EntityCacheKey> entity_cache_keys;
+
+    // Per-entity transform cache — skip set_global_transform() when unchanged
+    std::vector<Transform3D> entity_last_transforms;
+    std::vector<bool> entity_transform_valid;
+
+    // Per-entity tint cache — skip tinting when light+rgba are unchanged.
+    // Stores the quantised tint key (light_q | rgba_q) per entity slot.
+    std::vector<uint32_t> entity_last_tint_key;
+    std::vector<bool> entity_tint_valid;
+
+    // Sprite mesh cache — avoid per-frame instantiate() + add_surface_from_arrays()
+    // Key = quantised (halfW_bits << 16 | halfH_bits)
+    std::unordered_map<uint32_t, Ref<ArrayMesh>> sprite_mesh_cache;
 
  // Frame counter for singleton mesh & material cache eviction
     uint64_t frame_counter_ = 0;

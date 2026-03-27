@@ -493,6 +493,17 @@ struct SurfAnimCache {
 };
 static std::unordered_map<uint32_t, SurfAnimCache> s_surf_anim_cache;
 
+// Pre-built list of BSP surfaces that actually need animation updates.
+// Populated lazily on first update_shader_animations() call after map load;
+// cleared alongside s_surf_anim_cache on map change.
+struct AnimatedSurfEntry {
+    int child_idx;
+    int surface_idx;
+    uint32_t cache_key;
+};
+static std::vector<AnimatedSurfEntry> s_animated_surfaces;
+static bool s_animated_surfaces_built = false;
+
 // Sprite/beam material caches: avoid per-frame material+texture creation.
 // Cleared on map change (shader handles are re-registered).
 static std::unordered_map<int, Ref<StandardMaterial3D>> s_sprite_mat_cache;
@@ -528,6 +539,8 @@ static Ref<ImageTexture> s_ui_white_tex;
 static void Godot_ClearStaticRefCaches() {
     s_shader_texture_loaded_names.clear();
     s_surf_anim_cache.clear();
+    s_animated_surfaces.clear();
+    s_animated_surfaces_built = false;
     s_sprite_mat_cache.clear();
     s_beam_mat_cache.clear();
     s_poly_mat_cache.clear();
@@ -1024,6 +1037,8 @@ void MoHAARunner::clear_godot_caches_for_game_switch(int target_game) {
     animmap_info.clear();
     animmap_frames.clear();
     s_surf_anim_cache.clear();
+    s_animated_surfaces.clear();
+    s_animated_surfaces_built = false;
     s_sprite_mat_cache.clear();
     s_beam_mat_cache.clear();
     s_poly_mat_cache.clear();
@@ -1454,6 +1469,8 @@ void MoHAARunner::check_world_load() {
             animmap_info.clear();
             animmap_frames.clear();
             s_surf_anim_cache.clear();
+            s_animated_surfaces.clear();
+            s_animated_surfaces_built = false;
             s_sprite_mat_cache.clear();
             s_beam_mat_cache.clear();
             s_poly_mat_cache.clear();
@@ -1462,6 +1479,14 @@ void MoHAARunner::check_world_load() {
             s_beam_tint_cache.clear();
             s_alpha_inv_tex_cache.clear();
             dlight_cache.clear();
+            sprite_mesh_cache.clear();
+            entity_last_transforms.clear();
+            entity_transform_valid.clear();
+            entity_last_tint_key.clear();
+            entity_tint_valid.clear();
+            cached_vp_width = 0.0f;
+            cached_vp_height = 0.0f;
+            last_2d_cmd_hash = 0;
             cached_fog_dist = -1.0f;
             cached_fog_color[0] = cached_fog_color[1] = cached_fog_color[2] = -1.0f;
             cached_fog_enabled = false;
@@ -1541,7 +1566,10 @@ void MoHAARunner::check_world_load() {
     animmap_frames.clear();
     tinted_mat_cache.clear();
     tiki_mat_cache.clear();               // Clear TIKI entity material cache
+    sprite_mesh_cache.clear();
     s_surf_anim_cache.clear();
+    s_animated_surfaces.clear();
+    s_animated_surfaces_built = false;
     s_sprite_mat_cache.clear();
     s_beam_mat_cache.clear();
     s_poly_mat_cache.clear();
@@ -3336,6 +3364,14 @@ void MoHAARunner::update_entities() {
     if ((int)entity_cache_keys.size() < ent_count) {
         entity_cache_keys.resize(ent_count);
     }
+    if ((int)entity_last_transforms.size() < ent_count) {
+        entity_last_transforms.resize(ent_count);
+        entity_transform_valid.resize(ent_count, false);
+    }
+    if ((int)entity_last_tint_key.size() < ent_count) {
+        entity_last_tint_key.resize(ent_count, 0);
+        entity_tint_valid.resize(ent_count, false);
+    }
 
     // Cache camera origin for PVS entity culling (id Tech 3 coordinates)
     float pvs_cam_origin[3] = {0, 0, 0};
@@ -3454,45 +3490,47 @@ void MoHAARunner::update_entities() {
             }
 
             // Build a simple quad (2 triangles) — billboard handled by material
-            PackedVector3Array gPos;
-            PackedVector2Array gUV;
-            PackedColorArray   gCol;
-            PackedInt32Array   gIdx;
-            gPos.resize(4);
-            gUV.resize(4);
-            gCol.resize(4);
-            gIdx.resize(6);
+            // Cache the mesh by quantised dimensions to avoid per-frame
+            // instantiate() + add_surface_from_arrays().
+            // Colour tinting is handled via material, not mesh vertex colours,
+            // so the mesh can be shared across differently-coloured sprites.
+            uint16_t hw_bits = (uint16_t)(halfW * 1000.0f);
+            uint16_t hh_bits = (uint16_t)(halfH * 1000.0f);
+            uint32_t sprite_mesh_key = ((uint32_t)hw_bits << 16) | (uint32_t)hh_bits;
+            auto smc_it = sprite_mesh_cache.find(sprite_mesh_key);
+            if (smc_it == sprite_mesh_cache.end()) {
+                PackedVector3Array gPos;
+                PackedVector2Array gUV;
+                PackedInt32Array   gIdx;
+                gPos.resize(4);
+                gUV.resize(4);
+                gIdx.resize(6);
 
-            gPos.set(0, Vector3(-halfW, -halfH, 0.0f));
-            gPos.set(1, Vector3( halfW, -halfH, 0.0f));
-            gPos.set(2, Vector3( halfW,  halfH, 0.0f));
-            gPos.set(3, Vector3(-halfW,  halfH, 0.0f));
-            gUV.set(0, Vector2(0, 1));
-            gUV.set(1, Vector2(1, 1));
-            gUV.set(2, Vector2(1, 0));
-            gUV.set(3, Vector2(0, 0));
+                gPos.set(0, Vector3(-halfW, -halfH, 0.0f));
+                gPos.set(1, Vector3( halfW, -halfH, 0.0f));
+                gPos.set(2, Vector3( halfW,  halfH, 0.0f));
+                gPos.set(3, Vector3(-halfW,  halfH, 0.0f));
+                gUV.set(0, Vector2(0, 1));
+                gUV.set(1, Vector2(1, 1));
+                gUV.set(2, Vector2(1, 0));
+                gUV.set(3, Vector2(0, 0));
 
-            Color entCol(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                         rgba[2] / 255.0f, rgba[3] / 255.0f);
-            gCol.set(0, entCol);
-            gCol.set(1, entCol);
-            gCol.set(2, entCol);
-            gCol.set(3, entCol);
+                gIdx.set(0, 0); gIdx.set(1, 1); gIdx.set(2, 2);
+                gIdx.set(3, 0); gIdx.set(4, 2); gIdx.set(5, 3);
 
-            gIdx.set(0, 0); gIdx.set(1, 1); gIdx.set(2, 2);
-            gIdx.set(3, 0); gIdx.set(4, 2); gIdx.set(5, 3);
+                Array arrays;
+                arrays.resize(Mesh::ARRAY_MAX);
+                arrays[Mesh::ARRAY_VERTEX] = gPos;
+                arrays[Mesh::ARRAY_TEX_UV] = gUV;
+                arrays[Mesh::ARRAY_INDEX]  = gIdx;
 
-            Array arrays;
-            arrays.resize(Mesh::ARRAY_MAX);
-            arrays[Mesh::ARRAY_VERTEX] = gPos;
-            arrays[Mesh::ARRAY_TEX_UV] = gUV;
-            arrays[Mesh::ARRAY_COLOR]  = gCol;
-            arrays[Mesh::ARRAY_INDEX]  = gIdx;
-
-            Ref<ArrayMesh> smesh;
-            smesh.instantiate();
-            smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-            mi->set_mesh(smesh);
+                Ref<ArrayMesh> smesh;
+                smesh.instantiate();
+                smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+                sprite_mesh_cache[sprite_mesh_key] = smesh;
+                smc_it = sprite_mesh_cache.find(sprite_mesh_key);
+            }
+            mi->set_mesh(smc_it->second);
 
             // Cached billboard material per shader handle — avoids creating
             // a new StandardMaterial3D + shader props lookup every frame.
@@ -3565,6 +3603,7 @@ void MoHAARunner::update_entities() {
                 uint64_t tint_key = ((uint64_t)spriteShader << 16) |
                     ((uint64_t)rq << 12) | ((uint64_t)gq << 8) |
                     ((uint64_t)bq << 4) | (uint64_t)aq;
+                if (s_sprite_tint_cache.size() > 2048) s_sprite_tint_cache.clear();
                 auto stc_it = s_sprite_tint_cache.find(tint_key);
                 if (stc_it != s_sprite_tint_cache.end()) {
                     if (spriteShader > 0) {
@@ -3660,10 +3699,16 @@ void MoHAARunner::update_entities() {
             arrays[Mesh::ARRAY_TEX_UV] = gUV;
             arrays[Mesh::ARRAY_INDEX]  = gIdx;
 
-            Ref<ArrayMesh> bmesh;
-            bmesh.instantiate();
+            // Reuse existing ArrayMesh via clear_surfaces() instead of
+            // instantiating a new one every frame.
+            Ref<ArrayMesh> bmesh = mi->get_mesh();
+            if (bmesh.is_valid()) {
+                bmesh->clear_surfaces();
+            } else {
+                bmesh.instantiate();
+                mi->set_mesh(bmesh);
+            }
             bmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-            mi->set_mesh(bmesh);
 
             // Cached beam material per shader handle — avoids creating
             // a new StandardMaterial3D + texture load + shader props lookup every frame.
@@ -3728,6 +3773,7 @@ void MoHAARunner::update_entities() {
                 uint64_t tint_key = ((uint64_t)beamShader << 16) |
                     ((uint64_t)rq << 12) | ((uint64_t)gq << 8) |
                     ((uint64_t)bq << 4) | (uint64_t)aq;
+                if (s_beam_tint_cache.size() > 2048) s_beam_tint_cache.clear();
                 auto btc_it = s_beam_tint_cache.find(tint_key);
                 if (btc_it != s_beam_tint_cache.end()) {
                     if (beamShader > 0) {
@@ -3804,6 +3850,7 @@ void MoHAARunner::update_entities() {
 
         // Try to get the actual skeletal model mesh from cache
         int modType = Godot_Model_GetType(hModel);
+        bool mesh_changed = false;
 
         if (modType == 1 /* GR_MOD_BRUSH */) {
             // ── Brush model (door, mover, platform, etc.) ──
@@ -4240,12 +4287,14 @@ void MoHAARunner::update_entities() {
             }
 
             // Use skinned mesh if available, else cached bind pose, else hide
-            bool mesh_changed = false;
+            // (mesh_changed declared at outer entity-loop scope)
 
             if (skinned_mesh.is_valid() &&
                 skinned_mesh->get_surface_count() > 0) {
-                mi->set_mesh(skinned_mesh);
-                mesh_changed = true;
+                if (mi->get_mesh() != skinned_mesh) {
+                    mi->set_mesh(skinned_mesh);
+                    mesh_changed = true;
+                }
             } else if (cached && !cached->lod_meshes.empty()) {
                 // Determine clamped LOD index for the static array
                 int cacheLodIdx = lodLevel;
@@ -4278,6 +4327,9 @@ void MoHAARunner::update_entities() {
             }
 
             // Apply cached materials (after set_mesh which clears overrides).
+            // Skip when the entity key and mesh are unchanged from the
+            // previous frame — overrides are already applied.
+            if (mesh_changed || !same_key) {
             // If customShader is set, it overrides all surface shaders
             // (matches MOHAA renderer: refEntity_t.customShader in tr_local.h).
             if (entCustomShader > 0) {
@@ -4384,15 +4436,14 @@ void MoHAARunner::update_entities() {
                 }
 
             }
+            } // end material override skip guard
         }  // end else (TIKI model)
 
         // Position: convert id→Godot
         Vector3 pos = id_to_godot_position(origin[0], origin[1], origin[2]);
 
-        if (modType == 1 /* GR_MOD_BRUSH */) {
-            // Brush model vertices are at absolute BSP world coordinates.
-            // The entity's origin is an offset from the default position.
-            // Use identity basis (no scale/rotation) + position offset.
+        Transform3D new_xform;
+        {
             float *fwd = &axis[0];
             float *lft = &axis[3];
             float *up  = &axis[6];
@@ -4404,27 +4455,27 @@ void MoHAARunner::update_entities() {
             Vector3 right_g = -left_g;
             Vector3 back_g  = -forward_g;
 
-            Basis basis(right_g, up_g, back_g);
-            mi->set_global_transform(Transform3D(basis, pos));
+            if (modType != 1 /* not GR_MOD_BRUSH */) {
+                float s = (scale > 0.001f ? scale : 1.0f);
+                right_g *= s;
+                up_g    *= s;
+                back_g  *= s;
+            }
+
+            new_xform = Transform3D(Basis(right_g, up_g, back_g), pos);
+        }
+
+        // Delta-skip: don't call set_global_transform when unchanged
+        if (i < (int)entity_last_transforms.size() &&
+            entity_transform_valid[i] &&
+            entity_last_transforms[i] == new_xform) {
+            // Transform unchanged — skip the expensive SceneTree update
         } else {
-            // Orientation: convert axis vectors
-            float *fwd = &axis[0];
-            float *lft = &axis[3];
-            float *up  = &axis[6];
-
-            Vector3 forward_g = id_to_godot_point(fwd[0], fwd[1], fwd[2]);
-            Vector3 left_g    = id_to_godot_point(lft[0], lft[1], lft[2]);
-            Vector3 up_g      = id_to_godot_point(up[0],  up[1],  up[2]);
-
-            Vector3 right_g = -left_g;
-            Vector3 back_g  = -forward_g;
-
-            // Apply entity scale (entity-level only — MOHAA_UNIT_SCALE is
-            // already baked into the mesh vertices by godot_skel_model.cpp)
-            float s = (scale > 0.001f ? scale : 1.0f);
-
-            Basis basis(right_g * s, up_g * s, back_g * s);
-            mi->set_global_transform(Transform3D(basis, pos));
+            mi->set_global_transform(new_xform);
+            if (i < (int)entity_last_transforms.size()) {
+                entity_last_transforms[i] = new_xform;
+                entity_transform_valid[i] = true;
+            }
         }
 
  // ── Weapon viewport for first-person entities (depth-hack) ──
@@ -4541,6 +4592,29 @@ void MoHAARunner::update_entities() {
         }
 
         if (needs_material_update) {
+            // Delta-skip: build compact tint key from light + rgba + renderfx.
+            // Skip re-application when identical to previous frame.
+            uint8_t lr4 = (uint8_t)(light_mul.r * 15.0f + 0.5f);
+            uint8_t lg4 = (uint8_t)(light_mul.g * 15.0f + 0.5f);
+            uint8_t lb4 = (uint8_t)(light_mul.b * 15.0f + 0.5f);
+            uint32_t tint_delta_key = ((uint32_t)lr4 << 28) | ((uint32_t)lg4 << 24)
+                | ((uint32_t)lb4 << 20) | ((uint32_t)rgba[0] << 12)
+                | ((uint32_t)rgba[1] << 8) | ((uint32_t)rgba[2] << 4)
+                | ((uint32_t)(rgba[3] >> 4));
+            // Include alpha fade flag in key
+            if (renderfx & 0x0400) tint_delta_key ^= 0x80000000u;
+
+            bool tint_unchanged = same_key && !mesh_changed
+                && i < (int)entity_tint_valid.size()
+                && entity_tint_valid[i]
+                && entity_last_tint_key[i] == tint_delta_key;
+
+            if (i < (int)entity_tint_valid.size()) {
+                entity_last_tint_key[i] = tint_delta_key;
+                entity_tint_valid[i] = true;
+            }
+
+            if (!tint_unchanged) {
             Ref<Mesh> mesh = mi->get_mesh();
             if (mesh.is_valid()) {
  // Quantise light to 4-bit for cache key
@@ -4707,6 +4781,7 @@ void MoHAARunner::update_entities() {
                     }
                 }
             }
+            } // end !tint_unchanged
         }
 
         // ── FPS viewmodel zoom hiding ──
@@ -4728,9 +4803,12 @@ void MoHAARunner::update_entities() {
         {
             bool wants_shadow = (cached_entity_shadow_mode == 1) &&
                                  !is_first_person && !is_depthhack;
-            mi->set_cast_shadows_setting(wants_shadow
+            auto target = wants_shadow
                 ? GeometryInstance3D::SHADOW_CASTING_SETTING_ON
-                : GeometryInstance3D::SHADOW_CASTING_SETTING_OFF);
+                : GeometryInstance3D::SHADOW_CASTING_SETTING_OFF;
+            if (mi->get_cast_shadows_setting() != target) {
+                mi->set_cast_shadows_setting(target);
+            }
         }
 
         mi->set_visible(true);
@@ -4742,6 +4820,13 @@ void MoHAARunner::update_entities() {
     for (int i = ent_count; i < active_entity_count; i++) {
         if (i < (int)entity_meshes.size()) {
             entity_meshes[i]->set_visible(false);
+        }
+        // Invalidate cached transform so re-shown entities get a fresh update
+        if (i < (int)entity_transform_valid.size()) {
+            entity_transform_valid[i] = false;
+        }
+        if (i < (int)entity_tint_valid.size()) {
+            entity_tint_valid[i] = false;
         }
     }
 
@@ -5778,18 +5863,17 @@ void MoHAARunner::update_shader_animations(double delta) {
     // Built on first access; cleared on map change alongside animmap caches.
     // Key = (child_index << 16) | surface_index — unique per BSP surface.
 
-    // Walk cached MeshInstance3D children of bsp_map_node (populated at BSP load)
-    for (int c = 0; c < (int)bsp_mesh_children.size(); c++) {
-        MeshInstance3D *mi = bsp_mesh_children[c];
+    // Build the animated surfaces list once (lazy init after map load).
+    // Only ~15 out of hundreds of surfaces typically need per-frame animation.
+    if (!s_animated_surfaces_built) {
+        s_animated_surfaces.clear();
+        for (int c = 0; c < (int)bsp_mesh_children.size(); c++) {
+            MeshInstance3D *mi = bsp_mesh_children[c];
+            Ref<Mesh> mesh = mi->get_mesh();
+            if (!mesh.is_valid()) continue;
 
-        Ref<Mesh> mesh = mi->get_mesh();
-        if (!mesh.is_valid()) continue;
-
-        for (int s = 0; s < mesh->get_surface_count(); s++) {
-            // Look up or populate per-surface cache
-            uint32_t cache_key = ((uint32_t)c << 16) | (uint32_t)s;
-            auto cache_it = s_surf_anim_cache.find(cache_key);
-            if (cache_it == s_surf_anim_cache.end()) {
+            for (int s = 0; s < mesh->get_surface_count(); s++) {
+                uint32_t cache_key = ((uint32_t)c << 16) | (uint32_t)s;
                 SurfAnimCache entry;
                 entry.sp = nullptr;
                 entry.shader_handle = -1;
@@ -5804,7 +5888,6 @@ void MoHAARunner::update_shader_animations(double delta) {
                         CharString cs = shader_name.ascii();
                         entry.sp = Godot_ShaderProps_Find(cs.get_data());
                         if (entry.sp) {
-                            // Register shader handle via O(1) hash insert (not linear scan)
                             entry.shader_handle = Godot_Renderer_RegisterShader(cs.get_data());
                             entry.needs_animation = entry.sp->has_tcmod
                                 || (entry.sp->has_animmap && entry.sp->animmap_num_frames > 0 && entry.sp->animmap_freq > 0.0f)
@@ -5814,16 +5897,34 @@ void MoHAARunner::update_shader_animations(double delta) {
                     }
                 }
                 s_surf_anim_cache[cache_key] = entry;
-                cache_it = s_surf_anim_cache.find(cache_key);
+                if (entry.needs_animation) {
+                    s_animated_surfaces.push_back({ c, s, cache_key });
+                }
             }
+        }
+        s_animated_surfaces_built = true;
+    }
 
+    // Iterate ONLY the pre-built list of animated surfaces (typically ~15)
+    for (const auto &anim_surf : s_animated_surfaces) {
+        MeshInstance3D *mi = bsp_mesh_children[anim_surf.child_idx];
+        if (!mi->is_visible_in_tree()) continue;
+
+        auto cache_it = s_surf_anim_cache.find(anim_surf.cache_key);
+        if (cache_it == s_surf_anim_cache.end()) continue;
+
+        {
             const SurfAnimCache &sc = cache_it->second;
-            if (!sc.needs_animation) continue;  // Early exit: skip static surfaces
+            if (!sc.needs_animation) continue;
 
             const GodotShaderProps *sp = sc.sp;
 
+            int s = anim_surf.surface_idx;
             Ref<Material> base = mi->get_surface_override_material(s);
-            if (base.is_null()) base = mesh->surface_get_material(s);
+            if (base.is_null()) {
+                Ref<Mesh> mesh = mi->get_mesh();
+                if (mesh.is_valid()) base = mesh->surface_get_material(s);
+            }
             Ref<StandardMaterial3D> smat = base;
             if (!smat.is_valid()) continue;
 
@@ -6100,10 +6201,10 @@ Ref<ImageTexture> MoHAARunner::get_shader_texture(int shader_handle) {
 
     // animMap UI shaders must return a frame based on time; never return a
     // frozen cached texture for these (e.g. fan_anim1 in the main menu).
+    // NOTE: No need to erase shader_textures here — the function returns
+    // early from the animmap frame lookup below, never reaching the static
+    // texture cache.  Removing the erase avoids hash map churn every frame.
     if (sp && sp->has_animmap && sp->animmap_num_frames > 0 && sp->animmap_freq > 0.0f) {
-        shader_textures.erase(shader_handle);
-        shader_texture_has_alpha.erase(shader_handle);
-
         auto it_anim = animmap_info.find(shader_handle);
         auto it_frames = animmap_frames.find(shader_handle);
 
@@ -6348,15 +6449,13 @@ void MoHAARunner::update_ui_transform() {
     // as the source coordinate space. The transient 2D window values captured
     // by GR_Set2DWindow can be widget-local (e.g. 64x16) and must not drive the
     // global HUD scale.
-    Godot_Renderer_GetVidSize(&ui_vid_w, &ui_vid_h);
-    if (ui_vid_w < 1) ui_vid_w = 640;
-    if (ui_vid_h < 1) ui_vid_h = 480;
+    int new_vid_w = 640, new_vid_h = 480;
+    Godot_Renderer_GetVidSize(&new_vid_w, &new_vid_h);
+    if (new_vid_w < 1) new_vid_w = 640;
+    if (new_vid_h < 1) new_vid_h = 480;
 
     // Read the ACTUAL Godot canvas size — this is where canvas drawing
     // physically happens, so it must be the target for our scale factor.
-    // Using the engine-tracked gr_viewport_width would be wrong if the
-    // engine resolution differs from the window (e.g. on initial boot
-    // when r_mode resolves to a size different from the Godot window).
     Vector2 viewport_size(0, 0);
     if (hud_control) {
         viewport_size = hud_control->get_size();
@@ -6370,10 +6469,20 @@ void MoHAARunner::update_ui_transform() {
         viewport_size = Vector2(win);
     }
 
+    // Delta-skip: if viewport size and engine resolution haven't changed, keep cached values
+    if (vid_restart_grace_frames <= 0 &&
+        viewport_size.x == cached_vp_width &&
+        viewport_size.y == cached_vp_height &&
+        new_vid_w == ui_vid_w &&
+        new_vid_h == ui_vid_h) {
+        return;  // Nothing changed — skip recalculation
+    }
+    cached_vp_width = viewport_size.x;
+    cached_vp_height = viewport_size.y;
+    ui_vid_w = new_vid_w;
+    ui_vid_h = new_vid_h;
+
     // Non-uniform scaling — stretch engine resolution to fill the viewport.
-    // This matches OPM behaviour: SCR_AdjustFrom640() scales from 640×480
-    // to glConfig.vidWidth×vidHeight, then the viewport stretches that to
-    // the actual window size.
     ui_scale_x = viewport_size.x / (float)ui_vid_w;
     ui_scale_y = viewport_size.y / (float)ui_vid_h;
     ui_offset_x = 0.0f;
@@ -8747,6 +8856,8 @@ void MoHAARunner::_process(double delta) {
             animmap_info.clear();
             animmap_frames.clear();
             s_surf_anim_cache.clear();
+            s_animated_surfaces.clear();
+            s_animated_surfaces_built = false;
             s_sprite_mat_cache.clear();
             s_beam_mat_cache.clear();
             s_poly_mat_cache.clear();
