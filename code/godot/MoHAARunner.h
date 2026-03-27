@@ -257,9 +257,24 @@ private:
     int cached_entity_shadow_mode = -1;                 // Last applied r_shadows value (detects cvar changes)
     int cached_dlight_shadows = -1;                     // Last applied r_dlight_shadows value
 
+    // Camera/fog caching — skip redundant Godot env calls when unchanged
+    float cached_fog_dist  = -1.0f;
+    float cached_fog_color[3] = {-1.0f, -1.0f, -1.0f};
+    bool  cached_fog_enabled = false;
+
+    // Per-dlight cached state for delta-skip optimisation
+    struct DlightCache {
+        Vector3 pos;
+        Color   col;
+        float   range = 0.0f;
+        bool    valid = false;
+    };
+    std::vector<DlightCache> dlight_cache;
+
  // BSP world geometry
     Node3D *bsp_map_node = nullptr;          // Currently loaded BSP mesh tree
     String loaded_bsp_name;                  // Path of the currently loaded BSP
+    std::vector<MeshInstance3D *> bsp_mesh_children;  // Cached MeshInstance3D children of bsp_map_node (avoid per-frame get_child)
 
     // PVS cluster culling
     int pvs_current_cluster = -1;            // Camera's current PVS cluster

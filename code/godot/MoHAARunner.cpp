@@ -1010,6 +1010,7 @@ void MoHAARunner::clear_godot_caches_for_game_switch(int target_game) {
         // systems never read stale map data during restart transitions.
         Godot_BSP_Unload();
     }
+    bsp_mesh_children.clear();
     static_model_pvs.clear();
     loaded_bsp_name = "";
 
@@ -1374,17 +1375,33 @@ void MoHAARunner::update_camera() {
             // Conservative density: ~63% fog at far plane, ~16% at bias
             float density = 1.0f / fog_dist;
             if (!debug_fog_off) {
-                env->set_fog_enabled(true);
-                env->set_fog_light_color(Color(fp_color[0], fp_color[1], fp_color[2]));
-                env->set_fog_density(density);
-                env->set_fog_sky_affect(1.0f);
+                // Only update fog properties when they've actually changed
+                if (!cached_fog_enabled) {
+                    env->set_fog_enabled(true);
+                    cached_fog_enabled = true;
+                }
+                if (fp_color[0] != cached_fog_color[0] ||
+                    fp_color[1] != cached_fog_color[1] ||
+                    fp_color[2] != cached_fog_color[2]) {
+                    env->set_fog_light_color(Color(fp_color[0], fp_color[1], fp_color[2]));
+                    cached_fog_color[0] = fp_color[0];
+                    cached_fog_color[1] = fp_color[1];
+                    cached_fog_color[2] = fp_color[2];
+                }
+                if (fp_dist != cached_fog_dist) {
+                    env->set_fog_density(density);
+                    env->set_fog_sky_affect(1.0f);
+                    cached_fog_dist = fp_dist;
+                }
             }
         }
     } else {
         // No fog configured — disable and use default far plane
         Ref<Environment> env = world_env->get_environment();
-        if (env.is_valid() && env->is_fog_enabled()) {
+        if (env.is_valid() && cached_fog_enabled) {
             env->set_fog_enabled(false);
+            cached_fog_enabled = false;
+            cached_fog_dist = -1.0f;
         }
     }
 
@@ -1425,6 +1442,7 @@ void MoHAARunner::check_world_load() {
             // Renderer world is gone (disconnect/map teardown). Clear the
             // parsed BSP cache now so terrain/PVS updates cannot touch stale data.
             Godot_BSP_Unload();
+            bsp_mesh_children.clear();
             static_model_pvs.clear();
             loaded_bsp_name = "";
             GodotSkelModelCache::get().clear();  // Invalidate model cache
@@ -1443,6 +1461,10 @@ void MoHAARunner::check_world_load() {
             s_sprite_tint_cache.clear();
             s_beam_tint_cache.clear();
             s_alpha_inv_tex_cache.clear();
+            dlight_cache.clear();
+            cached_fog_dist = -1.0f;
+            cached_fog_color[0] = cached_fog_color[1] = cached_fog_color[2] = -1.0f;
+            cached_fog_enabled = false;
 #ifdef HAS_MESH_CACHE_MODULE
             Godot_MeshCache::get().clear();
             Godot_MaterialCache::get().clear();
@@ -1494,6 +1516,7 @@ void MoHAARunner::check_world_load() {
             bsp_map_node->queue_free();
             bsp_map_node = nullptr;
             static_model_root = nullptr;
+            bsp_mesh_children.clear();
             Godot_BSP_Unload();
         }
         show_native_loading_screen();
@@ -1545,6 +1568,14 @@ void MoHAARunner::check_world_load() {
         loaded_bsp_name = new_bsp;
         pvs_current_cluster = -1;  // Force PVS recalculation for new map
         pvs_log_count = 0;
+
+        // Cache BSP MeshInstance3D children for fast iteration (avoids per-frame get_child() overhead)
+        bsp_mesh_children.clear();
+        for (int c = 0; c < bsp_map_node->get_child_count(); c++) {
+            MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(bsp_map_node->get_child(c));
+            if (mi) bsp_mesh_children.push_back(mi);
+        }
+
         UtilityFunctions::print("[MoHAA] BSP world added to scene.");
 
         // Instantiate static TIKI models from BSP data
@@ -4754,14 +4785,33 @@ void MoHAARunner::update_dlights() {
 
         OmniLight3D *light = dlight_nodes[i];
         Vector3 pos = id_to_godot_position(origin[0], origin[1], origin[2]);
-        light->set_global_position(pos);
-        light->set_color(Color(r, g, b));
-        // Convert intensity from id units to Godot energy + range
+        Color col(r, g, b);
         float range_metres = intensity * MOHAA_UNIT_SCALE;
-        light->set_param(Light3D::PARAM_RANGE, range_metres);
-        light->set_param(Light3D::PARAM_ENERGY, 2.0);
-        // r_dlight_shadows: each omni shadow = 6 depth cube-map renders/frame
-        light->set_shadow(cached_dlight_shadows == 1);
+
+        // Grow delta cache if needed
+        if ((int)dlight_cache.size() <= i) {
+            dlight_cache.resize(i + 1);
+        }
+        DlightCache &dc = dlight_cache[i];
+
+        // Only call Godot setters when values changed
+        if (!dc.valid || dc.pos != pos) {
+            light->set_global_position(pos);
+            dc.pos = pos;
+        }
+        if (!dc.valid || dc.col != col) {
+            light->set_color(col);
+            dc.col = col;
+        }
+        if (!dc.valid || dc.range != range_metres) {
+            light->set_param(Light3D::PARAM_RANGE, range_metres);
+            light->set_param(Light3D::PARAM_ENERGY, 2.0);
+            dc.range = range_metres;
+        }
+        if (!dc.valid) {
+            light->set_shadow(cached_dlight_shadows == 1);
+            dc.valid = true;
+        }
         light->set_visible(true);
     }
 
@@ -4769,6 +4819,9 @@ void MoHAARunner::update_dlights() {
     for (int i = dl_count; i < active_dlight_count; i++) {
         if (i < (int)dlight_nodes.size()) {
             dlight_nodes[i]->set_visible(false);
+        }
+        if (i < (int)dlight_cache.size()) {
+            dlight_cache[i].valid = false;
         }
     }
 
@@ -4793,19 +4846,27 @@ void MoHAARunner::update_polys() {
         game_world->add_child(poly_root);
     }
 
-    // Grow mesh pool if needed
-    while ((int)poly_meshes.size() < poly_count) {
-        MeshInstance3D *mi = memnew(MeshInstance3D);
-        mi->set_name(String("Poly_") + String::num_int64((int64_t)poly_meshes.size()));
-        mi->set_visible(false);
-        poly_root->add_child(mi);
-        poly_meshes.push_back(mi);
-    }
+    // ── Phase 1: Read all polys and classify by material key ──
+    // Instead of one MeshInstance3D per poly (N × add_surface_from_arrays),
+    // batch all polys sharing the same material into a single mesh.
+    // This reduces draw calls from poly_count to unique_material_count (~5-10).
+
+    struct PolyVert {
+        Vector3 pos;
+        Vector2 uv;
+        Color col;
+    };
+    struct PolyBatch {
+        std::vector<PolyVert> verts;
+        std::vector<int32_t> indices;
+        int hShader;
+        int blend_type;
+    };
+    // Temporary per-frame batch map: material_key → batched geometry
+    std::unordered_map<int64_t, PolyBatch> poly_batches;
 
     for (int i = 0; i < poly_count; i++) {
         int hShader = 0;
-        // Mark fragments from BSP clipping can produce up to 8 verts
-        // (MAX_VERTS_ON_POLY in cg_local.h)
         float positions[8 * 3];
         float texcoords[8 * 2];
         unsigned char colors[8 * 4];
@@ -4814,59 +4875,103 @@ void MoHAARunner::update_polys() {
                                                positions, texcoords,
                                                colors, 8);
 
-        MeshInstance3D *mi = poly_meshes[i];
+        if (numVerts < 3) continue;
+        if (numVerts > 8) numVerts = 8;
 
-        if (numVerts < 3) {
+        // Determine blend type for material key
+        int blend_type = 0;
+        if (hShader > 0) {
+            const char *sn = Godot_Renderer_GetShaderName(hShader);
+            const GodotShaderProps *poly_sp = (sn && sn[0]) ? Godot_ShaderProps_Find(sn) : nullptr;
+            if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE_INV) blend_type = 1;
+            else if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE) blend_type = 2;
+        }
+
+        int64_t mat_key = ((int64_t)hShader << 2) | blend_type;
+        PolyBatch &batch = poly_batches[mat_key];
+        if (batch.verts.empty()) {
+            batch.hShader = hShader;
+            batch.blend_type = blend_type;
+        }
+
+        // Append vertices with Z-fighting nudge
+        int base_vert = (int)batch.verts.size();
+
+        // Convert vertices
+        PolyVert pv[8];
+        for (int v = 0; v < numVerts; v++) {
+            pv[v].pos = id_to_godot_position(positions[v*3+0], positions[v*3+1], positions[v*3+2]);
+            pv[v].uv = Vector2(texcoords[v*2+0], texcoords[v*2+1]);
+            pv[v].col = Color(colors[v*4+0] / 255.0f, colors[v*4+1] / 255.0f,
+                              colors[v*4+2] / 255.0f, colors[v*4+3] / 255.0f);
+        }
+
+        // Nudge outward along face normal to prevent Z-fighting
+        Vector3 e1 = pv[1].pos - pv[0].pos;
+        Vector3 e2 = pv[2].pos - pv[0].pos;
+        Vector3 normal = e1.cross(e2);
+        if (normal.length_squared() > 1e-12f) {
+            normal = normal.normalized();
+            for (int v = 0; v < numVerts; v++) {
+                pv[v].pos -= normal * 0.005f;
+            }
+        }
+
+        for (int v = 0; v < numVerts; v++) {
+            batch.verts.push_back(pv[v]);
+        }
+
+        // Triangle fan indices
+        for (int t = 0; t < numVerts - 2; t++) {
+            batch.indices.push_back(base_vert);
+            batch.indices.push_back(base_vert + t + 1);
+            batch.indices.push_back(base_vert + t + 2);
+        }
+    }
+
+    // ── Phase 2: Build one MeshInstance3D per batch ──
+    int batch_idx = 0;
+    int batch_count = (int)poly_batches.size();
+
+    // Grow mesh pool if needed
+    while ((int)poly_meshes.size() < batch_count) {
+        MeshInstance3D *mi = memnew(MeshInstance3D);
+        mi->set_name(String("PolyBatch_") + String::num_int64((int64_t)poly_meshes.size()));
+        mi->set_visible(false);
+        poly_root->add_child(mi);
+        poly_meshes.push_back(mi);
+    }
+
+    for (auto &kv : poly_batches) {
+        int64_t mat_key = kv.first;
+        PolyBatch &batch = kv.second;
+        MeshInstance3D *mi = poly_meshes[batch_idx];
+
+        int nv = (int)batch.verts.size();
+        int ni = (int)batch.indices.size();
+        if (ni < 3) {
             mi->set_visible(false);
+            batch_idx++;
             continue;
         }
 
-        if (numVerts > 8) numVerts = 8;
-
-        // Build an ArrayMesh triangle fan from the poly vertices
         PackedVector3Array gPos;
         PackedVector2Array gUV;
         PackedColorArray   gCol;
         PackedInt32Array   gIdx;
 
-        gPos.resize(numVerts);
-        gUV.resize(numVerts);
-        gCol.resize(numVerts);
+        gPos.resize(nv);
+        gUV.resize(nv);
+        gCol.resize(nv);
+        gIdx.resize(ni);
 
-        for (int v = 0; v < numVerts; v++) {
-            gPos.set(v, id_to_godot_position(
-                positions[v*3+0], positions[v*3+1], positions[v*3+2]));
-            gUV.set(v, Vector2(texcoords[v*2+0], texcoords[v*2+1]));
-            gCol.set(v, Color(colors[v*4+0] / 255.0f,
-                              colors[v*4+1] / 255.0f,
-                              colors[v*4+2] / 255.0f,
-                              colors[v*4+3] / 255.0f));
+        for (int v = 0; v < nv; v++) {
+            gPos.set(v, batch.verts[v].pos);
+            gUV.set(v, batch.verts[v].uv);
+            gCol.set(v, batch.verts[v].col);
         }
-
-        // Nudge mark/decal polys slightly outward along their face normal
-        // to prevent Z-fighting with the BSP surface they sit on.
-        // This replicates GL polygonOffset which the real renderer uses.
-        if (numVerts >= 3) {
-            Vector3 e1 = gPos[1] - gPos[0];
-            Vector3 e2 = gPos[2] - gPos[0];
-            Vector3 normal = e1.cross(e2);
-            if (normal.length_squared() > 1e-12f) {
-                normal = normal.normalized();
-                // 0.005 m ~ 0.2 id units — invisible but prevents Z-fight
-                // Subtract normal because the vertices are wound clockwise, meaning normal points INTO the surface.
-                for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] - normal * 0.005f);
-                }
-            }
-        }
-
-        // Triangle fan: 0‒1‒2, 0‒2‒3, ...
-        int numTris = numVerts - 2;
-        gIdx.resize(numTris * 3);
-        for (int t = 0; t < numTris; t++) {
-            gIdx.set(t*3+0, 0);
-            gIdx.set(t*3+1, t + 1);
-            gIdx.set(t*3+2, t + 2);
+        for (int j = 0; j < ni; j++) {
+            gIdx.set(j, batch.indices[j]);
         }
 
         Array arrays;
@@ -4885,23 +4990,12 @@ void MoHAARunner::update_polys() {
         }
         mesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
 
-        // Material: cached per (shader_handle, blend_type) — avoids per-frame
-        // instantiation, property resets, and shader/texture lookups.
-        // blend_type: 0=alpha (default), 1=inv_mul, 2=multiplicative
-        int blend_type = 0;
-        if (hShader > 0) {
-            const char *sn = Godot_Renderer_GetShaderName(hShader);
-            const GodotShaderProps *poly_sp = (sn && sn[0]) ? Godot_ShaderProps_Find(sn) : nullptr;
-            if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE_INV) blend_type = 1;
-            else if (poly_sp && poly_sp->transparency == SHADER_MULTIPLICATIVE) blend_type = 2;
-        }
-
-        int64_t poly_mat_key = ((int64_t)hShader << 2) | blend_type;
-        auto pm_it = s_poly_mat_cache.find(poly_mat_key);
+        // ── Material: cached per (shader_handle, blend_type) ──
+        int hShader = batch.hShader;
+        int blend_type = batch.blend_type;
+        auto pm_it = s_poly_mat_cache.find(mat_key);
         if (pm_it == s_poly_mat_cache.end()) {
-            // First time seeing this (shader, blend) combo — create and cache
             if (blend_type == 1) {
-                // Inverse-multiplicative: result = dst * (1 - src*vertex_color)
                 if (s_inv_mul_poly_shader.is_null()) {
                     s_inv_mul_poly_shader.instantiate();
                     s_inv_mul_poly_shader->set_code(
@@ -4920,19 +5014,16 @@ void MoHAARunner::update_polys() {
                 Ref<ShaderMaterial> smat;
                 smat.instantiate();
                 smat->set_shader(s_inv_mul_poly_shader);
-                smat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
+                smat->set_render_priority(-1);
 
-                // Load and set the albedo texture for this shader
                 if (hShader > 0) {
                     Ref<ImageTexture> tex = get_shader_texture(hShader);
                     if (tex.is_valid()) {
                         smat->set_shader_parameter("albedo_texture", tex);
                     }
                 }
-
-                s_poly_mat_cache[poly_mat_key] = smat;
+                s_poly_mat_cache[mat_key] = smat;
             } else {
-                // Standard or multiplicative — StandardMaterial3D
                 Ref<StandardMaterial3D> mat;
                 mat.instantiate();
                 mat->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
@@ -4952,8 +5043,7 @@ void MoHAARunner::update_polys() {
                 bool poly_shader_props_found = false;
                 if (hShader > 0) {
                     Ref<ImageTexture> tex = get_shader_texture(hShader);
-                    if (!tex.is_valid()) {
-                    }
+                    (void)tex;
 
                     if (blend_type == 0) {
                         const char *sn = Godot_Renderer_GetShaderName(hShader);
@@ -4967,10 +5057,6 @@ void MoHAARunner::update_polys() {
                     }
                 }
 
-                // When no .shader definition is found for a poly, check
-                // texture alpha to determine blend mode. Polys without
-                // alpha (fire, flash, sparks) should use additive
-                // blending so black areas are invisible.
                 if (!poly_shader_props_found && blend_type == 0 && hShader > 0) {
                     auto ha_it = shader_texture_has_alpha.find(hShader);
                     bool tex_has_alpha = (ha_it != shader_texture_has_alpha.end()) && ha_it->second;
@@ -4979,47 +5065,47 @@ void MoHAARunner::update_polys() {
                     }
                 }
 
-                // CRITICAL: Polys are generated by the C engine with absolute world-space
-                // coordinates and added to a Node3D at origin(0,0,0). If the shader definition
-                // specified an autosprite deform, apply_shader_props_to_material will
-                // enable Godot's BILLBOARD_ENABLED. This causes Godot to rotate the far-away
-                // vertices around (0,0,0), creating giant, screen-spanning distorted geometry.
-                // Since the C engine ALREADY handled the billboarding math, we MUST force
-                // it disabled here.
                 mat->set_billboard_mode(BaseMaterial3D::BILLBOARD_DISABLED);
-                mat->set_render_priority(-1);  // Draw after BSP opaque but before transparent (polygonOffset)
-
-                s_poly_mat_cache[poly_mat_key] = mat;
+                mat->set_render_priority(-1);
+                s_poly_mat_cache[mat_key] = mat;
             }
-            pm_it = s_poly_mat_cache.find(poly_mat_key);
+            pm_it = s_poly_mat_cache.find(mat_key);
         }
 
-        // Apply texture per-frame to support RemapShader and animMap
+        // Texture per-frame for RemapShader / animMap support
         if (hShader > 0) {
             Ref<ImageTexture> tex = get_shader_texture(hShader);
             if (tex.is_valid()) {
                 if (blend_type == 1) {
                     Ref<ShaderMaterial> smat = pm_it->second;
-                    smat->set_shader_parameter("albedo_texture", tex);
+                    Ref<Texture2D> cur = smat->get_shader_parameter("albedo_texture");
+                    if (cur != tex) {
+                        smat->set_shader_parameter("albedo_texture", tex);
+                    }
                 } else {
                     Ref<StandardMaterial3D> std_mat = pm_it->second;
-                    std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    if (std_mat->get_texture(BaseMaterial3D::TEXTURE_ALBEDO) != tex) {
+                        std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    }
                 }
             }
         }
 
-        mi->set_surface_override_material(0, pm_it->second);
+        if (mi->get_surface_override_material(0) != pm_it->second) {
+            mi->set_surface_override_material(0, pm_it->second);
+        }
         mi->set_visible(true);
+        batch_idx++;
     }
 
-    // Hide excess polys from previous frame
-    for (int i = poly_count; i < active_poly_count; i++) {
+    // Hide excess meshes from previous frame
+    for (int i = batch_idx; i < active_poly_count; i++) {
         if (i < (int)poly_meshes.size()) {
             poly_meshes[i]->set_visible(false);
         }
     }
 
-    active_poly_count = poly_count;
+    active_poly_count = batch_idx;
 }
 
 // ──────────────────────────────────────────────
@@ -5069,15 +5155,18 @@ void MoHAARunner::update_swipe_effects() {
         gUV.set(i * 2 + 1, Vector2(t, 1));
     }
 
-    // Triangle indices for the strip
-    for (int i = 0; i < numPoints - 1; i++) {
-        int base = i * 2;
-        gIdx.push_back(base);
-        gIdx.push_back(base + 1);
-        gIdx.push_back(base + 2);
-        gIdx.push_back(base + 1);
-        gIdx.push_back(base + 3);
-        gIdx.push_back(base + 2);
+// Triangle indices for the strip — pre-allocate instead of push_back
+        int numStripTris = (numPoints - 1) * 2;
+        gIdx.resize(numStripTris * 3);
+        for (int i = 0; i < numPoints - 1; i++) {
+            int base = i * 2;
+            int idx = i * 6;
+            gIdx.set(idx,     base);
+            gIdx.set(idx + 1, base + 1);
+            gIdx.set(idx + 2, base + 2);
+            gIdx.set(idx + 3, base + 1);
+            gIdx.set(idx + 4, base + 3);
+            gIdx.set(idx + 5, base + 2);
     }
 
     Array arrays;
@@ -5128,7 +5217,7 @@ void MoHAARunner::update_swipe_effects() {
 void MoHAARunner::update_terrain_marks() {
     if (!game_world) return;
 
- // honour r_drawmarks cvar — when 0, hide all marks
+    // honour r_drawmarks cvar — when 0, hide all marks
     if (Cvar_VariableIntegerValue("r_drawmarks") == 0) {
         for (int i = 0; i < active_terrain_mark_count; i++) {
             if (i < (int)terrain_mark_meshes.size())
@@ -5155,79 +5244,29 @@ void MoHAARunner::update_terrain_marks() {
         game_world->add_child(terrain_mark_root);
     }
 
-    // Grow pool
-    while ((int)terrain_mark_meshes.size() < markCount) {
-        MeshInstance3D *mi = memnew(MeshInstance3D);
-        mi->set_name(String("TerrainMark_") + String::num_int64((int64_t)terrain_mark_meshes.size()));
-        mi->set_visible(false);
-        terrain_mark_root->add_child(mi);
-        terrain_mark_meshes.push_back(mi);
-    }
+    // ── Phase 1: Read all marks and batch by material key ──
+    // Instead of one MeshInstance3D per mark (N × add_surface_from_arrays),
+    // batch all marks sharing the same material into a single mesh.
+    struct MarkVert {
+        Vector3 pos;
+        Vector2 uv;
+        Color col;
+    };
+    struct MarkBatch {
+        std::vector<MarkVert> verts;
+        std::vector<int32_t> indices;
+        int hShader;
+        int blend_type;
+    };
+    std::unordered_map<int64_t, MarkBatch> mark_batches;
 
     for (int m = 0; m < markCount; m++) {
         int hShader = 0, numVerts = 0, terrainIndex = 0, renderfx = 0;
         Godot_Renderer_GetTerrainMark(m, &hShader, &numVerts, &terrainIndex, &renderfx);
 
-        MeshInstance3D *mi = terrain_mark_meshes[m];
-        if (numVerts < 3) {
-            mi->set_visible(false);
-            continue;
-        }
+        if (numVerts < 3) continue;
 
-        // Build polygon mesh from terrain mark vertices
-        PackedVector3Array gPos;
-        PackedVector2Array gUV;
-        PackedColorArray   gCol;
-        PackedInt32Array   gIdx;
-        gPos.resize(numVerts);
-        gUV.resize(numVerts);
-        gCol.resize(numVerts);
-
-        for (int v = 0; v < numVerts; v++) {
-            float xyz[3], st[2];
-            unsigned char rgba[4];
-            Godot_Renderer_GetTerrainMarkVert(m, v, xyz, st, rgba);
-            gPos.set(v, id_to_godot_position(xyz[0], xyz[1], xyz[2]));
-            gUV.set(v, Vector2(st[0], st[1]));
-            gCol.set(v, Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
-                              rgba[2] / 255.0f, rgba[3] / 255.0f));
-        }
-
-        // Nudge terrain mark polys outward to prevent Z-fighting
-        if (numVerts >= 3) {
-            Vector3 e1 = gPos[1] - gPos[0];
-            Vector3 e2 = gPos[2] - gPos[0];
-            Vector3 normal = e1.cross(e2);
-            if (normal.length_squared() > 1e-12f) {
-                normal = normal.normalized();
-                // Subtract normal because the vertices are wound clockwise, meaning normal points INTO the surface.
-                for (int v = 0; v < numVerts; v++) {
-                    gPos.set(v, gPos[v] - normal * 0.005f);
-                }
-            }
-        }
-
-        // Fan triangulation
-        for (int v = 1; v < numVerts - 1; v++) {
-            gIdx.push_back(0);
-            gIdx.push_back(v);
-            gIdx.push_back(v + 1);
-        }
-
-        Array arrays;
-        arrays.resize(Mesh::ARRAY_MAX);
-        arrays[Mesh::ARRAY_VERTEX] = gPos;
-        arrays[Mesh::ARRAY_TEX_UV] = gUV;
-        arrays[Mesh::ARRAY_COLOR]  = gCol;
-        arrays[Mesh::ARRAY_INDEX]  = gIdx;
-
-        Ref<ArrayMesh> tmesh;
-        tmesh.instantiate();
-        tmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-        mi->set_mesh(tmesh);
-
-        // Material: cached per (shader_handle, blend_type) — avoids per-frame
-        // instantiation and shader/texture lookups for terrain marks.
+        // Determine blend type
         int mark_blend_type = 0;
         if (hShader > 0) {
             const char *mark_shader_name = Godot_Renderer_GetShaderName(hShader);
@@ -5237,11 +5276,118 @@ void MoHAARunner::update_terrain_marks() {
             else if (mark_sp && mark_sp->transparency == SHADER_MULTIPLICATIVE) mark_blend_type = 2;
         }
 
-        int64_t tm_mat_key = ((int64_t)hShader << 2) | mark_blend_type;
-        auto tm_it = s_terrain_mark_mat_cache.find(tm_mat_key);
+        int64_t mat_key = ((int64_t)hShader << 2) | mark_blend_type;
+        MarkBatch &batch = mark_batches[mat_key];
+        if (batch.verts.empty()) {
+            batch.hShader = hShader;
+            batch.blend_type = mark_blend_type;
+        }
+
+        int base_vert = (int)batch.verts.size();
+
+        // Read and convert vertices
+        MarkVert mv[64]; // terrain marks typically have <20 verts
+        for (int v = 0; v < numVerts && v < 64; v++) {
+            float xyz[3], st[2];
+            unsigned char rgba[4];
+            Godot_Renderer_GetTerrainMarkVert(m, v, xyz, st, rgba);
+            mv[v].pos = id_to_godot_position(xyz[0], xyz[1], xyz[2]);
+            mv[v].uv = Vector2(st[0], st[1]);
+            mv[v].col = Color(rgba[0] / 255.0f, rgba[1] / 255.0f,
+                              rgba[2] / 255.0f, rgba[3] / 255.0f);
+        }
+        if (numVerts > 64) numVerts = 64;
+
+        // Nudge outward to prevent Z-fighting
+        Vector3 e1 = mv[1].pos - mv[0].pos;
+        Vector3 e2 = mv[2].pos - mv[0].pos;
+        Vector3 normal = e1.cross(e2);
+        if (normal.length_squared() > 1e-12f) {
+            normal = normal.normalized();
+            for (int v = 0; v < numVerts; v++) {
+                mv[v].pos -= normal * 0.005f;
+            }
+        }
+
+        for (int v = 0; v < numVerts; v++) {
+            batch.verts.push_back(mv[v]);
+        }
+
+        // Fan triangulation — pre-sized (no push_back)
+        for (int v = 1; v < numVerts - 1; v++) {
+            batch.indices.push_back(base_vert);
+            batch.indices.push_back(base_vert + v);
+            batch.indices.push_back(base_vert + v + 1);
+        }
+    }
+
+    // ── Phase 2: Build one MeshInstance3D per batch ──
+    int batch_idx = 0;
+    int batch_count = (int)mark_batches.size();
+
+    // Grow pool if needed
+    while ((int)terrain_mark_meshes.size() < batch_count) {
+        MeshInstance3D *mi = memnew(MeshInstance3D);
+        mi->set_name(String("TerrainMarkBatch_") + String::num_int64((int64_t)terrain_mark_meshes.size()));
+        mi->set_visible(false);
+        terrain_mark_root->add_child(mi);
+        terrain_mark_meshes.push_back(mi);
+    }
+
+    for (auto &kv : mark_batches) {
+        int64_t mat_key = kv.first;
+        MarkBatch &batch = kv.second;
+        MeshInstance3D *mi = terrain_mark_meshes[batch_idx];
+
+        int nv = (int)batch.verts.size();
+        int ni = (int)batch.indices.size();
+        if (ni < 3) {
+            mi->set_visible(false);
+            batch_idx++;
+            continue;
+        }
+
+        PackedVector3Array gPos;
+        PackedVector2Array gUV;
+        PackedColorArray   gCol;
+        PackedInt32Array   gIdx;
+
+        gPos.resize(nv);
+        gUV.resize(nv);
+        gCol.resize(nv);
+        gIdx.resize(ni);
+
+        for (int v = 0; v < nv; v++) {
+            gPos.set(v, batch.verts[v].pos);
+            gUV.set(v, batch.verts[v].uv);
+            gCol.set(v, batch.verts[v].col);
+        }
+        for (int j = 0; j < ni; j++) {
+            gIdx.set(j, batch.indices[j]);
+        }
+
+        Array arrays;
+        arrays.resize(Mesh::ARRAY_MAX);
+        arrays[Mesh::ARRAY_VERTEX] = gPos;
+        arrays[Mesh::ARRAY_TEX_UV] = gUV;
+        arrays[Mesh::ARRAY_COLOR]  = gCol;
+        arrays[Mesh::ARRAY_INDEX]  = gIdx;
+
+        Ref<ArrayMesh> tmesh = mi->get_mesh();
+        if (tmesh.is_valid()) {
+            tmesh->clear_surfaces();
+        } else {
+            tmesh.instantiate();
+            mi->set_mesh(tmesh);
+        }
+        tmesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+
+        // ── Material: cached per (shader_handle, blend_type) ──
+        int hShader = batch.hShader;
+        int mark_blend_type = batch.blend_type;
+        auto tm_it = s_terrain_mark_mat_cache.find(mat_key);
         if (tm_it == s_terrain_mark_mat_cache.end()) {
             if (mark_blend_type == 1) {
-                // Inverse-multiplicative blend: result = dst * (1 - texture*vertex_color)
                 if (s_inv_mul_3d_shader.is_null()) {
                     s_inv_mul_3d_shader.instantiate();
                     s_inv_mul_3d_shader->set_code(
@@ -5266,7 +5412,7 @@ void MoHAARunner::update_terrain_marks() {
                         smat->set_shader_parameter("albedo_texture", tex);
                     }
                 }
-                s_terrain_mark_mat_cache[tm_mat_key] = smat;
+                s_terrain_mark_mat_cache[mat_key] = smat;
             } else if (mark_blend_type == 2) {
                 Ref<StandardMaterial3D> mat;
                 mat.instantiate();
@@ -5275,7 +5421,7 @@ void MoHAARunner::update_terrain_marks() {
                 mat->set_blend_mode(BaseMaterial3D::BLEND_MODE_MUL);
                 mat->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
                 mat->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
-                s_terrain_mark_mat_cache[tm_mat_key] = mat;
+                s_terrain_mark_mat_cache[mat_key] = mat;
             } else {
                 Ref<StandardMaterial3D> mat;
                 mat.instantiate();
@@ -5289,35 +5435,43 @@ void MoHAARunner::update_terrain_marks() {
                         apply_shader_props_to_material(mat, mark_shader_name);
                     }
                 }
-                s_terrain_mark_mat_cache[tm_mat_key] = mat;
+                s_terrain_mark_mat_cache[mat_key] = mat;
             }
-            tm_it = s_terrain_mark_mat_cache.find(tm_mat_key);
+            tm_it = s_terrain_mark_mat_cache.find(mat_key);
         }
 
-        // Apply texture per-frame to support RemapShader and animMap
+        // Texture per-frame for RemapShader / animMap support
         if (hShader > 0) {
             Ref<ImageTexture> tex = get_shader_texture(hShader);
             if (tex.is_valid()) {
                 if (mark_blend_type == 1) {
                     Ref<ShaderMaterial> smat = tm_it->second;
-                    smat->set_shader_parameter("albedo_texture", tex);
+                    Ref<Texture2D> cur = smat->get_shader_parameter("albedo_texture");
+                    if (cur != tex) {
+                        smat->set_shader_parameter("albedo_texture", tex);
+                    }
                 } else {
                     Ref<StandardMaterial3D> std_mat = tm_it->second;
-                    std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    if (std_mat->get_texture(BaseMaterial3D::TEXTURE_ALBEDO) != tex) {
+                        std_mat->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    }
                 }
             }
         }
 
-        mi->set_surface_override_material(0, tm_it->second);
+        if (mi->get_surface_override_material(0) != tm_it->second) {
+            mi->set_surface_override_material(0, tm_it->second);
+        }
         mi->set_global_transform(Transform3D());
         mi->set_visible(true);
+        batch_idx++;
     }
 
-    for (int i = markCount; i < active_terrain_mark_count; i++) {
+    for (int i = batch_idx; i < active_terrain_mark_count; i++) {
         if (i < (int)terrain_mark_meshes.size())
             terrain_mark_meshes[i]->set_visible(false);
     }
-    active_terrain_mark_count = markCount;
+    active_terrain_mark_count = batch_idx;
 }
 
 // ──────────────────────────────────────────────
@@ -5430,7 +5584,6 @@ void MoHAARunner::update_shadow_blobs() {
     // shadows onto the world.  Skip the shadow blob projection entirely so
     // blobs don't double-up with the accurate shadows.
     if (cached_entity_shadow_mode == 1) {
-        // Hide any previously created blobs
         for (MeshInstance3D *mi : shadow_blob_meshes) {
             if (mi) mi->set_visible(false);
         }
@@ -5438,37 +5591,23 @@ void MoHAARunner::update_shadow_blobs() {
         return;
     }
 
-    // RF_ flag constants used for shadow filtering
-    static const int RF_DONTDRAW = 0x80;   // (1<<7)
-    static const int RF_SHADOW   = 0x800;  // (1<<11)
-    static const float SHADOW_DISTANCE = 96.0f;  // id units — max downward trace
-    static const float SHADOW_Z_OFFSET = 0.5f;   // id units — lift above ground to avoid z-fighting
+    static const int RF_DONTDRAW = 0x80;
+    static const int RF_SHADOW   = 0x800;
+    static const float SHADOW_DISTANCE = 96.0f;
+    static const float SHADOW_Z_OFFSET = 0.5f;
     static const int SHADOW_CIRCLE_SEGMENTS = 8;
 
     int ent_count = Godot_Renderer_GetEntityCount();
 
-    // First pass: count entities that need shadow blobs
-    int shadow_count = 0;
-    for (int i = 0; i < ent_count; i++) {
-        float origin[3];
-        int renderfx = 0, hModel = 0, entityNumber = 0;
-        unsigned char rgba[4];
-        int reType = Godot_Renderer_GetEntity(i, origin, nullptr, nullptr,
-                                               &hModel, &entityNumber, rgba, &renderfx);
-        if (reType != 0 /* RT_MODEL */ || !(renderfx & RF_SHADOW) || (renderfx & RF_DONTDRAW))
-            continue;
-        shadow_count++;
-    }
-
     // Create container on first use
-    if (!shadow_blob_root && shadow_count > 0) {
+    if (!shadow_blob_root) {
         shadow_blob_root = memnew(Node3D);
         shadow_blob_root->set_name("ShadowBlobs");
         game_world->add_child(shadow_blob_root);
     }
 
     // Create shared shadow material on first use
-    if (shadow_blob_material.is_null() && shadow_count > 0) {
+    if (shadow_blob_material.is_null()) {
         shadow_blob_material.instantiate();
         shadow_blob_material->set_cull_mode(BaseMaterial3D::CULL_DISABLED);
         shadow_blob_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA);
@@ -5476,43 +5615,41 @@ void MoHAARunner::update_shadow_blobs() {
         shadow_blob_material->set_shading_mode(BaseMaterial3D::SHADING_MODE_UNSHADED);
         shadow_blob_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
         shadow_blob_material->set_albedo(Color(1.0f, 1.0f, 1.0f, 1.0f));
-        // Render above ground to avoid z-fighting
         shadow_blob_material->set_render_priority(1);
     }
 
-    // Grow pool if needed
-    if (shadow_blob_root) {
-        while ((int)shadow_blob_meshes.size() < shadow_count) {
-            MeshInstance3D *mi = memnew(MeshInstance3D);
-            mi->set_name(String("ShadowBlob_") + String::num_int64((int64_t)shadow_blob_meshes.size()));
-            mi->set_visible(false);
-            shadow_blob_root->add_child(mi);
-            shadow_blob_meshes.push_back(mi);
-        }
+    // Ensure at least 1 MeshInstance3D in the pool for the single batched mesh
+    if (shadow_blob_meshes.empty()) {
+        MeshInstance3D *mi = memnew(MeshInstance3D);
+        mi->set_name("ShadowBlobBatch_0");
+        mi->set_visible(false);
+        shadow_blob_root->add_child(mi);
+        shadow_blob_meshes.push_back(mi);
     }
 
-    // Second pass: project shadow blobs
-    int shadow_idx = 0;
+    // ── Batch ALL shadow blobs into a single mesh ──
+    // All blobs share the same material, so one draw call suffices.
+    struct ShadowVert {
+        Vector3 pos;
+        Color col;
+    };
+    std::vector<ShadowVert> all_verts;
+    std::vector<int32_t> all_indices;
 
-    for (int i = 0; i < ent_count && shadow_idx < shadow_count; i++) {
+    for (int i = 0; i < ent_count; i++) {
         float origin[3], axis[9], scale = 1.0f;
         int renderfx = 0, hModel = 0, entityNumber = 0;
         unsigned char rgba[4];
         int reType = Godot_Renderer_GetEntity(i, origin, axis, &scale,
                                                &hModel, &entityNumber, rgba, &renderfx);
-        if (reType != 0 /* RT_MODEL */ || !(renderfx & RF_SHADOW) || (renderfx & RF_DONTDRAW))
+        if (reType != 0 || !(renderfx & RF_SHADOW) || (renderfx & RF_DONTDRAW))
             continue;
 
-        MeshInstance3D *mi = shadow_blob_meshes[shadow_idx];
-
-        // Determine shadow blob radius from model
         float modelRadius = Godot_Model_GetRadius(hModel);
         float blobRadius = modelRadius * scale * 0.6f;
         if (blobRadius < 4.0f) blobRadius = 4.0f;
         if (blobRadius > 64.0f) blobRadius = 64.0f;
 
-        // Build a circular polygon in id space centred at entity origin,
-        // oriented horizontally (in XY plane, Z is up in id space)
         float points[SHADOW_CIRCLE_SEGMENTS][3];
         for (int s = 0; s < SHADOW_CIRCLE_SEGMENTS; s++) {
             float angle = (float)s / (float)SHADOW_CIRCLE_SEGMENTS * 2.0f * (float)M_PI;
@@ -5521,10 +5658,8 @@ void MoHAARunner::update_shadow_blobs() {
             points[s][2] = origin[2];
         }
 
-        // Projection vector: straight down in id space
         float projection[3] = { 0.0f, 0.0f, -SHADOW_DISTANCE };
 
-        // Use BSP mark fragments to clip shadow polygon against world geometry
         static const int MAX_FRAG_POINTS = 384;
         static const int MAX_FRAGMENTS = 32;
         float pointBuffer[MAX_FRAG_POINTS * 3];
@@ -5539,85 +5674,93 @@ void MoHAARunner::update_shadow_blobs() {
             fragFirstPoint, fragNumPoints, fragIIndex,
             blobRadius * blobRadius);
 
-        if (numFragments <= 0) {
-            mi->set_visible(false);
-            shadow_idx++;
-            continue;
-        }
+        if (numFragments <= 0) continue;
 
-        // Compute alpha fade based on distance to ground:
-        // Use the first fragment point to estimate ground height
         float groundZ = pointBuffer[fragFirstPoint[0] * 3 + 2];
         float heightAboveGround = origin[2] - groundZ;
         float fade = 1.0f - (heightAboveGround / SHADOW_DISTANCE);
         if (fade < 0.0f) fade = 0.0f;
         if (fade > 1.0f) fade = 1.0f;
         float alpha = fade * 0.5f;
+        Color shadow_col(0.0f, 0.0f, 0.0f, alpha);
 
-        // Build mesh from all fragments
-        PackedVector3Array gPos;
-        PackedColorArray   gCol;
-        PackedInt32Array   gIdx;
+        int base_vert = (int)all_verts.size();
 
-        int totalVerts = 0;
-        for (int f = 0; f < numFragments; f++)
-            totalVerts += fragNumPoints[f];
-
-        gPos.resize(totalVerts);
-        gCol.resize(totalVerts);
-
-        int vertOffset = 0;
         for (int f = 0; f < numFragments; f++) {
             int first = fragFirstPoint[f];
             int count = fragNumPoints[f];
+            int frag_base = (int)all_verts.size();
+
             for (int v = 0; v < count; v++) {
                 float *pt = &pointBuffer[(first + v) * 3];
-                // Offset slightly upward to avoid z-fighting
-                gPos.set(vertOffset + v, id_to_godot_position(pt[0], pt[1], pt[2] + SHADOW_Z_OFFSET));
-                gCol.set(vertOffset + v, Color(0.0f, 0.0f, 0.0f, alpha));
+                ShadowVert sv;
+                sv.pos = id_to_godot_position(pt[0], pt[1], pt[2] + SHADOW_Z_OFFSET);
+                sv.col = shadow_col;
+                all_verts.push_back(sv);
             }
-            // Fan triangulation for this fragment
             for (int v = 1; v < count - 1; v++) {
-                gIdx.push_back(vertOffset);
-                gIdx.push_back(vertOffset + v);
-                gIdx.push_back(vertOffset + v + 1);
+                all_indices.push_back(frag_base);
+                all_indices.push_back(frag_base + v);
+                all_indices.push_back(frag_base + v + 1);
             }
-            vertOffset += count;
         }
-
-        if (gIdx.size() < 3) {
-            mi->set_visible(false);
-            shadow_idx++;
-            continue;
-        }
-
-        Array arrays;
-        arrays.resize(Mesh::ARRAY_MAX);
-        arrays[Mesh::ARRAY_VERTEX] = gPos;
-        arrays[Mesh::ARRAY_COLOR]  = gCol;
-        arrays[Mesh::ARRAY_INDEX]  = gIdx;
-
-        Ref<ArrayMesh> smesh = Object::cast_to<ArrayMesh>(mi->get_mesh().ptr());
-        if (smesh.is_valid()) {
-            smesh->clear_surfaces();
-        } else {
-            smesh.instantiate();
-            mi->set_mesh(smesh);
-        }
-        smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
-        mi->set_surface_override_material(0, shadow_blob_material);
-
-        mi->set_global_transform(Transform3D());
-        mi->set_visible(true);
-        shadow_idx++;
     }
 
-    // Hide excess pool meshes
-    for (int i = shadow_idx; i < active_shadow_blob_count; i++) {
-        if (i < (int)shadow_blob_meshes.size())
+    MeshInstance3D *mi = shadow_blob_meshes[0];
+
+    if (all_indices.size() < 3) {
+        mi->set_visible(false);
+        // Hide other pool meshes from old non-batched code
+        for (int i = 1; i < (int)shadow_blob_meshes.size(); i++)
             shadow_blob_meshes[i]->set_visible(false);
+        active_shadow_blob_count = 0;
+        return;
     }
-    active_shadow_blob_count = shadow_idx;
+
+    int nv = (int)all_verts.size();
+    int ni = (int)all_indices.size();
+
+    PackedVector3Array gPos;
+    PackedColorArray   gCol;
+    PackedInt32Array   gIdx;
+
+    gPos.resize(nv);
+    gCol.resize(nv);
+    gIdx.resize(ni);
+
+    for (int v = 0; v < nv; v++) {
+        gPos.set(v, all_verts[v].pos);
+        gCol.set(v, all_verts[v].col);
+    }
+    for (int j = 0; j < ni; j++) {
+        gIdx.set(j, all_indices[j]);
+    }
+
+    Array arrays;
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = gPos;
+    arrays[Mesh::ARRAY_COLOR]  = gCol;
+    arrays[Mesh::ARRAY_INDEX]  = gIdx;
+
+    Ref<ArrayMesh> smesh = mi->get_mesh();
+    if (smesh.is_valid()) {
+        smesh->clear_surfaces();
+    } else {
+        smesh.instantiate();
+        mi->set_mesh(smesh);
+    }
+    smesh->add_surface_from_arrays(Mesh::PRIMITIVE_TRIANGLES, arrays);
+    if (mi->get_surface_override_material(0) != shadow_blob_material) {
+        mi->set_surface_override_material(0, shadow_blob_material);
+    }
+
+    mi->set_global_transform(Transform3D());
+    mi->set_visible(true);
+
+    // Hide excess pool meshes from old non-batched code
+    for (int i = 1; i < (int)shadow_blob_meshes.size(); i++)
+        shadow_blob_meshes[i]->set_visible(false);
+    active_shadow_blob_count = 1;
 }
 
 // ──────────────────────────────────────────────
@@ -5635,10 +5778,9 @@ void MoHAARunner::update_shader_animations(double delta) {
     // Built on first access; cleared on map change alongside animmap caches.
     // Key = (child_index << 16) | surface_index — unique per BSP surface.
 
-    // Walk MeshInstance3D children of bsp_map_node
-    for (int c = 0; c < bsp_map_node->get_child_count(); c++) {
-        MeshInstance3D *mi = Object::cast_to<MeshInstance3D>(bsp_map_node->get_child(c));
-        if (!mi) continue;
+    // Walk cached MeshInstance3D children of bsp_map_node (populated at BSP load)
+    for (int c = 0; c < (int)bsp_mesh_children.size(); c++) {
+        MeshInstance3D *mi = bsp_mesh_children[c];
 
         Ref<Mesh> mesh = mi->get_mesh();
         if (!mesh.is_valid()) continue;
@@ -6679,38 +6821,41 @@ void MoHAARunner::update_2d_overlay() {
                 Color draw_col = col;
                 const char *sname = Godot_Renderer_GetShaderName(shader);
 
+                // Single shader props lookup — reused for both rgbGen/alphaGen and blend mode
+                const GodotShaderProps *sp = nullptr;
                 if (sname && sname[0]) {
-                    const GodotShaderProps *sp = Godot_ShaderProps_Find_ByHandle(shader);
-                    if (sp && sp->stage_count > 0) {
-                        for (int st = 0; st < sp->stage_count; st++) {
-                            if (!sp->stages[st].active) continue;
-                            if (sp->stages[st].isLightmap) continue;
-                            const MohaaShaderStage *stg = &sp->stages[st];
+                    sp = Godot_ShaderProps_Find_ByHandle(shader);
+                }
 
-                            // rgbGen
-                            if (stg->rgbGen == STAGE_RGBGEN_CONST) {
-                                draw_col.r = stg->rgbConst[0];
-                                draw_col.g = stg->rgbConst[1];
-                                draw_col.b = stg->rgbConst[2];
-                            } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR) {
-                                // Use SetColor (draw_col = col already)
-                            } else if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
-                                       stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
-                                draw_col.r = 1.0f;
-                                draw_col.g = 1.0f;
-                                draw_col.b = 1.0f;
-                            }
+                if (sp && sp->stage_count > 0) {
+                    for (int st = 0; st < sp->stage_count; st++) {
+                        if (!sp->stages[st].active) continue;
+                        if (sp->stages[st].isLightmap) continue;
+                        const MohaaShaderStage *stg = &sp->stages[st];
 
-                            // alphaGen
-                            if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
-                                draw_col.a = stg->alphaConst;
-                            } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA) {
-                                // Use SetColor alpha (draw_col.a = col.a already)
-                            } else if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
-                                draw_col.a = 1.0f;
-                            }
-                            break;  // Only process first non-lightmap stage
+                        // rgbGen
+                        if (stg->rgbGen == STAGE_RGBGEN_CONST) {
+                            draw_col.r = stg->rgbConst[0];
+                            draw_col.g = stg->rgbConst[1];
+                            draw_col.b = stg->rgbConst[2];
+                        } else if (stg->rgbGen == STAGE_RGBGEN_GLOBAL_COLOR) {
+                            // Use SetColor (draw_col = col already)
+                        } else if (stg->rgbGen == STAGE_RGBGEN_IDENTITY ||
+                                   stg->rgbGen == STAGE_RGBGEN_IDENTITY_LIGHTING) {
+                            draw_col.r = 1.0f;
+                            draw_col.g = 1.0f;
+                            draw_col.b = 1.0f;
                         }
+
+                        // alphaGen
+                        if (stg->alphaGen == STAGE_ALPHAGEN_CONST) {
+                            draw_col.a = stg->alphaConst;
+                        } else if (stg->alphaGen == STAGE_ALPHAGEN_GLOBAL_ALPHA) {
+                            // Use SetColor alpha (draw_col.a = col.a already)
+                        } else if (stg->alphaGen == STAGE_ALPHAGEN_IDENTITY) {
+                            draw_col.a = 1.0f;
+                        }
+                        break;  // Only process first non-lightmap stage
                     }
                 }
 
@@ -6729,31 +6874,29 @@ void MoHAARunner::update_2d_overlay() {
                  * explicit blend modes from the shader's stage definition
                  * (add, multiply, inverse alpha). */
                 int draw_blend = BLEND_MIX;
-                if (sname && sname[0]) {
-                    const GodotShaderProps *sp2 = Godot_ShaderProps_Find_ByHandle(shader);
-                    if (sp2) {
+                if (sp) {
                         /* Read blend from the first real texture stage.
                          * Skip internal engine images ($whiteimage, *white)
                          * that serve as base fill passes in multi-stage
                          * shaders (e.g. mohdm levelshots: stage 0 = white
                          * fill, stage 1 = map image with inverse alpha). */
-                        for (int st = 0; st < sp2->stage_count; st++) {
-                            if (!sp2->stages[st].active) continue;
-                            if (sp2->stages[st].isLightmap) continue;
+                        for (int st = 0; st < sp->stage_count; st++) {
+                            if (!sp->stages[st].active) continue;
+                            if (sp->stages[st].isLightmap) continue;
 
                             /* Skip internal engine images used as base
                              * fill passes in multi-stage 2D shaders. */
-                            const char *sm = sp2->stages[st].map;
+                            const char *sm = sp->stages[st].map;
                             if (sm[0] && (strcmp(sm, "$whiteimage") == 0 ||
                                           strcmp(sm, "*white") == 0 ||
                                           strcmp(sm, "$lightmap") == 0)) {
                                 continue;
                             }
 
-                            if (!sp2->stages[st].hasBlendFunc) break; /* no blend → alpha (LIGHTMAP_2D default) */
+                            if (!sp->stages[st].hasBlendFunc) break; /* no blend → alpha (LIGHTMAP_2D default) */
 
-                            MohaaBlendFactor bs = sp2->stages[st].blendSrc;
-                            MohaaBlendFactor bd = sp2->stages[st].blendDst;
+                            MohaaBlendFactor bs = sp->stages[st].blendSrc;
+                            MohaaBlendFactor bd = sp->stages[st].blendDst;
 
                             if (bs == BLEND_ONE && bd == BLEND_ONE) {
                                 draw_blend = BLEND_ADD;
@@ -6768,7 +6911,6 @@ void MoHAARunner::update_2d_overlay() {
                              * stay as BLEND_MIX — standard alpha blend. */
                             break;
                         }
-                    }
                 }
 
                 // Skip fully transparent draws — but only for blend modes
