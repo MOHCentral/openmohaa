@@ -40,6 +40,7 @@
 #include <godot_cpp/classes/audio_server.hpp>
 #include <godot_cpp/classes/label.hpp>
 #include <godot_cpp/classes/os.hpp>
+#include <godot_cpp/classes/worker_thread_pool.hpp>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -3339,6 +3340,299 @@ static std::vector<float> s_skin_texcoords;
 static std::vector<int>   s_skin_indices;
 static std::vector<int>   s_skin_lod_indices;  // LOD collapse scratch
 
+// Thread-local scratch buffers for parallel CPU skinning workers.
+// Each worker thread gets its own grow-only vectors so no locks are needed.
+static thread_local std::vector<float> tl_skin_positions;
+static thread_local std::vector<float> tl_skin_normals;
+static thread_local std::vector<float> tl_skin_texcoords;
+static thread_local std::vector<int>   tl_skin_indices;
+static thread_local std::vector<int>   tl_skin_lod_indices;
+
+// ── Parallel skinning worker ────────────────────────────────────────────
+// Called from WorkerThreadPool for each SkinJob.  Builds an ArrayMesh
+// entirely off the main thread — the mesh is not yet attached to the scene
+// tree, so all Godot resource operations are thread-safe.
+// Thread safety relies on:
+//   • Each job has a unique entNum → each skeletor is independent
+//   • TIKI model data (dtiki_t) is read-only after registration
+//   • Thread-local scratch buffers prevent data races
+void MoHAARunner::_skin_worker_func(void *userdata, uint32_t index) {
+    auto *jobs = static_cast<std::vector<SkinJob> *>(userdata);
+    SkinJob &job = (*jobs)[index];
+
+    int boneCount = 0;
+    void *boneCache = Godot_Skel_PrepareBones(
+        job.tikiPtr, job.entNum,
+        (const void *)job.frameInfoBuf, job.boneTagBuf,
+        (const float *)job.boneQuatBuf,
+        job.actionWeight, &boneCount,
+        nullptr, nullptr);
+
+    if (!boneCache || boneCount <= 0) return;
+
+    Ref<ArrayMesh> skinned_mesh;
+    skinned_mesh.instantiate();
+    int meshCount = Godot_Skel_GetMeshCount(job.tikiPtr);
+
+    for (int mesh = 0; mesh < meshCount; mesh++) {
+        int surfCount = Godot_Skel_GetSurfaceCount(job.tikiPtr, mesh);
+        for (int surf = 0; surf < surfCount; surf++) {
+            int lodVertLimit = Godot_Skel_GetLodVertexLimit(
+                job.tikiPtr, mesh, surf, job.lodLevel);
+
+            int numVerts = 0, numTris = 0;
+            Godot_Skel_GetSurfaceInfo(job.tikiPtr, mesh, surf,
+                &numVerts, &numTris, nullptr, 0, nullptr, 0);
+            if (numVerts <= 0 || numTris <= 0) continue;
+
+            // Thread-local scratch buffers
+            size_t pos_need = (size_t)numVerts * 3;
+            size_t nrm_need = (size_t)numVerts * 3;
+            size_t uv_need  = (size_t)numVerts * 2;
+            size_t idx_need = (size_t)numTris * 3;
+            if (tl_skin_positions.size() < pos_need) tl_skin_positions.resize(pos_need);
+            if (tl_skin_normals.size()   < nrm_need) tl_skin_normals.resize(nrm_need);
+            if (tl_skin_texcoords.size() < uv_need)  tl_skin_texcoords.resize(uv_need);
+            if (tl_skin_indices.size()   < idx_need) tl_skin_indices.resize(idx_need);
+
+            float *positions = tl_skin_positions.data();
+            float *normals   = tl_skin_normals.data();
+            float *texcoords = tl_skin_texcoords.data();
+            int   *indices   = tl_skin_indices.data();
+
+            if (!Godot_Skel_SkinSurface(job.tikiPtr, mesh, surf,
+                    boneCache, boneCount,
+                    positions, normals, lodVertLimit,
+                    nullptr, 0)) {
+                continue;
+            }
+
+            Godot_Skel_GetSurfaceVertices(job.tikiPtr, mesh, surf,
+                nullptr, nullptr, texcoords);
+            Godot_Skel_GetSurfaceIndices(job.tikiPtr, mesh, surf,
+                indices);
+
+            int outNumVerts = numVerts;
+            int outNumTris  = numTris;
+            int *outIndices = indices;
+
+            // LOD index collapse
+            if (job.lodLevel > 0 && lodVertLimit >= 0 && lodVertLimit < numVerts) {
+                if (tl_skin_lod_indices.size() < idx_need)
+                    tl_skin_lod_indices.resize(idx_need);
+                int *collapsedIndices = tl_skin_lod_indices.data();
+                if (Godot_Skel_BuildLodMesh(job.tikiPtr, mesh, surf,
+                        lodVertLimit, positions, normals, texcoords,
+                        numVerts, indices, numTris, job.tikiScale,
+                        collapsedIndices, &outNumTris)) {
+                    outIndices = collapsedIndices;
+                    outNumVerts = lodVertLimit;
+                }
+            }
+
+            if (outNumVerts <= 0 || outNumTris <= 0) continue;
+
+            // Validate indices
+            bool bad_idx = false;
+            for (int t = 0; t < outNumTris; t++) {
+                int i0 = outIndices[t*3+0];
+                int i1 = outIndices[t*3+1];
+                int i2 = outIndices[t*3+2];
+                if (i0 < 0 || i0 >= outNumVerts ||
+                    i1 < 0 || i1 >= outNumVerts ||
+                    i2 < 0 || i2 >= outNumVerts) {
+                    bad_idx = true;
+                    break;
+                }
+            }
+            if (bad_idx) continue;
+
+            PackedVector3Array gPos, gNrm;
+            PackedVector2Array gUVs;
+            PackedInt32Array   gIdx;
+
+            gPos.resize(outNumVerts);
+            gNrm.resize(outNumVerts);
+            gUVs.resize(outNumVerts);
+            gIdx.resize(outNumTris * 3);
+
+            bool has_bad_float = false;
+            for (int v = 0; v < outNumVerts; v++) {
+                float px = positions[v*3+0], py = positions[v*3+1], pz = positions[v*3+2];
+                if (std::isnan(px) || std::isnan(py) || std::isnan(pz) ||
+                    std::isinf(px) || std::isinf(py) || std::isinf(pz)) {
+                    has_bad_float = true;
+                    break;
+                }
+                Vector3 p = id_to_godot_point(px, py, pz)
+                    * job.tikiScale * MOHAA_UNIT_SCALE;
+                Vector3 n = id_to_godot_point(
+                    normals[v*3+0], normals[v*3+1], normals[v*3+2]);
+                if (n.length_squared() > 0.001f)
+                    n = n.normalized();
+
+                gPos.set(v, p);
+                gNrm.set(v, n);
+                gUVs.set(v, Vector2(texcoords[v*2+0], texcoords[v*2+1]));
+            }
+
+            if (has_bad_float) continue;
+
+            for (int t = 0; t < outNumTris; t++) {
+                gIdx.set(t*3+0, outIndices[t*3+0]);
+                gIdx.set(t*3+1, outIndices[t*3+1]);
+                gIdx.set(t*3+2, outIndices[t*3+2]);
+            }
+
+            Array arrays;
+            arrays.resize(Mesh::ARRAY_MAX);
+            arrays[Mesh::ARRAY_VERTEX] = gPos;
+            arrays[Mesh::ARRAY_NORMAL] = gNrm;
+            arrays[Mesh::ARRAY_TEX_UV] = gUVs;
+            arrays[Mesh::ARRAY_INDEX]  = gIdx;
+
+            skinned_mesh->add_surface_from_arrays(
+                Mesh::PRIMITIVE_TRIANGLES, arrays);
+        }
+    }
+
+    ::free(boneCache);
+
+    if (skinned_mesh->get_surface_count() > 0) {
+        job.result_mesh = skinned_mesh;
+    }
+}
+
+// ── Pre-scan entities for parallel skinning ─────────────────────────────
+// Runs BEFORE the entity loop.  Identifies TIKI entities with animation
+// cache misses, dispatches parallel mesh builds, and populates
+// skel_mesh_cache so the entity loop gets almost all cache hits.
+void MoHAARunner::_preskin_entities(int ent_count) {
+    skin_jobs_.clear();
+    if (!camera || ent_count <= 0) return;
+
+    Vector3 camPos = camera->get_global_position();
+    float fov_x = camera->get_fov();
+    int lodbias = Godot_Cvar_VariableIntegerValue("r_lodbias");
+
+    for (int i = 0; i < ent_count; i++) {
+        float origin[3], axis[9], scale = 1.0f;
+        int hModel = 0, entityNumber = 0, renderfx = 0;
+        unsigned char rgba[4] = {255, 255, 255, 255};
+
+        int reType = Godot_Renderer_GetEntity(i, origin, axis, &scale,
+                                               &hModel, &entityNumber,
+                                               rgba, &renderfx);
+
+        if (reType != RT_MODEL || hModel <= 0) continue;
+
+        int modType = Godot_Model_GetType(hModel);
+        if (modType == 1) continue; // Brush — no skinning
+
+        // Get animation data
+        void *tikiPtr = nullptr;
+        int entNum = 0;
+        float actionWeight = 0, entScale = 1.0f;
+        alignas(8) char frameInfoBuf[256];
+        int boneTagBuf[5];
+        float boneQuatBuf[20];
+
+        bool has_anim = Godot_Renderer_GetEntityAnim(
+            i, &tikiPtr, &entNum,
+            frameInfoBuf, boneTagBuf, boneQuatBuf,
+            &actionWeight, &entScale) != 0;
+
+        if (!has_anim || !tikiPtr) continue;
+
+        // Shared entity numbers (ENTITYNUM_NONE = 1023) use the same
+        // skeletor — cannot be parallel.  Handled inline by entity loop.
+        if (entNum == 1023 || entNum < 0) continue;
+
+        // LOD selection
+        int lodLevel = 0;
+        bool is_first_person = (renderfx & 0x02) != 0;
+        if (!is_first_person) {
+            Vector3 entPos = id_to_godot_position(origin[0], origin[1], origin[2]);
+            float distInches = camPos.distance_to(entPos) * (1.0f / MOHAA_UNIT_SCALE);
+            distInches *= (90.0f / fov_x);
+
+            void *tikiForLod = Godot_Model_GetTikiPtr(hModel);
+            if (tikiForLod) {
+                lodLevel = Godot_Skel_SelectLodLevel(tikiForLod, 0, distInches);
+                lodLevel += lodbias;
+                if (lodLevel < 0) lodLevel = 0;
+            }
+        }
+
+        // Animation state hash
+        uint64_t anim_hash = 14695981039346656037ULL;
+        auto fnv_bytes = [&anim_hash](const void *p, size_t n) {
+            const unsigned char *b = (const unsigned char *)p;
+            for (size_t j = 0; j < n; j++) {
+                anim_hash ^= b[j];
+                anim_hash *= 1099511628211ULL;
+            }
+        };
+        fnv_bytes(frameInfoBuf, sizeof(frameInfoBuf));
+        fnv_bytes(boneTagBuf, sizeof(boneTagBuf));
+        fnv_bytes(boneQuatBuf, sizeof(boneQuatBuf));
+        fnv_bytes(&actionWeight, sizeof(actionWeight));
+        fnv_bytes(&hModel, sizeof(hModel));
+        fnv_bytes(&lodLevel, sizeof(lodLevel));
+
+        // Cache hit — no work needed
+        auto cache_it = skel_mesh_cache.find(entNum);
+        if (cache_it != skel_mesh_cache.end() &&
+            cache_it->second.hModel == hModel &&
+            cache_it->second.anim_hash == anim_hash &&
+            cache_it->second.mesh != nullptr) {
+            continue;
+        }
+
+        // Cache miss — add to parallel job list
+        SkinJob job;
+        job.tikiPtr = tikiPtr;
+        job.entNum = entNum;
+        job.hModel = hModel;
+        job.lodLevel = lodLevel;
+        job.tikiScale = Godot_Skel_GetScale(tikiPtr);
+        memcpy(job.frameInfoBuf, frameInfoBuf, sizeof(frameInfoBuf));
+        memcpy(job.boneTagBuf, boneTagBuf, sizeof(boneTagBuf));
+        memcpy(job.boneQuatBuf, boneQuatBuf, sizeof(boneQuatBuf));
+        job.actionWeight = actionWeight;
+        job.anim_hash = anim_hash;
+        skin_jobs_.push_back(job);
+    }
+
+    if (skin_jobs_.empty()) return;
+
+    // Dispatch: parallel for ≥2 jobs, sequential for 1
+    WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
+    if (pool && skin_jobs_.size() >= 2) {
+        WorkerThreadPool::GroupID gid = pool->add_native_group_task(
+            &MoHAARunner::_skin_worker_func,
+            &skin_jobs_,
+            (int)skin_jobs_.size(),
+            -1, true);
+        pool->wait_for_group_task_completion(gid);
+    } else {
+        for (uint32_t j = 0; j < (uint32_t)skin_jobs_.size(); j++) {
+            _skin_worker_func(&skin_jobs_, j);
+        }
+    }
+
+    // Store results in skel_mesh_cache (main thread only)
+    for (auto &job : skin_jobs_) {
+        if (job.result_mesh.is_valid()) {
+            auto &entry = skel_mesh_cache[job.entNum];
+            entry.anim_hash = job.anim_hash;
+            entry.hModel = job.hModel;
+            entry.mesh = job.result_mesh;
+            entry.mesh_surfaces = job.result_mesh->get_surface_count();
+        }
+    }
+}
+
 void MoHAARunner::update_entities() {
     if (!game_world) return;
 
@@ -3372,6 +3666,11 @@ void MoHAARunner::update_entities() {
         entity_last_tint_key.resize(ent_count, 0);
         entity_tint_valid.resize(ent_count, false);
     }
+
+    // Pre-scan animated entities and dispatch parallel CPU skinning.
+    // Cache misses are computed on worker threads; results are stored
+    // in skel_mesh_cache so the entity loop below gets cache hits.
+    _preskin_entities(ent_count);
 
     // Cache camera origin for PVS entity culling (id Tech 3 coordinates)
     float pvs_cam_origin[3] = {0, 0, 0};

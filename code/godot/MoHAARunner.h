@@ -415,6 +415,28 @@ private:
     };
     std::unordered_map<int, SkelMeshCacheEntry> skel_mesh_cache; // entityNumber → cached skinned mesh
 
+    // ── Parallel CPU skinning ──
+    // Pre-compute skinned meshes on WorkerThreadPool before entity loop.
+    // Each worker builds an ArrayMesh (unattached to scene → thread-safe).
+    // Results are cached in skel_mesh_cache so the entity loop gets cache hits.
+    struct SkinJob {
+        void *tikiPtr;
+        int entNum;
+        int hModel;
+        int lodLevel;
+        float tikiScale;
+        alignas(8) char frameInfoBuf[256];
+        int boneTagBuf[5];
+        float boneQuatBuf[20];
+        float actionWeight;
+        uint64_t anim_hash;
+        // Output — written by worker thread, read by main thread after sync
+        Ref<ArrayMesh> result_mesh;
+    };
+    std::vector<SkinJob> skin_jobs_;
+    static void _skin_worker_func(void *userdata, uint32_t index);
+    void _preskin_entities(int ent_count);
+
  // Tinted material cache — avoid per-frame material duplication
     // Key = (hModel << 20) | (surfIdx << 12) | quantised_rgba
     std::unordered_map<uint64_t, Ref<StandardMaterial3D>> tinted_mat_cache;
