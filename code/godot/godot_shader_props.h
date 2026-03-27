@@ -120,6 +120,18 @@ typedef enum MohaaStageTcGen {
     STAGE_TCGEN_VECTOR,
 } MohaaStageTcGen;
 
+/* Per-stage fog colour mode (mirrors engine's GLS_FOG_* bits from tr_shader.c).
+ * The engine uses GL_LINEAR fog with per-stage fog colour overrides based on
+ * the stage's blend mode.  Additive stages fade to black, multiplicative stages
+ * fade to white, standard stages fade to the global fog colour, and nofog stages
+ * are completely unaffected by distance fog. */
+typedef enum MohaaStageFogMode {
+    STAGE_FOG_GLOBAL = 0,    /* Use global fog colour (standard alpha/opaque stages) */
+    STAGE_FOG_BLACK,         /* Fog colour = black (additive stages: ONE+ONE, etc.) */
+    STAGE_FOG_WHITE,         /* Fog colour = white (filter stages: DST_COLOR+ZERO, etc.) */
+    STAGE_FOG_DISABLED,      /* nofog keyword or multitexture — no fog applied */
+} MohaaStageFogMode;
+
 /* Per-stage tcMod type */
 typedef enum MohaaStageTcModType {
     TCMOD_NONE = 0,
@@ -206,6 +218,10 @@ typedef struct MohaaShaderStage {
     float alphaMin;                  /* lower bound / near distance */
     float alphaMax;                  /* upper bound / range */
     float specOrigin[3];             /* for AGEN_LIGHTING_SPECULAR */
+
+ /* per-stage fog behaviour (set post-parse to mirror engine FinishShader) */
+    MohaaStageFogMode fogMode;       /* fog colour override for this stage */
+    bool nofogKeyword;               /* true if 'nofog' keyword appeared in this stage */
 } MohaaShaderStage;
 
 /* ── Per-shader properties ── */
@@ -290,6 +306,7 @@ typedef struct GodotShaderProps {
     bool  has_fog;
     float fog_color[3];
     float fog_distance;
+    bool  no_fog;                /* true if ALL stages have nofog — entire shader is fog-free */
 
     /* Sprite model scaling — from "spritescale" keyword (default 1.0) */
     float sprite_scale;

@@ -1298,3 +1298,17 @@ int Godot_ShaderProps_GetSkyCloudData(float *out_cloud_height,
     }
     return 0;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Renderer global accessors
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/*
+ * Godot_Renderer_GetIdentityLight — returns tr.identityLight, the
+ * overbright scaling factor (1.0 / (1 << overbrightBits)).  The engine's
+ * RB_SetupFog multiplies fog colour by this value.
+ */
+float Godot_Renderer_GetIdentityLight(void)
+{
+    return tr.identityLight;
+}

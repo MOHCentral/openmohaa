@@ -65,7 +65,32 @@ extern "C" {
 /* Maximum file path length (matches engine MAX_QPATH). */
 #define MUSIC_MAX_PATH 256
 
+/* Mood count — matches music_mood_t::mood_totalnumber in q_shared.h. */
+#define MOOD_COUNT 16
+
 using namespace godot;
+
+/* ================================================================== */
+/*  Mood string table (must match q_shared.h music_mood_t order)       */
+/* ================================================================== */
+
+static const char *s_mood_names[MOOD_COUNT] = {
+    "none", "normal", "action", "suspense", "mystery",
+    "success", "failure", "surprise", "special",
+    "aux1", "aux2", "aux3", "aux4", "aux5", "aux6", "aux7"
+};
+
+/* ================================================================== */
+/*  Per-mood track info from a .mus soundtrack file                     */
+/* ================================================================== */
+
+struct MoodTrackInfo {
+    char  path[MUSIC_MAX_PATH];   /* Full resolved path (base_dir/filename) */
+    bool  loop;
+    float volume;
+    float fadetime;
+    bool  defined;                /* Was this mood present in the .mus? */
+};
 
 /* ================================================================== */
 /*  Internal state                                                     */
@@ -88,6 +113,13 @@ static float s_fade_duration   = 0.0f;
 static float s_fade_elapsed    = 0.0f;
 static bool  s_fading          = false;
 static bool  s_initialised     = false;
+
+/* ── Mood-driven track switching state ── */
+static MoodTrackInfo s_soundtrack_moods[MOOD_COUNT];
+static int   s_current_mood    = 0;   /* mood_none */
+static int   s_fallback_mood   = 0;   /* mood_none */
+static char  s_soundtrack_name[MUSIC_MAX_PATH] = {0};
+static bool  s_soundtrack_loaded = false;
 
 /* ================================================================== */
 /*  Helpers                                                            */
@@ -214,6 +246,256 @@ static bool parse_mus_file(const char *mus_path, char *out_track,
         snprintf(out_track, track_size, "sound/music/%s", track_file);
     }
     return true;
+}
+
+/*
+ * Look up a mood name string → index (0–15).  Returns -1 if unknown.
+ */
+static int mood_name_to_index(const char *name, int name_len)
+{
+    for (int i = 0; i < MOOD_COUNT; i++) {
+        if ((int)strlen(s_mood_names[i]) == name_len &&
+            strncmp(name, s_mood_names[i], (size_t)name_len) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/*
+ * Parse a .mus script to extract ALL mood tracks into s_soundtrack_moods[].
+ * Resolves paths using the "path" directive from the file.
+ *
+ * .mus format (full):
+ *   path <base_dir>
+ *   <mood_name> <filename>
+ *   !<mood_name> loop
+ *   !<mood_name> volume <float>
+ *   !<mood_name> fadetime <float>
+ */
+static bool parse_mus_full(const char *name)
+{
+    /* Reset all moods */
+    for (int i = 0; i < MOOD_COUNT; i++) {
+        s_soundtrack_moods[i].path[0] = '\0';
+        s_soundtrack_moods[i].loop     = false;
+        s_soundtrack_moods[i].volume   = 1.0f;
+        s_soundtrack_moods[i].fadetime = 2.0f;
+        s_soundtrack_moods[i].defined  = false;
+    }
+
+    /* Build the .mus path (same resolution as load_music_from_vfs) */
+    char mus_base[MUSIC_MAX_PATH];
+    strncpy(mus_base, name, MUSIC_MAX_PATH - 1);
+    mus_base[MUSIC_MAX_PATH - 1] = '\0';
+
+    const char *base = mus_base;
+    if (strncmp(base, "sound/", 6) == 0) base += 6;
+
+    char mus_path[MUSIC_MAX_PATH];
+    if (strncmp(base, "music/", 6) != 0) {
+        snprintf(mus_path, MUSIC_MAX_PATH, "music/%s", base);
+    } else {
+        strncpy(mus_path, base, MUSIC_MAX_PATH - 1);
+        mus_path[MUSIC_MAX_PATH - 1] = '\0';
+    }
+
+    /* Replace or append .mus extension */
+    char *dot = strrchr(mus_path, '.');
+    if (dot && (strcmp(dot, ".mus") == 0 || strcmp(dot, ".mp3") == 0)
+        && (dot - mus_path + 5) <= MUSIC_MAX_PATH) {
+        memcpy(dot, ".mus", 5);
+    } else {
+        size_t plen = strlen(mus_path);
+        if (plen + 4 < MUSIC_MAX_PATH) {
+            strcat(mus_path, ".mus");
+        }
+    }
+
+    void *buf = nullptr;
+    long  len = Godot_VFS_ReadFile(mus_path, &buf);
+    if (len <= 0 || !buf) return false;
+
+    char base_dir[MUSIC_MAX_PATH] = {0};
+    const char *src = (const char *)buf;
+    const char *end = src + len;
+
+    while (src < end) {
+        /* Skip leading whitespace */
+        while (src < end && (*src == ' ' || *src == '\t' || *src == '\r')) src++;
+        if (src >= end) break;
+
+        /* Find end of line */
+        const char *eol = src;
+        while (eol < end && *eol != '\n') eol++;
+
+        int line_len = (int)(eol - src);
+        /* Strip trailing whitespace */
+        while (line_len > 0 && (src[line_len - 1] == ' ' ||
+               src[line_len - 1] == '\t' || src[line_len - 1] == '\r'))
+            line_len--;
+
+        /* Skip empty lines and comments */
+        if (line_len <= 0 || src[0] == '/' || src[0] == '#') {
+            src = (eol < end) ? eol + 1 : end;
+            continue;
+        }
+
+        if (line_len > 5 && strncmp(src, "path ", 5) == 0) {
+            /* path <base_dir> */
+            int val_len = line_len - 5;
+            if (val_len >= MUSIC_MAX_PATH) val_len = MUSIC_MAX_PATH - 1;
+            strncpy(base_dir, src + 5, (size_t)val_len);
+            base_dir[val_len] = '\0';
+        } else if (src[0] == '!') {
+            /* Attribute line: !<mood_name> <attr> [value] */
+            const char *mood_start = src + 1;
+            const char *mood_end = mood_start;
+            while (mood_end < src + line_len && *mood_end != ' ' && *mood_end != '\t')
+                mood_end++;
+            int mood_len = (int)(mood_end - mood_start);
+            int mood_idx = mood_name_to_index(mood_start, mood_len);
+
+            if (mood_idx >= 0) {
+                const char *attr = mood_end;
+                while (attr < src + line_len && (*attr == ' ' || *attr == '\t')) attr++;
+                int remaining = (int)(src + line_len - attr);
+
+                if (remaining >= 4 && strncmp(attr, "loop", 4) == 0) {
+                    s_soundtrack_moods[mood_idx].loop = true;
+                } else if (remaining > 7 && strncmp(attr, "volume ", 7) == 0) {
+                    float v = strtof(attr + 7, nullptr);
+                    if (v < 0.0f) v = 0.0f;
+                    if (v > 2.0f) v = 2.0f;
+                    s_soundtrack_moods[mood_idx].volume = v;
+                } else if (remaining > 9 && strncmp(attr, "fadetime ", 9) == 0) {
+                    float f = strtof(attr + 9, nullptr);
+                    if (f < 0.0f) f = 0.0f;
+                    s_soundtrack_moods[mood_idx].fadetime = f;
+                }
+            }
+        } else {
+            /* Track line: <mood_name> <filename> */
+            const char *mood_start = src;
+            const char *mood_end = mood_start;
+            while (mood_end < src + line_len && *mood_end != ' ' && *mood_end != '\t')
+                mood_end++;
+            int mood_len = (int)(mood_end - mood_start);
+            int mood_idx = mood_name_to_index(mood_start, mood_len);
+
+            if (mood_idx >= 0) {
+                const char *file_start = mood_end;
+                while (file_start < src + line_len &&
+                       (*file_start == ' ' || *file_start == '\t'))
+                    file_start++;
+                int file_len = (int)(src + line_len - file_start);
+
+                /* Strip inline // comments */
+                for (int ci = 0; ci < file_len - 1; ci++) {
+                    if (file_start[ci] == '/' && file_start[ci + 1] == '/') {
+                        file_len = ci;
+                        while (file_len > 0 &&
+                               (file_start[file_len - 1] == ' ' ||
+                                file_start[file_len - 1] == '\t'))
+                            file_len--;
+                        break;
+                    }
+                }
+
+                if (file_len > 0 && file_len < MUSIC_MAX_PATH) {
+                    char filename[MUSIC_MAX_PATH];
+                    strncpy(filename, file_start, (size_t)file_len);
+                    filename[file_len] = '\0';
+
+                    if (base_dir[0]) {
+                        snprintf(s_soundtrack_moods[mood_idx].path,
+                                 MUSIC_MAX_PATH, "%s/%s", base_dir, filename);
+                    } else {
+                        snprintf(s_soundtrack_moods[mood_idx].path,
+                                 MUSIC_MAX_PATH, "sound/music/%s", filename);
+                    }
+                    s_soundtrack_moods[mood_idx].defined = true;
+                }
+            }
+        }
+
+        src = (eol < end) ? eol + 1 : end;
+    }
+
+    Godot_VFS_FreeFile(buf);
+
+    /* Log what we found */
+    int defined_count = 0;
+    for (int i = 0; i < MOOD_COUNT; i++) {
+        if (s_soundtrack_moods[i].defined) {
+            defined_count++;
+            UtilityFunctions::print(
+                String("[GodotMusic] Mood '") + String(s_mood_names[i]) +
+                String("' → '") + String(s_soundtrack_moods[i].path) +
+                String("' loop=") + String(s_soundtrack_moods[i].loop ? "yes" : "no") +
+                String(" vol=") + String::num(s_soundtrack_moods[i].volume, 2) +
+                String(" fade=") + String::num(s_soundtrack_moods[i].fadetime, 2));
+        }
+    }
+    UtilityFunctions::print(
+        String("[GodotMusic] Parsed .mus '") + String(mus_path) +
+        String("': ") + String::num_int64(defined_count) +
+        String(" mood tracks defined"));
+
+    return defined_count > 0;
+}
+
+/*
+ * Play the track for a specific mood, with crossfade.
+ * Falls back: target_mood → fallback_mood → mood_normal (1).
+ */
+static void play_mood_track(int target_mood, int fallback_mood)
+{
+    /* Resolve the mood to play */
+    int mood = target_mood;
+    if (mood <= 0 || mood >= MOOD_COUNT || !s_soundtrack_moods[mood].defined) {
+        mood = fallback_mood;
+    }
+    if (mood <= 0 || mood >= MOOD_COUNT || !s_soundtrack_moods[mood].defined) {
+        mood = 1; /* normal */
+    }
+    if (mood <= 0 || mood >= MOOD_COUNT || !s_soundtrack_moods[mood].defined) {
+        return; /* No track available at all */
+    }
+
+    MoodTrackInfo &ti = s_soundtrack_moods[mood];
+
+    /* Already playing this exact track? */
+    if (strcmp(s_current_track, ti.path) == 0) return;
+
+    Ref<AudioStreamMP3> stream = load_mp3_from_path(ti.path);
+    if (stream.is_null()) return;
+
+    stream->set_loop(ti.loop);
+
+    int old_idx = s_active_idx;
+    s_active_idx = 1 - s_active_idx;
+
+    s_players[s_active_idx]->set_stream(stream);
+    s_players[s_active_idx]->set_volume_db(
+        linear_to_db(ti.volume * s_current_volume * s_master_volume));
+    s_players[s_active_idx]->play();
+
+    strncpy(s_current_track, ti.path, MUSIC_MAX_PATH - 1);
+    s_current_track[MUSIC_MAX_PATH - 1] = '\0';
+
+    /* Crossfade from old player */
+    if (ti.fadetime > 0.01f && s_players[old_idx]->is_playing()) {
+        s_fade_duration = ti.fadetime;
+        s_fade_elapsed  = 0.0f;
+        s_fading        = true;
+    } else {
+        s_players[old_idx]->stop();
+    }
+
+    UtilityFunctions::print(
+        String("[GodotMusic] Mood switch → '") + String(s_mood_names[mood]) +
+        String("' playing '") + String(ti.path) + String("'"));
 }
 
 /*
@@ -444,23 +726,40 @@ extern "C" void Godot_Music_Update(float delta)
         case GR_MUSIC_PLAY: {
             const char *name = Godot_Sound_GetMusicName();
             if (name && name[0]) {
-                /* If a different track, crossfade to it */
-                if (strcmp(s_current_track, name) != 0) {
-                    int old_idx = s_active_idx;
-                    s_active_idx = 1 - s_active_idx;
+                /* Parse the full .mus for mood-driven switching */
+                if (strcmp(s_soundtrack_name, name) != 0) {
+                    strncpy(s_soundtrack_name, name, MUSIC_MAX_PATH - 1);
+                    s_soundtrack_name[MUSIC_MAX_PATH - 1] = '\0';
+                    s_soundtrack_loaded = parse_mus_full(name);
+                    s_current_mood    = 0;
+                    s_fallback_mood   = 0;
+                }
 
-                    play_track(s_players[s_active_idx], name);
-                    strncpy(s_current_track, name, MUSIC_MAX_PATH - 1);
-                    s_current_track[MUSIC_MAX_PATH - 1] = '\0';
+                /* If moods were parsed, use mood-aware playback */
+                if (s_soundtrack_loaded) {
+                    int cur = 0, fb = 0;
+                    Godot_Sound_GetMusicMood(&cur, &fb);
+                    s_current_mood  = cur;
+                    s_fallback_mood = fb;
+                    play_mood_track(cur, fb);
+                } else {
+                    /* Fallback: play the named track directly */
+                    if (strcmp(s_current_track, name) != 0) {
+                        int old_idx = s_active_idx;
+                        s_active_idx = 1 - s_active_idx;
 
-                    /* Fade out old player */
-                    float fade = Godot_Sound_GetMusicFadeTime();
-                    if (fade > 0.01f && s_players[old_idx]->is_playing()) {
-                        s_fade_duration = fade;
-                        s_fade_elapsed  = 0.0f;
-                        s_fading        = true;
-                    } else {
-                        s_players[old_idx]->stop();
+                        play_track(s_players[s_active_idx], name);
+                        strncpy(s_current_track, name, MUSIC_MAX_PATH - 1);
+                        s_current_track[MUSIC_MAX_PATH - 1] = '\0';
+
+                        float fade = Godot_Sound_GetMusicFadeTime();
+                        if (fade > 0.01f && s_players[old_idx]->is_playing()) {
+                            s_fade_duration = fade;
+                            s_fade_elapsed  = 0.0f;
+                            s_fading        = true;
+                        } else {
+                            s_players[old_idx]->stop();
+                        }
                     }
                 }
             }
@@ -471,6 +770,10 @@ extern "C" void Godot_Music_Update(float delta)
                 if (s_players[i]) s_players[i]->stop();
             }
             s_current_track[0] = '\0';
+            s_soundtrack_name[0] = '\0';
+            s_soundtrack_loaded = false;
+            s_current_mood  = 0;
+            s_fallback_mood = 0;
             s_fading = false;
             break;
 
@@ -528,6 +831,17 @@ extern "C" void Godot_Music_Update(float delta)
 
         if (!s_fading) {
             s_current_volume = s_target_volume;
+        }
+    }
+
+    /* ── Mood-driven track switching (poll each frame) ── */
+    if (s_soundtrack_loaded) {
+        int cur = 0, fb = 0;
+        Godot_Sound_GetMusicMood(&cur, &fb);
+        if (cur != s_current_mood || fb != s_fallback_mood) {
+            s_current_mood  = cur;
+            s_fallback_mood = fb;
+            play_mood_track(cur, fb);
         }
     }
 

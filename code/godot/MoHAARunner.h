@@ -259,6 +259,7 @@ private:
 
     // Camera/fog caching — skip redundant Godot env calls when unchanged
     float cached_fog_dist  = -1.0f;
+    float cached_fog_bias  = -1.0f;
     float cached_fog_color[3] = {-1.0f, -1.0f, -1.0f};
     bool  cached_fog_enabled = false;
 
@@ -268,6 +269,7 @@ private:
         Color   col;
         float   range = 0.0f;
         bool    valid = false;
+        bool    visible = false;
     };
     std::vector<DlightCache> dlight_cache;
 
@@ -282,6 +284,10 @@ private:
     int pvs_log_count = 0;                   // Limits PVS debug log messages per map
     std::vector<bool> pvs_cluster_visible;   // Per-cluster visibility (from PVS update)
     void update_pvs_visibility();            // Toggle per-cluster mesh visibility
+
+    std::vector<bool> terrain_patch_last_vis; // Delta-skip Terrain set_visible()
+    std::vector<bool> terrain_patch_valid;
+
     void update_terrain_visibility();        // Per-frame terrain marking via engine BSP tree walk
 
     // UI transform cache — avoid recalculating when viewport size is unchanged
@@ -399,6 +405,9 @@ private:
     std::vector<uint32_t> entity_last_tint_key;
     std::vector<bool> entity_tint_valid;
 
+    std::vector<bool> entity_last_visibility;
+    std::vector<bool> entity_visibility_valid;
+
     // Sprite mesh cache — avoid per-frame instantiate() + add_surface_from_arrays()
     // Key = quantised (halfW_bits << 16 | halfH_bits)
     std::unordered_map<uint32_t, Ref<ArrayMesh>> sprite_mesh_cache;
@@ -413,7 +422,7 @@ private:
         int mesh_surfaces = 0;             // surface count as a lightweight mesh identity
         Ref<ArrayMesh> mesh;
     };
-    std::unordered_map<int, SkelMeshCacheEntry> skel_mesh_cache; // entityNumber → cached skinned mesh
+    std::unordered_map<uint64_t, SkelMeshCacheEntry> skel_mesh_cache; // key: (entNum << 32) | hModel → cached skinned mesh
 
     // ── Parallel CPU skinning ──
     // Pre-compute skinned meshes on WorkerThreadPool before entity loop.
@@ -434,6 +443,7 @@ private:
         Ref<ArrayMesh> result_mesh;
     };
     std::vector<SkinJob> skin_jobs_;
+    int preskin_lodbias_ = 0;  // Cached r_lodbias from _preskin_entities, reused in entity loop
     static void _skin_worker_func(void *userdata, uint32_t index);
     void _preskin_entities(int ent_count);
 
@@ -458,6 +468,23 @@ private:
     Control *hud_control = nullptr;                       // Control node for custom draw
     std::unordered_map<int, Ref<ImageTexture>> shader_textures; // shader handle → loaded texture
     std::unordered_map<int, bool> shader_texture_has_alpha;    // shader handle → texture has alpha
+
+    // Cached per-shader 2D draw properties: rgbGen, alphaGen, blend mode.
+    // Computed once per unique shader handle on first encounter, reused for
+    // all subsequent draw commands using the same shader. This avoids
+    // Godot_ShaderProps_Find_ByHandle + stage iteration on every draw call.
+    struct ShaderDrawProps {
+        int rgbGen;          // STAGE_RGBGEN_* for first non-lightmap stage
+        float rgbConst[3];   // Constant colour (if rgbGen == CONST)
+        int alphaGen;        // STAGE_ALPHAGEN_* for first non-lightmap stage
+        float alphaConst;    // Constant alpha (if alphaGen == CONST)
+        int blendMode;       // BLEND_MIX/ADD/MUL/MUL_INV/ALPHA_INV/OPAQUE
+        bool valid;          // Has props been resolved?
+    };
+    std::unordered_map<int, ShaderDrawProps> s_shader_draw_cache;
+
+    // Cached poly blend type per shader handle — avoids Godot_ShaderProps_Find per poly per frame
+    std::unordered_map<int, int> s_poly_blend_cache;
 
     // HUD model preview — separate canvas layer below main HUD overlay
     // so that 2D elements (dropdown menus) render on top of model previews
@@ -526,7 +553,7 @@ private:
     float ui_offset_y = 0.0f;
     int ui_vid_w = 640;            // Engine virtual resolution width
     int ui_vid_h = 480;            // Engine virtual resolution height
-    void update_ui_transform();    // Calculate ui_scale/offset based on viewport size
+    bool update_ui_transform();    // Calculate ui_scale/offset based on viewport size
 
  // Audio bridge
     Node3D *audio_root = nullptr;                                    // Container for audio player nodes
@@ -548,6 +575,7 @@ private:
         int entnum = -1;
         int channel = -1;
         bool in_use = false;
+        bool is_loop = false;
     };
     std::vector<PlayerSlotInfo> player_slot_info;                    // Size = MAX_3D_PLAYERS
 
@@ -561,9 +589,7 @@ private:
     void setup_audio();                                              // Create audio player pools
     void release_audio_resources();                                  // Stop players + drop stream refs safely
     void update_audio(double delta);                                 // Process sound events + loops
-    void update_music(double delta);                                 // Process music state changes
     Ref<AudioStream> load_wav_from_vfs(int sfxHandle);                // Load WAV/MP3 via engine VFS
-    Ref<AudioStream> load_music_from_vfs(const char *name);           // Load music file via engine VFS
 
  // Cinematic display
     CanvasLayer *cin_layer = nullptr;                                // Overlay for cinematic video
@@ -580,6 +606,46 @@ private:
     void load_static_models(); // Register and instantiate static TIKI models from BSP
     void update_entities();   // Read captured entities and update debug meshes
     void update_dlights();    // Read captured dynamic lights and update OmniLight3D
+
+    // Poly reuse structures
+    struct PolyVert {
+        Vector3 pos;
+        Vector2 uv;
+        Color col;
+    };
+    struct PolyBatch {
+        int64_t mat_key;
+        int hShader;
+        int blend_type;
+        std::vector<PolyVert> verts;
+        std::vector<int32_t> indices;
+        PackedVector3Array gPos;
+        PackedVector2Array gUV;
+        PackedColorArray   gCol;
+        PackedInt32Array   gIdx;
+
+        void clear() {
+            verts.clear();
+            indices.clear();
+        }
+    };
+    std::vector<PolyBatch> persistent_poly_batches;
+    std::unordered_map<int64_t, int> poly_batch_map;
+    int active_poly_batches = 0;
+
+    // Entity delta-state tracking
+    struct EntityState {
+        int reType;
+        float origin[3];
+        float axis[9];
+        float scale;
+        int hModel;
+        int entityNumber;
+        unsigned char rgba[4];
+        int renderfx;
+    };
+    std::vector<EntityState> frame_entities;
+
     void update_polys();      // Render captured polys (particles, effects)
  void update_swipe_effects(); // Render swipe trails
  void update_terrain_marks(); // Render terrain mark decals
@@ -744,6 +810,16 @@ public:
     void pop_menu(bool restore_cvars = false);
     void hide_menu(const String &menu_name);
     bool is_menu_active() const;
+
+    struct FrameCvars {
+        int r_drawmarks = 1;
+        float s_volume = 1.0f;
+        float s_musicvolume = 0.5f;
+        float r_gamma = 1.0f;
+        int r_shadows = 0;
+        int r_dlight_shadows = 0;
+        int r_fastsky = 0;
+    } frame_cvars;
 };
 
 #endif

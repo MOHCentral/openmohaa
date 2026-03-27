@@ -976,6 +976,13 @@ static void parse_stage(char **text, GodotShaderProps *props, int stage_index,
                 stg->noDepthTest = true;
             }
         }
+        /* ── nofog — disable fog for this stage (mirrors tr_shader.c:881) ── */
+        else if (!Q_stricmp(token, "nofog"))
+        {
+            if (stg) {
+                stg->nofogKeyword = true;
+            }
+        }
         else if (!Q_stricmp(token, "ifCvar") || !Q_stricmp(token, "ifCvarnot"))
         {
             bool is_not = token[6] != 0;
@@ -1509,6 +1516,69 @@ void Godot_ShaderProps_Load() {
                     props.transparency = classify_blend_factors(bs, bd);
                 }
             }
+        }
+
+        /* ── Post-parse fog mode classification ──
+         * Mirrors FinishShader() in renderergl1/tr_shader.c lines 3223-3275.
+         * Each stage gets a fog mode based on its blend pattern:
+         *   - nofog keyword → STAGE_FOG_DISABLED
+         *   - Additive blends (ONE+ONE, ZERO+ONE_MINUS_SRC_COLOR, SRC_ALPHA+ONE,
+         *     DST_COLOR+ONE, ONE_MINUS_DST_COLOR+ONE) → STAGE_FOG_BLACK
+         *   - Filter/modulate blends (DST_COLOR+ZERO, ZERO+SRC_COLOR) → STAGE_FOG_WHITE
+         *   - Alpha blend, opaque, or anything else with blendFunc → STAGE_FOG_GLOBAL
+         *   - No blendFunc (opaque pass) → STAGE_FOG_GLOBAL
+         *   - nextBundle/multitexture stages → STAGE_FOG_DISABLED
+         */
+        {
+            bool all_nofog = true;
+            for (int si = 0; si < props.stage_count; si++) {
+                MohaaShaderStage *pStage = &props.stages[si];
+                if (!pStage->active) continue;
+
+                if (pStage->nofogKeyword) {
+                    pStage->fogMode = STAGE_FOG_DISABLED;
+                } else if (pStage->hasBlendFunc) {
+                    MohaaBlendFactor bSrc = pStage->blendSrc;
+                    MohaaBlendFactor bDst = pStage->blendDst;
+
+                    /* Additive patterns → fog to black */
+                    if ((bSrc == BLEND_ONE && bDst == BLEND_ONE)
+                        || (bSrc == BLEND_ZERO && bDst == BLEND_ONE_MINUS_SRC_COLOR)
+                        || (bSrc == BLEND_SRC_ALPHA && bDst == BLEND_ONE)
+                        || (bSrc == BLEND_DST_COLOR && bDst == BLEND_ONE)
+                        || (bSrc == BLEND_ONE_MINUS_DST_COLOR && bDst == BLEND_ONE))
+                    {
+                        pStage->fogMode = STAGE_FOG_BLACK;
+                    }
+                    /* Filter/modulate patterns → fog to white */
+                    else if ((bSrc == BLEND_DST_COLOR && bDst == BLEND_ZERO)
+                             || (bSrc == BLEND_ZERO && bDst == BLEND_SRC_COLOR))
+                    {
+                        pStage->fogMode = STAGE_FOG_WHITE;
+                    }
+                    /* Alpha blend and others → global fog colour */
+                    else {
+                        pStage->fogMode = STAGE_FOG_GLOBAL;
+                    }
+                } else {
+                    /* No blendFunc (opaque pass) → global fog colour */
+                    pStage->fogMode = STAGE_FOG_GLOBAL;
+                }
+
+                /* Multitexture (nextBundle) stages: fog is disabled
+                 * (mirrors tr_shader.c: pStage->stateBits &= ~GLS_FOG_ENABLED
+                 * when GLS_MULTITEXTURE_ENV is set).  In our system,
+                 * hasNextBundleLightmap means the stage was collapsed into a
+                 * single multi-texture pass — fog is handled by the combined
+                 * result, not the individual lightmap pass. */
+                if (pStage->hasNextBundleLightmap) {
+                    pStage->fogMode = STAGE_FOG_DISABLED;
+                }
+
+                if (pStage->fogMode != STAGE_FOG_DISABLED)
+                    all_nofog = false;
+            }
+            props.no_fog = all_nofog;
         }
 
         /* Lowercase the name for consistent lookup */

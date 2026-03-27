@@ -79,4 +79,25 @@ void Godot_Shader_ClearMaterialRegistry();
  */
 void Godot_Shader_SetShadowDarkness(float darkness);
 
+/*
+ * Set per-material fog parameters on every registered ShaderMaterial.
+ * These replace Godot's built-in fog with custom per-stage linear fog
+ * that matches OpenMOHAA's GL_LINEAR fog behaviour.
+ *
+ * Parameters match the engine's RB_SetupFog():
+ *   r, g, b  — global fog colour (0..1, already scaled by identityLight)
+ *   start    — fog start distance in Godot units (farplane_bias * MOHAA_UNIT_SCALE)
+ *   end      — fog end distance in Godot units (farplane_distance * MOHAA_UNIT_SCALE)
+ *
+ * Call from MoHAARunner's fog setup section whenever fog parameters change.
+ */
+void Godot_Shader_SetFogParams(float r, float g, float b, float start, float end);
+
+/*
+ * Enable or disable the custom per-material fog on all registered ShaderMaterials.
+ * When disabled, materials render without any fog mixing (equivalent to r_farplane 0).
+ * Call from MoHAARunner when fog is enabled/disabled.
+ */
+void Godot_Shader_SetFogEnabled(bool enabled);
+
 #endif /* GODOT_SHADER_MATERIAL_H */

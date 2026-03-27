@@ -2577,9 +2577,13 @@ void Com_Frame( void ) {
 #ifdef GODOT_GDEXTENSION
 	// Under Godot, input is injected directly via godot_input_bridge and
 	// local S->C packets are delivered in-process.  Skip the redundant
-	// second event loop pass; Cbuf_Execute already ran above.
+	// second event loop pass, but still execute the command buffer to
+	// decrement 'wait' command timers.
 	if ( com_speeds->integer ) {
 		timeBeforeEvents = Sys_Milliseconds ();
+	}
+	if (CL_FinishedIntro()) {
+		Cbuf_Execute(msec);
 	}
 #else
 	//

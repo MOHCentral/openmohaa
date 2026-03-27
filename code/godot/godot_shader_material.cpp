@@ -192,6 +192,16 @@ static bool needs_v_pos(const GodotShaderProps *props) {
     return false;
 }
 
+/* Returns true if any stage needs custom fog (i.e. not all STAGE_FOG_DISABLED) */
+static bool needs_fog(const GodotShaderProps *props) {
+    if (props->no_fog) return false;
+    for (int i = 0; i < props->stage_count; i++) {
+        if (!props->stages[i].active) continue;
+        if (props->stages[i].fogMode != STAGE_FOG_DISABLED) return true;
+    }
+    return false;
+}
+
 /* ===================================================================
  *  Shader code generation
  * ================================================================ */
@@ -218,6 +228,7 @@ static std::string make_cache_key(const GodotShaderProps *props) {
         key += "cl" + std::to_string(s->isClampMap);
         key += "lm" + std::to_string(s->isLightmap);
         key += "nb" + std::to_string(s->hasNextBundleLightmap);
+        key += "fm" + std::to_string(s->fogMode);
         if (s->rgbGen == STAGE_RGBGEN_WAVE) {
             key += "rw" + ftos(s->rgbWave.base) + "," + ftos(s->rgbWave.amplitude) +
                    "," + ftos(s->rgbWave.phase) + "," + ftos(s->rgbWave.frequency) +
@@ -744,6 +755,14 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
     std::string render_mode;
     render_mode += "ambient_light_disabled";
 
+    /* Opt out of Godot's built-in fog pipeline entirely.  We implement
+     * our own GL_LINEAR fog per-stage with per-stage fog colour overrides
+     * (black for additive, white for filter, global for standard) to
+     * match OpenMOHAA's renderer behaviour.  Without this, Godot would
+     * blend all materials toward a single global fog colour which is
+     * wrong for additive/filter blend modes. */
+    render_mode += ", fog_disabled";
+
     switch (props->transparency) {
         case SHADER_ADDITIVE:
             if (!render_mode.empty()) render_mode += ", ";
@@ -856,6 +875,17 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
      * Set to 0.5 from MoHAARunner when r_shadows >= 1 to darken BSP floors in shadow. */
     code += "uniform float bsp_shadow_darkness = 0.0;\n";
 
+    /* Custom per-stage fog uniforms (replaces Godot's built-in fog).
+     * fog_color = global fog colour from the engine's farplane settings.
+     * fog_start/fog_end = GL_LINEAR fog range in Godot view-space units.
+     * fog_enabled = master switch from MoHAARunner. */
+    if (needs_fog(props)) {
+        code += "uniform vec3 fog_color = vec3(0.5);\n";
+        code += "uniform float fog_start = 0.0;\n";
+        code += "uniform float fog_end = 100.0;\n";
+        code += "uniform bool fog_enabled = false;\n";
+    }
+
     if (needs_tcmod(props)) {
         code += "uniform vec2 entity_tcmod_scroll = vec2(0.0, 0.0);\n";
         code += "uniform vec2 entity_tcmod_offset = vec2(0.0, 0.0);\n";
@@ -911,6 +941,50 @@ String Godot_Shader_GenerateCode(const GodotShaderProps *props) {
         /* Alpha test per stage */
         if (s->hasAlphaFunc) {
             code += "    if (s" + si + ".a < " + ftos(s->alphaFuncThreshold) + ") discard;\n";
+        }
+    }
+
+    /* Per-stage fog: compute fog factor once (shared by all stages).
+     * This matches OpenMOHAA's GL_LINEAR fog: fogFactor = (end - dist) / (end - start).
+     * fogFactor = 1.0 at fog_start (no fog), 0.0 at fog_end (full fog). */
+    bool shader_needs_fog = needs_fog(props);
+    if (shader_needs_fog) {
+        code += "\n    // Per-stage fog (OpenMOHAA GL_LINEAR parity)\n";
+        code += "    float fog_depth = length(VERTEX);\n";
+        code += "    float fog_factor = 1.0;\n";
+        code += "    if (fog_enabled) {\n";
+        code += "        fog_factor = clamp((fog_end - fog_depth) / max(fog_end - fog_start, 0.001), 0.0, 1.0);\n";
+        code += "    }\n";
+    }
+
+    /* Apply per-stage fog BEFORE compositing — mirrors engine behaviour
+     * where each stage is individually fogged before being blended into
+     * the framebuffer.  The fog colour depends on the stage's blend mode:
+     *   STAGE_FOG_BLACK    → mix toward (0,0,0)  [additive fades to nothing]
+     *   STAGE_FOG_WHITE    → mix toward (1,1,1)  [filter fades to identity]
+     *   STAGE_FOG_GLOBAL   → mix toward fog_color [standard fog]
+     *   STAGE_FOG_DISABLED → no fog applied */
+    if (shader_needs_fog) {
+        for (int i = 0; i < props->stage_count; i++) {
+            const MohaaShaderStage *s = &props->stages[i];
+            if (!s->active) continue;
+            if (s->fogMode == STAGE_FOG_DISABLED) continue;
+            std::string si = std::to_string(i);
+
+            code += "    if (fog_enabled) {\n";
+            switch (s->fogMode) {
+                case STAGE_FOG_BLACK:
+                    code += "        s" + si + ".rgb = mix(vec3(0.0), s" + si + ".rgb, fog_factor);\n";
+                    break;
+                case STAGE_FOG_WHITE:
+                    code += "        s" + si + ".rgb = mix(vec3(1.0), s" + si + ".rgb, fog_factor);\n";
+                    break;
+                case STAGE_FOG_GLOBAL:
+                default:
+                    code += "        s" + si + ".rgb = mix(fog_color, s" + si + ".rgb, fog_factor);\n";
+                    break;
+            }
+            code += "    }\n";
         }
     }
 
@@ -1078,6 +1152,29 @@ void Godot_Shader_SetShadowDarkness(float darkness) {
     for (auto &mat : *s_mat_registry) {
         if (mat.is_valid()) {
             mat->set_shader_parameter("bsp_shadow_darkness", darkness);
+        }
+    }
+}
+
+/* Set per-material fog parameters on every registered ShaderMaterial.
+ * Called from MoHAARunner whenever the engine's farplane fog settings change.
+ * Only materials that have the fog_color uniform (i.e. those with at least
+ * one non-DISABLED fog stage) will be affected — the shader_parameter()
+ * call is a no-op for materials that lack the uniform. */
+void Godot_Shader_SetFogParams(float r, float g, float b, float start, float end) {
+    for (auto &mat : *s_mat_registry) {
+        if (mat.is_valid()) {
+            mat->set_shader_parameter("fog_color", godot::Vector3(r, g, b));
+            mat->set_shader_parameter("fog_start", start);
+            mat->set_shader_parameter("fog_end", end);
+        }
+    }
+}
+
+void Godot_Shader_SetFogEnabled(bool enabled) {
+    for (auto &mat : *s_mat_registry) {
+        if (mat.is_valid()) {
+            mat->set_shader_parameter("fog_enabled", enabled);
         }
     }
 }

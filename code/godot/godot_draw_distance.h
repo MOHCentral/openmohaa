@@ -44,6 +44,12 @@ void Godot_DrawDistance_Update(godot::Camera3D *camera,
  */
 float Godot_DrawDistance_GetCullDistance(void);
 
+/*
+ * Godot_DrawDistance_Reset — reset all cached state on map change.
+ * Ensures stale near/far/cull values from a previous map don't persist.
+ */
+void Godot_DrawDistance_Reset(void);
+
 #endif /* __cplusplus */
 
 /* ── C accessors (godot_draw_distance_accessors.c) ── */

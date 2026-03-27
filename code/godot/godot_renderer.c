@@ -397,6 +397,7 @@ static float   gr_farplane_distance = 0.0f;
 static float   gr_farplane_bias     = 0.0f;
 static float   gr_farplane_color[3] = { 0.0f, 0.0f, 0.0f };
 static qboolean gr_farplane_cull    = qfalse;
+static qboolean gr_skybox_farplane  = qfalse;
 static qboolean gr_renderTerrain    = qtrue;
 static qboolean gr_hasNewFrame     = qfalse;
 static int     gr_frameCount       = 0;
@@ -1275,7 +1276,63 @@ static void GR_RenderScene( const refdef_t *fd )
     gr_farplane_bias = fd->farplane_bias;
     VectorCopy( fd->farplane_color, gr_farplane_color );
     gr_farplane_cull = fd->farplane_cull;
+    gr_skybox_farplane = fd->skybox_farplane;
     gr_renderTerrain = fd->renderTerrain;
+
+    /*
+     * Replicate the farclipOverride logic from RE_RenderScene()
+     * (tr_scene.c L599–645).  This post-processes the raw refdef
+     * values into the final fog parameters that the real renderer
+     * would use.
+     */
+    {
+        int farclip = 0;
+
+        if (fd->farclipOverride >= 15900.0f || fd->farclipOverride <= -0.99f) {
+            farclip = 0;
+        } else {
+            cvar_t *r_farclip_cv  = ri.Cvar_Get("r_farclip", "0", 0);
+            cvar_t *r_picmip_cv   = ri.Cvar_Get("r_picmip", "0", 0);
+            cvar_t *r_colorbits_cv = ri.Cvar_Get("r_colorbits", "0", 0);
+            farclip = r_farclip_cv->integer;
+            if (!farclip && (r_picmip_cv->integer > 1 || r_colorbits_cv->integer == 16)) {
+                farclip = 2800;
+            }
+        }
+
+        if (farclip) {
+            if (fd->farclipOverride != 0.0f) {
+                gr_farplane_distance = fd->farclipOverride;
+            } else {
+                gr_farplane_distance = (float)farclip;
+            }
+
+            if (fd->farplane_color[0] >= 0.0f && fd->farplane_color[1] >= 0.0f && fd->farplane_color[2] >= 0.0f) {
+                VectorCopy(fd->farplane_color, gr_farplane_color);
+            }
+
+            if (fd->farplaneColorOverride[0] >= 0.0f && fd->farplaneColorOverride[1] >= 0.0f && fd->farplaneColorOverride[2] >= 0.0f) {
+                VectorCopy(fd->farplaneColorOverride, gr_farplane_color);
+            }
+
+            gr_farplane_cull = qtrue;
+
+            if (fd->farplane_distance > 0.0f && fd->farplane_distance < gr_farplane_distance) {
+                gr_farplane_distance = fd->farplane_distance;
+            } else {
+                if (fd->farplane_bias == 0.0f) {
+                    gr_farplane_bias = gr_farplane_distance * 0.18f;
+                } else if (fd->farplane_distance <= 500.0f) {
+                    gr_farplane_bias = gr_farplane_distance * 0.18f;
+                } else {
+                    gr_farplane_bias = gr_farplane_distance / fd->farplane_distance;
+                }
+            }
+        } else if (gr_farplane_bias == 0.0f) {
+            /* Default bias auto-calculation when no farclip override */
+            gr_farplane_bias = gr_farplane_distance * 0.18f;
+        }
+    }
 
     /* Set up the real renderer's backend view params so that
      * Godot_ComputeSpriteQuad() (and future engine pipeline
@@ -3040,6 +3097,11 @@ void Godot_Renderer_GetFarplane( float *distance, float *bias, float *color, int
     if ( cull ) *cull = (int)gr_farplane_cull;
 }
 
+int Godot_Renderer_GetSkyboxFarplane( void )
+{
+    return (int)gr_skybox_farplane;
+}
+
 /* Also expose the world map path so MoHAARunner knows what BSP to load */
 
 const char *Godot_Renderer_GetWorldMapName( void )
@@ -3383,6 +3445,19 @@ int Godot_Renderer_GetPoly( int index,
 int Godot_Renderer_Get2DCmdCount( void )
 {
     return gr_num2DCmds;
+}
+
+uint64_t Godot_Renderer_Get2DCmdHash( void )
+{
+    uint64_t hash = 14695981039346656037ULL;
+    const unsigned char *b = (const unsigned char *)gr_2d_cmds;
+    size_t n = gr_num2DCmds * sizeof(gr_2d_cmd_t);
+    size_t i;
+    for ( i = 0; i < n; i++ ) {
+        hash ^= b[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 }
 
 int Godot_Renderer_Get2DCmd( int index,
