@@ -2429,7 +2429,21 @@ void Com_Frame( void ) {
 	timeAfter = 0;
 
 	// write config file if anything changed
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, defer config writes to reduce per-frame disk I/O.
+	// Write at most every 300 frames (~5 sec at 60 FPS).
+	{
+		static int config_write_countdown = 0;
+		if (cvar_modifiedFlags & CVAR_ARCHIVE) {
+			if (++config_write_countdown >= 300) {
+				config_write_countdown = 0;
+				Com_WriteConfiguration();
+			}
+		}
+	}
+#else
 	Com_WriteConfiguration();
+#endif
 
 	//
 	// main event loop
@@ -2439,6 +2453,10 @@ void Com_Frame( void ) {
 	}
 
     // Figure out how much time we have
+#ifdef GODOT_GDEXTENSION
+    // Godot drives frame timing; skip FPS cap computation entirely.
+    minMsec = 1;
+#else
     if (!com_timedemo->integer)
     {
         if (com_dedicated->integer)
@@ -2467,6 +2485,7 @@ void Com_Frame( void ) {
     }
     else
         minMsec = 1;
+#endif
 
     do
     {
@@ -2555,6 +2574,14 @@ void Com_Frame( void ) {
 	//
 	// client system
 	//
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, input is injected directly via godot_input_bridge and
+	// local S->C packets are delivered in-process.  Skip the redundant
+	// second event loop pass; Cbuf_Execute already ran above.
+	if ( com_speeds->integer ) {
+		timeBeforeEvents = Sys_Milliseconds ();
+	}
+#else
 	//
 	// run event loop a second time to get server to client packets
 	// without a frame of latency
@@ -2566,6 +2593,7 @@ void Com_Frame( void ) {
 	if (CL_FinishedIntro()) {
 		Cbuf_Execute(msec);
 	}
+#endif
 
 
 	//
