@@ -146,7 +146,7 @@ extern "C" {
     void Godot_InjectMouseMotion(int dx, int dy);
     void Godot_InjectMouseButton(int godot_button, int down);
     void Godot_InjectMousePosition(int x, int y);
-    void Godot_ResetMousePosition(void);
+    void Godot_ResetMousePosition(int x, int y);
 
  // Renderer / camera bridge — from godot_renderer.c
     int  Godot_Renderer_HasNewFrame(void);
@@ -437,7 +437,7 @@ extern "C" {
 #endif
 
  // Mouse reset — from godot_input_bridge.c
-    void  Godot_ResetMousePosition(void);
+    void  Godot_ResetMousePosition(int x, int y);
 
     // Cursor image accessor — from stubs.cpp
     int   Godot_GetPendingCursorImage(const unsigned char **out_pixels, int *out_w, int *out_h);
@@ -9242,7 +9242,22 @@ void MoHAARunner::_process(double delta) {
                     input->set_mouse_mode(Input::MOUSE_MODE_VISIBLE);
                 }
             }
-            Godot_ResetMousePosition();
+            /* When entering an overlay, initialize the bridge tracking
+               with the current Godot mouse position. */
+            if (!should_capture) {
+                Vector2 pos = get_viewport()->get_mouse_position();
+                float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
+                float sy = (ui_scale_y > 0.0001f) ? ui_scale_y : 1.0f;
+                int ex = (int)((pos.x - ui_offset_x) / sx);
+                int ey = (int)((pos.y - ui_offset_y) / sy);
+                
+                Godot_Client_SetMousePos(ex, ey);
+                Godot_ResetMousePosition(ex, ey);
+            } else {
+                // Return to game mode — tracking will re-init on next menu open
+                // (x, y) are ignored here but let's pass (0, 0).
+                Godot_ResetMousePosition(0, 0);
+            }
         }
 #ifdef __EMSCRIPTEN__
         // On web, the browser can release pointer lock asynchronously
@@ -10641,7 +10656,12 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
             if (ey < 0) ey = 0;
             if (ex >= ui_vid_w) ex = ui_vid_w - 1;
             if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-            Godot_Client_SetMousePos(ex, ey);
+            /* DO NOT call Godot_Client_SetMousePos(ex, ey) here!
+               Godot_InjectMousePosition(ex, ey) sends an SE_MOUSE event,
+               and the engine's CL_MouseEvent() will update cl.mousex/cl.mousey
+               from the injected delta.  Setting them directly here as well
+               causes a "double update" and cursor desync. */
+            Godot_InjectMousePosition(ex, ey);
         }
 
         Viewport *vp = get_viewport();
@@ -10665,7 +10685,9 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
             if (ey < 0) ey = 0;
             if (ex >= ui_vid_w) ex = ui_vid_w - 1;
             if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-            Godot_Client_SetMousePos(ex, ey);
+            /* Same as above — only inject the event to avoid "double update"
+               when the engine processes the resulting SE_MOUSE. */
+            Godot_InjectMousePosition(ex, ey);
         }
 
         if (godot_button >= 1 && godot_button <= 3) {

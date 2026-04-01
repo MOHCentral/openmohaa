@@ -308,11 +308,14 @@ void Godot_InjectMousePosition(int x, int y)
 
 /*
  * Godot_ResetMousePosition — reset the absolute mouse tracking state.
- *   Call when switching between UI and game input modes.
+ *   Call when switching to UI mode to initialize the starting position.
+ *
+ *   @param x  Initial horizontal position
+ *   @param y  Initial vertical position
  */
-void Godot_ResetMousePosition(void)
+void Godot_ResetMousePosition(int x, int y)
 {
-    s_absInitialized = 0;
-    s_lastAbsX = 0;
-    s_lastAbsY = 0;
+    s_lastAbsX = x;
+    s_lastAbsY = y;
+    s_absInitialized = 1;
 }
