@@ -314,6 +314,7 @@ private:
 #endif
 
 public:
+    MulticastDelegate<void(Event*)>              delegate_pain;
     MulticastDelegate<void(const str& text)> delegate_stufftext;
     MulticastDelegate<void()>                delegate_spawned;
 
@@ -369,6 +370,10 @@ public:
     bool              m_bConnected;
     str               m_lastcommand;
 
+    // For event hooks
+    int  old_pm_flags;
+    bool wasOnGround;
+
     VoteUpload *voteUpload;
 
 #ifdef OPM_FEATURES
@@ -387,6 +392,13 @@ public:
 private:
     int m_iInstantMessageTime;
     int m_iTextChatTime;
+    
+    // Distance tracking for player statistics
+    float m_fDistanceWalked;
+    float m_fDistanceSprinted;
+    float m_fDistanceSwam;
+    float m_fDistanceDriven;
+    float m_fLastDistanceEvent; // Last distance at which player_distance event fired
 
 public:
     qboolean CondTrue(Conditional& condition);
