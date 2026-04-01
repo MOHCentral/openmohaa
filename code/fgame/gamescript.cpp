@@ -30,6 +30,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptclass.h"
 #include "scriptexception.h"
 #include "level.h"
+#include "dapserver.h"
 
 static unsigned char *current_progBuffer = NULL;
 
@@ -699,10 +700,14 @@ void GameScript::Close(void)
 
     m_CatchBlocks.FreeObjectList();
 
+    // DON'T delete source maps - needed for debugging!
+    // The source maps are small and we need them for DAP breakpoints
+    /*
     if (m_ProgToSource) {
         delete m_ProgToSource;
         m_ProgToSource = NULL;
     }
+    */
 
     if (m_ProgBuffer) {
         gi.Free(m_ProgBuffer);
@@ -762,6 +767,10 @@ void GameScript::Load(const void *sourceBuffer, size_t sourceLength)
     requiredStackSize = Compiler.m_iInternalMaxVarStackOffset + 9 * Compiler.m_iMaxExternalVarStackOffset + 1;
 
     successCompile = true;
+    
+    // Notify DAP server that this script has been successfully compiled
+    // This allows pending breakpoints to be verified against this script
+    g_DAPServer.OnScriptLoaded(this);
 }
 
 bool GameScript::GetCodePos(unsigned char *codePos, str& filename, int& pos)
@@ -869,6 +878,23 @@ bool GameScript::ScriptCheck(void)
         }
     }
     return false;
+}
+
+const char* GameScript::GetLocalVarName(unsigned char* codePos, int stackOffset)
+{
+    // Search debug symbol table for matching variable
+    for (int i = 1; i <= m_DebugLocalVars.NumObjects(); i++) {
+        const DebugLocalVar& var = m_DebugLocalVars.ObjectAt(i);
+        
+        if (var.stackOffset == stackOffset) {
+            // Check if codePos is within the variable's scope
+            if (codePos >= var.startPos && (var.endPos == nullptr || codePos < var.endPos)) {
+                return Director.GetString(var.name);
+            }
+        }
+    }
+    
+    return nullptr; // Not found
 }
 
 ScriptThreadLabel::ScriptThreadLabel()
