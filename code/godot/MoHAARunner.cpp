@@ -1647,6 +1647,7 @@ void MoHAARunner::check_world_load() {
         loaded_bsp_name = new_bsp;
         pvs_current_cluster = -1;  // Force PVS recalculation for new map
         pvs_log_count = 0;
+        terrain_vis_valid = false;  // Force terrain visibility recalculation
 
         // Cache BSP MeshInstance3D children for fast iteration (avoids per-frame get_child() overhead)
         bsp_mesh_children.clear();
@@ -1956,8 +1957,24 @@ void MoHAARunner::update_terrain_visibility() {
 
     // Run the engine's terrain marking pipeline:
     // R_SetupFrustum → R_MarkLeaves → R_TerrainPrepareFrame → R_TerrainOnlyWorldNode
-    R_MarkTerrainForGodot(origin, axis, fov_x, fov_y, farplane_dist);
-    Godot_Terrain_TessellateForGodot();
+    // Skip if the camera position, axis, FOV, and farplane haven't changed since last frame.
+    bool terrain_cam_changed = !terrain_vis_valid ||
+        origin[0] != terrain_last_origin[0] || origin[1] != terrain_last_origin[1] || origin[2] != terrain_last_origin[2] ||
+        fov_x != terrain_last_fov_x || fov_y != terrain_last_fov_y ||
+        farplane_dist != terrain_last_farplane ||
+        memcmp(axis_flat, terrain_last_axis, sizeof(terrain_last_axis)) != 0;
+
+    if (terrain_cam_changed) {
+        R_MarkTerrainForGodot(origin, axis, fov_x, fov_y, farplane_dist);
+        Godot_Terrain_TessellateForGodot();
+
+        terrain_last_origin[0] = origin[0]; terrain_last_origin[1] = origin[1]; terrain_last_origin[2] = origin[2];
+        memcpy(terrain_last_axis, axis_flat, sizeof(terrain_last_axis));
+        terrain_last_fov_x = fov_x;
+        terrain_last_fov_y = fov_y;
+        terrain_last_farplane = farplane_dist;
+        terrain_vis_valid = true;
+    }
 
     // Apply visibility results to Godot MeshInstance3D nodes
     for (int i = 0; i < tp_count; i++) {
@@ -3584,6 +3601,9 @@ void MoHAARunner::_preskin_entities(int ent_count) {
     int lodbias = Godot_Cvar_VariableIntegerValue("r_lodbias");
     preskin_lodbias_ = lodbias;  // Store for entity loop reuse
 
+    // O(1) entnum dedup set (replaces O(n) linear scan per entity)
+    std::unordered_set<int> preskin_entnums;
+
     for (int i = 0; i < ent_count; i++) {
         const EntityState &st = frame_entities[i];
         
@@ -3664,14 +3684,8 @@ void MoHAARunner::_preskin_entities(int ent_count) {
         // Parallel modifications of the same entNum's skeleton will cause a data race and heap corruption.
         // The first sub-model will skin in parallel; subsequent sub-models for this entNum will fall back
         // to the main thread's inline skinning loop (which is fast since the skeleton will already be evaluated).
-        bool entnum_exists = false;
-        for (const auto &existing_job : skin_jobs_) {
-            if (existing_job.entNum == entNum) {
-                entnum_exists = true;
-                break;
-            }
-        }
-        if (entnum_exists) continue;
+        if (preskin_entnums.count(entNum)) continue;
+        preskin_entnums.insert(entNum);
 
         // Cache miss — add to parallel job list
         SkinJob job;
@@ -3729,7 +3743,6 @@ void MoHAARunner::update_entities() {
         MeshInstance3D *mi = memnew(MeshInstance3D);
         mi->set_name(String("Entity_") + String::num_int64((int64_t)entity_meshes.size()));
         mi->set_visible(false);
-        mi->set_extra_cull_margin(4.0f);
         entity_root->add_child(mi);
         entity_meshes.push_back(mi);
     }
@@ -3986,11 +3999,15 @@ void MoHAARunner::update_entities() {
                 sp_it = s_sprite_mat_cache.find(spriteShader);
             }
 
-            // Apply texture per-frame to support RemapShader and animMap
+            // Apply texture per-frame to support RemapShader and animMap.
+            // Guard: only call set_texture() when the texture RID actually changed.
             if (spriteShader > 0) {
                 Ref<ImageTexture> tex = get_shader_texture(spriteShader);
                 if (tex.is_valid()) {
-                    sp_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    Ref<Texture2D> cur = sp_it->second->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+                    if (cur.is_null() || cur->get_rid() != tex->get_rid()) {
+                        sp_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    }
                 }
             }
 
@@ -4012,7 +4029,12 @@ void MoHAARunner::update_entities() {
                 if (stc_it != s_sprite_tint_cache.end()) {
                     if (spriteShader > 0) {
                         Ref<ImageTexture> tex = get_shader_texture(spriteShader);
-                        if (tex.is_valid()) stc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                        if (tex.is_valid()) {
+                            Ref<Texture2D> cur = stc_it->second->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+                            if (cur.is_null() || cur->get_rid() != tex->get_rid()) {
+                                stc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                            }
+                        }
                     }
                     mi->set_surface_override_material(0, stc_it->second);
                 } else {
@@ -4158,11 +4180,15 @@ void MoHAARunner::update_entities() {
                 bm_it = s_beam_mat_cache.find(beamShader);
             }
 
-            // Apply texture per-frame to support RemapShader and animMap
+            // Apply texture per-frame to support RemapShader and animMap.
+            // Guard: only call set_texture() when the texture RID changed.
             if (beamShader > 0) {
                 Ref<ImageTexture> tex = get_shader_texture(beamShader);
                 if (tex.is_valid()) {
-                    bm_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    Ref<Texture2D> cur = bm_it->second->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+                    if (cur.is_null() || cur->get_rid() != tex->get_rid()) {
+                        bm_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                    }
                 }
             }
 
@@ -4182,7 +4208,12 @@ void MoHAARunner::update_entities() {
                 if (btc_it != s_beam_tint_cache.end()) {
                     if (beamShader > 0) {
                         Ref<ImageTexture> tex = get_shader_texture(beamShader);
-                        if (tex.is_valid()) btc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                        if (tex.is_valid()) {
+                            Ref<Texture2D> cur = btc_it->second->get_texture(BaseMaterial3D::TEXTURE_ALBEDO);
+                            if (cur.is_null() || cur->get_rid() != tex->get_rid()) {
+                                btc_it->second->set_texture(BaseMaterial3D::TEXTURE_ALBEDO, tex);
+                            }
+                        }
                     }
                     mi->set_surface_override_material(0, btc_it->second);
                 } else {
@@ -5235,6 +5266,22 @@ void MoHAARunner::update_entities() {
 
     active_entity_count = ent_count;
 
+    // ── Weapon SubViewport power-saving ──
+    // Disable rendering when no first-person entities exist this frame.
+    if (weapon_viewport) {
+        int fp_count = 0;
+        if (weapon_root) {
+            fp_count = weapon_root->get_child_count();
+        }
+        if (fp_count != weapon_fp_entity_count) {
+            weapon_fp_entity_count = fp_count;
+            auto mode = (fp_count > 0) ? SubViewport::UPDATE_ALWAYS : SubViewport::UPDATE_DISABLED;
+            if (weapon_viewport->get_update_mode() != mode) {
+                weapon_viewport->set_update_mode(mode);
+            }
+        }
+    }
+
  // ── Entity parenting — DISABLED ──
     // CG_AttachEntity (in cgame) already computes world-space positions
     // for child entities before submitting them via R_AddRefEntityToScene.
@@ -5293,10 +5340,10 @@ void MoHAARunner::update_dlights() {
         }
         if (!dc.valid || dc.range != range_metres) {
             light->set_param(Light3D::PARAM_RANGE, range_metres);
-            light->set_param(Light3D::PARAM_ENERGY, 2.0);
             dc.range = range_metres;
         }
         if (!dc.valid) {
+            light->set_param(Light3D::PARAM_ENERGY, 2.0);
             light->set_shadow(cached_dlight_shadows == 1);
             dc.valid = true;
         }
@@ -6127,19 +6174,29 @@ void MoHAARunner::update_shadow_blobs() {
 
     // ── Batch ALL shadow blobs into a single mesh ──
     // All blobs share the same material, so one draw call suffices.
-    struct ShadowVert {
-        Vector3 pos;
-        Color col;
-    };
-    std::vector<ShadowVert> all_verts;
-    std::vector<int32_t> all_indices;
+    // Reuse member-level vectors to avoid per-frame heap allocations.
+    shadow_all_verts.clear();
+    shadow_all_indices.clear();
 
     for (int i = 0; i < ent_count; i++) {
-        float origin[3], axis[9], scale = 1.0f;
-        int renderfx = 0, hModel = 0, entityNumber = 0;
-        unsigned char rgba[4];
-        int reType = Godot_Renderer_GetEntity(i, origin, axis, &scale,
+        // Read from cached frame_entities[] to avoid re-calling the C bridge.
+        float origin[3], scale = 1.0f;
+        int renderfx = 0, hModel = 0;
+        int reType;
+        if (i < (int)frame_entities.size()) {
+            const EntityState &st = frame_entities[i];
+            reType = st.reType;
+            origin[0] = st.origin[0]; origin[1] = st.origin[1]; origin[2] = st.origin[2];
+            scale = st.scale;
+            hModel = st.hModel;
+            renderfx = st.renderfx;
+        } else {
+            float axis[9];
+            int entityNumber = 0;
+            unsigned char rgba[4];
+            reType = Godot_Renderer_GetEntity(i, origin, axis, &scale,
                                                &hModel, &entityNumber, rgba, &renderfx);
+        }
         if (reType != 0 || !(renderfx & RF_SHADOW) || (renderfx & RF_DONTDRAW))
             continue;
 
@@ -6182,31 +6239,29 @@ void MoHAARunner::update_shadow_blobs() {
         float alpha = fade * 0.5f;
         Color shadow_col(0.0f, 0.0f, 0.0f, alpha);
 
-        int base_vert = (int)all_verts.size();
-
         for (int f = 0; f < numFragments; f++) {
             int first = fragFirstPoint[f];
             int count = fragNumPoints[f];
-            int frag_base = (int)all_verts.size();
+            int frag_base = (int)shadow_all_verts.size();
 
             for (int v = 0; v < count; v++) {
                 float *pt = &pointBuffer[(first + v) * 3];
                 ShadowVert sv;
                 sv.pos = id_to_godot_position(pt[0], pt[1], pt[2] + SHADOW_Z_OFFSET);
                 sv.col = shadow_col;
-                all_verts.push_back(sv);
+                shadow_all_verts.push_back(sv);
             }
             for (int v = 1; v < count - 1; v++) {
-                all_indices.push_back(frag_base);
-                all_indices.push_back(frag_base + v);
-                all_indices.push_back(frag_base + v + 1);
+                shadow_all_indices.push_back(frag_base);
+                shadow_all_indices.push_back(frag_base + v);
+                shadow_all_indices.push_back(frag_base + v + 1);
             }
         }
     }
 
     MeshInstance3D *mi = shadow_blob_meshes[0];
 
-    if (all_indices.size() < 3) {
+    if (shadow_all_indices.size() < 3) {
         mi->set_visible(false);
         // Hide other pool meshes from old non-batched code
         for (int i = 1; i < (int)shadow_blob_meshes.size(); i++)
@@ -6215,30 +6270,27 @@ void MoHAARunner::update_shadow_blobs() {
         return;
     }
 
-    int nv = (int)all_verts.size();
-    int ni = (int)all_indices.size();
+    int nv = (int)shadow_all_verts.size();
+    int ni = (int)shadow_all_indices.size();
 
-    PackedVector3Array gPos;
-    PackedColorArray   gCol;
-    PackedInt32Array   gIdx;
-
-    gPos.resize(nv);
-    gCol.resize(nv);
-    gIdx.resize(ni);
+    // Reuse member-level PackedArrays to avoid per-frame heap alloc.
+    shadow_gPos.resize(nv);
+    shadow_gCol.resize(nv);
+    shadow_gIdx.resize(ni);
 
     for (int v = 0; v < nv; v++) {
-        gPos.set(v, all_verts[v].pos);
-        gCol.set(v, all_verts[v].col);
+        shadow_gPos.set(v, shadow_all_verts[v].pos);
+        shadow_gCol.set(v, shadow_all_verts[v].col);
     }
     for (int j = 0; j < ni; j++) {
-        gIdx.set(j, all_indices[j]);
+        shadow_gIdx.set(j, shadow_all_indices[j]);
     }
 
     Array arrays;
     arrays.resize(Mesh::ARRAY_MAX);
-    arrays[Mesh::ARRAY_VERTEX] = gPos;
-    arrays[Mesh::ARRAY_COLOR]  = gCol;
-    arrays[Mesh::ARRAY_INDEX]  = gIdx;
+    arrays[Mesh::ARRAY_VERTEX] = shadow_gPos;
+    arrays[Mesh::ARRAY_COLOR]  = shadow_gCol;
+    arrays[Mesh::ARRAY_INDEX]  = shadow_gIdx;
 
     Ref<ArrayMesh> smesh = mi->get_mesh();
     if (smesh.is_valid()) {
@@ -6867,19 +6919,46 @@ bool MoHAARunner::update_ui_transform() {
     if (new_vid_w < 1) new_vid_w = 640;
     if (new_vid_h < 1) new_vid_h = 480;
 
-    // Read the ACTUAL Godot canvas size — this is where canvas drawing
-    // physically happens, so it must be the target for our scale factor.
+    // Use content_scale_size as the primary viewport proxy.
+    //
+    // WHY: With CONTENT_SCALE_ASPECT_KEEP_HEIGHT the logical canvas width
+    // depends on the PHYSICAL window's aspect ratio.  When a vid_restart
+    // resizes the OS window (which is async on X11 / Wayland), the physical
+    // window can remain at the OLD size for several frames.  During those
+    // frames hud_control->get_size() returns a canvas width derived from the
+    // old window (e.g. 960 instead of 1280), producing ui_scale_x = 0.75
+    // and a squished / stretched shell menu.  If the grace period expires
+    // while the window is still transitioning, the delta-skip caches the
+    // wrong scale and the shell GUI stays visually wrong until the
+    // viewport-size change is detected.
+    //
+    // content_scale_size is set SYNCHRONOUSLY in the vid_restart handler to
+    // the exact engine resolution (vw × vh).  Because vid_restart also sets
+    // stored_glconfig.vidWidth = vw, the ratio viewport_size / ui_vid_w is
+    // always 1.0, eliminating the race entirely.
     Vector2 viewport_size(0, 0);
-    if (hud_control) {
-        viewport_size = hud_control->get_size();
+    {
+        Window *win = get_window();
+        if (win) {
+            Vector2i cs = win->get_content_scale_size();
+            if (cs.x > 0 && cs.y > 0) {
+                viewport_size = Vector2((float)cs.x, (float)cs.y);
+            }
+        }
+    }
+    // Fallback chain — content_scale not yet set (startup) or platform quirk.
+    if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
+        if (hud_control) {
+            viewport_size = hud_control->get_size();
+        }
     }
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
         Rect2 visible_rect = get_viewport()->get_visible_rect();
         viewport_size = visible_rect.size;
     }
     if (viewport_size.x < 1.0f || viewport_size.y < 1.0f) {
-        Vector2i win = DisplayServer::get_singleton()->window_get_size();
-        viewport_size = Vector2(win);
+        Vector2i winsz = DisplayServer::get_singleton()->window_get_size();
+        viewport_size = Vector2(winsz);
     }
 
     // Delta-skip: if viewport size and engine resolution haven't changed, keep cached values
@@ -9242,9 +9321,11 @@ void MoHAARunner::_process(double delta) {
                     input->set_mouse_mode(Input::MOUSE_MODE_VISIBLE);
                 }
             }
-            /* When entering an overlay, initialize the bridge tracking
+            /* When entering an overlay, ensure the UI transform is current,
+               then initialize the engine cursor and bridge tracking
                with the current Godot mouse position. */
             if (!should_capture) {
+                update_ui_transform();
                 Vector2 pos = get_viewport()->get_mouse_position();
                 float sx = (ui_scale_x > 0.0001f) ? ui_scale_x : 1.0f;
                 float sy = (ui_scale_y > 0.0001f) ? ui_scale_y : 1.0f;
@@ -9347,16 +9428,18 @@ void MoHAARunner::_process(double delta) {
             gamma_current = gamma;
         }
 
-        // Update gamma uniform when value changes
+        // Update gamma uniform when value changes.
+        // Cache visibility to avoid redundant set_visible() calls.
         if (gamma_canvas_layer) {
-            if (gamma == 1.0f) {
-                gamma_canvas_layer->set_visible(false);
-            } else {
-                gamma_canvas_layer->set_visible(true);
-                if (gamma != gamma_current) {
-                    gamma_material->set_shader_parameter("gamma_inv", 1.0f / gamma);
-                    gamma_current = gamma;
-                }
+            bool want_visible = (gamma != 1.0f);
+            if (!gamma_vis_valid || gamma_last_visible != want_visible) {
+                gamma_canvas_layer->set_visible(want_visible);
+                gamma_last_visible = want_visible;
+                gamma_vis_valid = true;
+            }
+            if (want_visible && gamma != gamma_current) {
+                gamma_material->set_shader_parameter("gamma_inv", 1.0f / gamma);
+                gamma_current = gamma;
             }
         }
 
@@ -9456,12 +9539,24 @@ void MoHAARunner::_process(double delta) {
                 Godot_Renderer_SetViewportSize(vw > 0 ? vw : 640,
                                                vh > 0 ? vh : 480);
 
+                /* Sync cls.glconfig.vidWidth/Height with the new engine
+                 * resolution BEFORE running UI_ResolutionChange.  This
+                 * ensures uid.vidWidth/Height (set by CL_FillUIDef) matches
+                 * the new viewport, so widget Realign/setFrame uses the
+                 * correct dimensions. */
+                Godot_Client_SyncGlConfigVidSize(vw > 0 ? vw : 640,
+                                                 vh > 0 ? vh : 480);
                 Godot_Client_ResolutionChange();
 
                 if (weapon_viewport && vw > 0 && vh > 0) {
                     weapon_viewport->set_size(Vector2i(vw, vh));
                 }
 
+                /* Reset viewport cache so update_ui_transform() recalculates
+                 * ui_scale_x/y on the very next frame. */
+                cached_vp_width = 0.0f;
+                cached_vp_height = 0.0f;
+                last_2d_cmd_hash = 0;
                 vid_restart_grace_frames = 3;
 
                 UtilityFunctions::print(String("[MoHAA] vid_restart (web): engine=") +
@@ -9523,6 +9618,13 @@ void MoHAARunner::_process(double delta) {
                     String(" window=") + String::num_int64(ds->window_get_size().x) +
                     String("x") + String::num_int64(ds->window_get_size().y));
 
+                /* Sync cls.glconfig.vidWidth/Height with the new engine
+                 * resolution BEFORE running UI_ResolutionChange.  This
+                 * ensures uid.vidWidth/Height (set by CL_FillUIDef) matches
+                 * the new viewport, so widget Realign/setFrame uses the
+                 * correct dimensions. */
+                Godot_Client_SyncGlConfigVidSize(vw > 0 ? vw : 640,
+                                                 vh > 0 ? vh : 480);
                 // Notify UI/cgame of resolution change.
                 Godot_Client_ResolutionChange();
 
@@ -9531,6 +9633,12 @@ void MoHAARunner::_process(double delta) {
                 if (weapon_viewport && vw > 0 && vh > 0) {
                     weapon_viewport->set_size(Vector2i(vw, vh));
                 }
+
+                /* Reset viewport cache so update_ui_transform() recalculates
+                 * ui_scale_x/y on the very next frame. */
+                cached_vp_width = 0.0f;
+                cached_vp_height = 0.0f;
+                last_2d_cmd_hash = 0;
 
                 // Brief grace period: VIEWPORT content_scale propagates
                 // within the same frame, but give 3 frames for safety.
@@ -10351,13 +10459,44 @@ void MoHAARunner::set_video_fullscreen(bool fullscreen) {
 }
 
 void MoHAARunner::set_video_resolution(int width, int height) {
+    if (width < 64 || height < 64) return;
     DisplayServer *ds = DisplayServer::get_singleton();
     if (!ds) return;
+
+    /* Resize OS window first so KEEP_HEIGHT chooses the right aspect. */
     ds->window_set_size(Vector2i(width, height));
 
+    /* Update content scale so the logical canvas matches immediately — no
+     * async-window-race for the shell GUI or HUD. */
+    Window *win = get_window();
+    if (win) {
+        win->set_content_scale_mode(Window::CONTENT_SCALE_MODE_VIEWPORT);
+        win->set_content_scale_size(Vector2i(width, height));
+        win->set_content_scale_aspect(Window::CONTENT_SCALE_ASPECT_KEEP_HEIGHT);
+    }
+
+    /* Sync the stub renderer's stored_glconfig so ui_vid_w/h are correct. */
+    Godot_Renderer_SetViewportSize(width, height);
+    Godot_Renderer_SyncVidSize(width, height);
+
+    /* Notify the engine's UI/cgame frameworks of the new resolution. */
+    Godot_Client_SyncGlConfigVidSize(width, height);
+    Godot_Client_ResolutionChange();
+
+    /* Resize weapon sub-viewport to match. */
 #ifdef HAS_WEAPON_VIEWPORT_MODULE
     Godot_WeaponViewport::get().resize(width, height);
+#else
+    if (weapon_viewport) {
+        weapon_viewport->set_size(Vector2i(width, height));
+    }
 #endif
+
+    /* Force full 2D/UI redraw next frame. */
+    cached_vp_width  = 0.0f;
+    cached_vp_height = 0.0f;
+    last_2d_cmd_hash = 0;
+    vid_restart_grace_frames = 3;
 }
 
 void MoHAARunner::set_network_rate(const godot::String &p_preset) {
@@ -10656,12 +10795,11 @@ void MoHAARunner::_input(const Ref<InputEvent> &p_event) {
             if (ey < 0) ey = 0;
             if (ex >= ui_vid_w) ex = ui_vid_w - 1;
             if (ey >= ui_vid_h) ey = ui_vid_h - 1;
-            /* DO NOT call Godot_Client_SetMousePos(ex, ey) here!
-               Godot_InjectMousePosition(ex, ey) sends an SE_MOUSE event,
-               and the engine's CL_MouseEvent() will update cl.mousex/cl.mousey
-               from the injected delta.  Setting them directly here as well
-               causes a "double update" and cursor desync. */
-            Godot_InjectMousePosition(ex, ey);
+            /* Overlays: Sync absolute position directly to avoid drift.
+               We also inject a zero-delta SE_MOUSE event to trigger the
+               engine's internal UI hover/update logic (uWinMan). */
+            Godot_Client_SetMousePos(ex, ey);
+            Godot_InjectMouseMotion(0, 0);
         }
 
         Viewport *vp = get_viewport();

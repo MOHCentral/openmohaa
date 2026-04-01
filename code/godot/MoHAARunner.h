@@ -340,6 +340,32 @@ private:
     int active_shadow_blob_count = 0;
     Ref<StandardMaterial3D> shadow_blob_material;      // Shared dark semi-transparent material
 
+    // Shadow blob reusable vertex/index buffers (avoid per-frame heap alloc)
+    struct ShadowVert {
+        Vector3 pos;
+        Color col;
+    };
+    std::vector<ShadowVert> shadow_all_verts;
+    std::vector<int32_t> shadow_all_indices;
+    PackedVector3Array shadow_gPos;
+    PackedColorArray   shadow_gCol;
+    PackedInt32Array   shadow_gIdx;
+
+    // Terrain visibility camera cache — skip recalculation when unchanged
+    float terrain_last_origin[3] = {0, 0, 0};
+    float terrain_last_axis[9] = {0};
+    float terrain_last_fov_x = 0.0f;
+    float terrain_last_fov_y = 0.0f;
+    float terrain_last_farplane = 0.0f;
+    bool terrain_vis_valid = false;
+
+    // Gamma overlay visibility cache
+    bool gamma_last_visible = false;
+    bool gamma_vis_valid = false;
+
+    // Weapon viewport FP entity tracking
+    int weapon_fp_entity_count = 0;
+
  // Shader animation tracking
     double shader_anim_time = 0.0;
 
