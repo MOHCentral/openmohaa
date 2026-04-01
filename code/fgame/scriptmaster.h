@@ -70,6 +70,7 @@ public:
     con_timer              timerList;  // waiting threads list
     con_arrayset<str, str> StringDict; // const strings (improve performance)
     int                    iPaused;    // num times paused
+    con_set<str, ScriptThreadLabel> m_scriptCmds; // custom commands registered via registercmd
 
 protected:
     static const char *ConstStrings[];
@@ -153,7 +154,6 @@ extern Event EV_ScriptThread_SightTrace;
 extern Event EV_ScriptThread_VisionSetNaked;
 extern Event EV_ScriptThread_CancelWaiting;
 
-extern con_set<str, ScriptThreadLabel> m_scriptCmds;
 extern ScriptMaster                    Director;
 
 typedef enum scriptedEvType_e {
