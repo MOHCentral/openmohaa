@@ -28,6 +28,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 
 static int			bloc = 0;
+static int			bloc_max = 0;
 
 void	Huff_putBit( int bit, byte *fout, int *offset) {
 	bloc = *offset;
@@ -70,6 +71,11 @@ static void add_bit (char bit, byte *fout) {
 /* Receive one bit from the input file (buffered) */
 static int get_bit (byte *fin) {
 	int t;
+
+	if (bloc >= bloc_max) {
+		return 0;
+	}
+
 	t = (fin[(bloc>>3)] >> (bloc&7)) & 0x1;
 	bloc++;
 	return t;
@@ -281,6 +287,7 @@ int Huff_Receive (node_t *node, int *ch, byte *fin) {
 /* Get a symbol */
 void Huff_offsetReceive (node_t *node, int *ch, byte *fin, int *offset, int maxoffset) {
 	bloc = *offset;
+	bloc_max = maxoffset;
 	while (node && node->symbol == INTERNAL_NODE) {
 		if (bloc >= maxoffset) {
 			*ch = 0;
@@ -369,15 +376,11 @@ void Huff_Decompress(msg_t *mbuf, int offset) {
 		cch = mbuf->maxsize - offset;
 	}
 	bloc = 16;
+	bloc_max = size * 8;
 
 	for ( j = 0; j < cch; j++ ) {
 		ch = 0;
 		// don't overflow reading from the messages
-		// FIXME: would it be better to have an overflow check in get_bit ?
-		if ( (bloc >> 3) > size ) {
-			seq[j] = 0;
-			break;
-		}
 		Huff_Receive(huff.tree, &ch, buffer);				/* Get a character */
 		if ( ch == NYT ) {								/* We got a NYT, get the symbol associated with it */
 			ch = 0;
