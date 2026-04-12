@@ -218,6 +218,9 @@ protected:
     firemode_t m_eCookModeIndex;
     qboolean   m_bSecondaryAmmoInHud;
 
+    int      m_iAttachToTagIndex;
+    dtiki_t *m_pAttachToTagTiki;
+
 public:
     //
     // Stats variables
@@ -632,6 +635,11 @@ inline void Weapon::Archive(Archiver& arc)
     arc.ArchiveFloat(&m_fCookTime);
     ArchiveEnum(m_eCookModeIndex, firemode_t);
     arc.ArchiveBoolean(&m_bSecondaryAmmoInHud);
+
+    if (arc.Loading()) {
+        m_iAttachToTagIndex = -1;
+        m_pAttachToTagTiki = NULL;
+    }
 }
 
 typedef SafePtr<Weapon> WeaponPtr;
