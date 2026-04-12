@@ -73,8 +73,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #endif
 
-con_set<str, ScriptThreadLabel> m_scriptCmds;
-
 str      vision_current;
 qboolean disable_team_change;
 qboolean disable_team_spectate;
