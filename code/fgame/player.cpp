@@ -54,11 +54,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "portableturret.h"
 #include "fixedturret.h"
 #include "clientvote.h"
+#include "g_scriptevents.h"
 
 const Vector power_color(0.0, 1.0, 0.0);
 const Vector acolor(1.0, 1.0, 1.0);
 const Vector bcolor(1.0, 0.0, 0.0);
 
+// These are existing and should keep. We should use them as baseline
 ScriptDelegate Player::scriptDelegate_connected("player_connected", "Sent once when the player connected");
 ScriptDelegate Player::scriptDelegate_disconnecting("player_disconnecting", "The player is disconnecting");
 ScriptDelegate Player::scriptDelegate_spawned("player_spawned", "The player has spawned");
@@ -2312,6 +2314,13 @@ void Player::InitStats(void)
     m_iNumHitsTaken        = 0;
     m_iNumEnemiesKilled    = 0;
     m_iNumObjectsDestroyed = 0;
+    
+    // Distance tracking
+    m_fDistanceWalked     = 0.0f;
+    m_fDistanceSprinted   = 0.0f;
+    m_fDistanceSwam       = 0.0f;
+    m_fDistanceDriven     = 0.0f;
+    m_fLastDistanceEvent  = 0.0f;
 }
 
 void Player::InitEdict(void)
@@ -3393,6 +3402,10 @@ void Player::Pain(Event *ev)
     pain_type     = (meansOfDeath_t)meansofdeath;
     pain_location = iLocation;
 
+    // HOOK: player_pain
+    // G_ScriptEvent("player_pain", this, attacker, damage, meansofdeath, iLocation);
+
+    delegate_pain.Execute(ev);
     // Only set the regular pain level if enough time since last pain has passed
     if (((level.time > nextpaintime) && take_pain) || IsDead()) {
         pain = damage;
@@ -4717,6 +4730,24 @@ void Player::Think(void)
 
     oldvelocity = velocity;
     old_v_angle = v_angle;
+
+    // Track distance traveled
+    if (!IsDead() && origin != oldorigin) {
+        Vector delta = origin - oldorigin;
+        float  dist  = delta.length();
+        
+        if (dist > 0.0f && dist < 500.0f) { // Sanity check to ignore teleports
+            m_fDistanceWalked += dist;
+            
+            // Fire distance event every 100 units
+            const float DISTANCE_EVENT_THRESHOLD = 100.0f;
+            
+            if (m_fDistanceWalked - m_fLastDistanceEvent >= DISTANCE_EVENT_THRESHOLD) {
+                G_ScriptEvent("player_distance", this, m_fDistanceWalked, dist);
+                m_fLastDistanceEvent = m_fDistanceWalked;
+            }
+        }
+    }
 
     if (g_gametype->integer == GT_SINGLE_PLAYER) {
         if ((server_new_buttons & BUTTON_ATTACKLEFT) && (!GetActiveWeapon(WEAPON_MAIN)) && !IsDead()
@@ -7948,6 +7979,9 @@ void Player::Jump(Event *ev)
 
         // Added in 2.0
         m_bHasJumped = true;
+
+        // Trigger player_jump event
+        G_ScriptEvent("player_jump", this, maxheight);
     }
 }
 
@@ -8435,12 +8469,14 @@ void Player::SetMovePosFlags(Event *ev)
 
     if (!sParm.icmp("crouching")) {
         m_iMovePosFlags = MPF_POSITION_CROUCHING;
+        G_ScriptEvent("player_crouch", this);
     } else if (!sParm.icmp("prone")) {
         m_iMovePosFlags = MPF_POSITION_PRONE;
     } else if (!sParm.icmp("offground")) {
         m_iMovePosFlags = MPF_POSITION_OFFGROUND;
     } else {
         m_iMovePosFlags = MPF_POSITION_STANDING;
+        G_ScriptEvent("player_stand", this);
     }
 
     if (ev->NumArgs() > 1) {
@@ -8553,10 +8589,17 @@ void Player::AttachToLadder(Event *ev)
     pLadder->PositionOnLadder(this);
 
     SetViewAngles(Vector(v_angle[0], angles[1], v_angle[2]));
+
+    G_ScriptEvent("ladder_mount", this, pLadder);
 }
 
 void Player::UnattachFromLadder(Event *ev)
 {
+    if (m_pLadder) {
+        // SafePtr::Pointer returns a Class*, so cast through the typed SafePtr
+        // to get an Entity* for the script event helper overload.
+        G_ScriptEvent("ladder_dismount", this, static_cast<Entity *>(m_pLadder));
+    }
     m_pLadder = NULL;
 }
 
@@ -10140,6 +10183,9 @@ void Player::CallVote(Event *ev)
         gi.setConfigstring(CS_VOTE_NO, va("%i", level.m_voteNo));
         gi.setConfigstring(CS_VOTE_UNDECIDED, va("%i", level.m_numVoters - (level.m_voteYes + level.m_voteNo)));
     }
+
+    // Trigger vote_start event
+    G_ScriptEvent("vote_start", this, level.m_voteName.c_str(), level.m_voteString.c_str());
 }
 
 void Player::Vote(Event *ev)
@@ -11001,7 +11047,7 @@ void Player::EventDMMessage(Event *ev)
             Event          event;
             ScriptVariable result;
             // sent to everyone (not a team)
-            event.AddString(pStartMessage);
+            event.AddString(sToken);
             event.AddInteger(false);
 
             result = scriptDelegate_textMessage.Trigger(this, event);
@@ -11077,7 +11123,7 @@ void Player::EventDMMessage(Event *ev)
             Event          event;
             ScriptVariable result;
             // sent to team
-            event.AddString(pStartMessage);
+            event.AddString(sToken);
             event.AddInteger(true);
 
             result = scriptDelegate_textMessage.Trigger(this, event);
