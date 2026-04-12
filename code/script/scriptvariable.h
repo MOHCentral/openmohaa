@@ -326,6 +326,7 @@ public:
 
     void ClearList(void);
     int  size() const;
+    con_set<short3, ScriptVariable>& getList() { return list; }
 
     ScriptVariable *GetOrCreateVariable(str name);
     ScriptVariable *GetOrCreateVariable(unsigned int name);
