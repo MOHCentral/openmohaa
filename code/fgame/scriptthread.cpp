@@ -46,6 +46,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "md5.h"
 
+#ifdef USE_MQTT
+#include "mqttworker.h"
+#endif
+
 #ifdef WIN32
 #    include <direct.h>
 #else
@@ -2122,6 +2126,71 @@ Event EV_ScriptThread_FS_OpenAppend
     EV_RETURN
 );
 
+#ifdef USE_MQTT
+Event EV_ScriptThread_MqttConnect
+(
+    "mqtt_connect",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Connects to an MQTT broker asynchronously.\n"
+    "Usage: mqtt_connect host port client_id callback\n"
+    "Callback receives (success, error_message)."
+);
+
+Event EV_ScriptThread_MqttDisconnect
+(
+    "mqtt_disconnect",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Disconnects from the MQTT broker.\n"
+    "Usage: mqtt_disconnect [callback]"
+);
+
+Event EV_ScriptThread_MqttPublish
+(
+    "mqtt_publish",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Publishes a message to an MQTT topic asynchronously.\n"
+    "Usage: mqtt_publish topic payload [qos] [callback]\n"
+    "QoS defaults to 0. Callback receives (success, error_message)."
+);
+
+Event EV_ScriptThread_MqttSubscribe
+(
+    "mqtt_subscribe",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Subscribes to an MQTT topic.\n"
+    "Usage: mqtt_subscribe topic message_callback [qos]\n"
+    "Message callback receives (topic, payload) for each message."
+);
+
+Event EV_ScriptThread_MqttUnsubscribe
+(
+    "mqtt_unsubscribe",
+    EV_DEFAULT,
+    "s",
+    "topic",
+    "Unsubscribes from an MQTT topic.\n"
+    "Usage: mqtt_unsubscribe topic"
+);
+
+Event EV_ScriptThread_MqttIsConnected
+(
+    "mqtt_is_connected",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Returns 1 if connected to an MQTT broker, 0 otherwise.",
+    EV_RETURN
+);
+#endif // USE_MQTT
+
 CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetCvar,                 &ScriptThread::Getcvar                 },
     {&EV_ScriptThread_GetRandomFloat,          &ScriptThread::GetRandomFloat          },
@@ -2357,6 +2426,14 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_FS_OpenRead,             &ScriptThread::FS_OpenRead             },
     {&EV_ScriptThread_FS_OpenWrite,            &ScriptThread::FS_OpenWrite            },
     {&EV_ScriptThread_FS_OpenAppend,           &ScriptThread::FS_OpenAppend           },
+#ifdef USE_MQTT
+    {&EV_ScriptThread_MqttConnect,             &ScriptThread::MqttConnect             },
+    {&EV_ScriptThread_MqttDisconnect,          &ScriptThread::MqttDisconnect          },
+    {&EV_ScriptThread_MqttPublish,             &ScriptThread::MqttPublish             },
+    {&EV_ScriptThread_MqttSubscribe,           &ScriptThread::MqttSubscribe           },
+    {&EV_ScriptThread_MqttUnsubscribe,         &ScriptThread::MqttUnsubscribe         },
+    {&EV_ScriptThread_MqttIsConnected,         &ScriptThread::MqttIsConnected         },
+#endif
     {NULL,                                     NULL                                   }
 };
 
@@ -7497,6 +7574,133 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
     file = new FSFile(f);
     ev->AddListener(file);
 }
+
+#ifdef USE_MQTT
+void ScriptThread::MqttConnect(Event *ev)
+{
+    if (ev->NumArgs() < 4) {
+        throw ScriptException("mqtt_connect requires 4 arguments: host port client_id callback");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_CONNECT;
+    task.host = ev->GetString(1).c_str();
+    task.port = ev->GetInteger(2);
+    task.clientId = ev->GetString(3).c_str();
+    task.callbackLabel = ev->GetString(4).c_str();
+    task.keepAlive = 60;
+
+    // Optional: username and password as 5th and 6th args
+    if (ev->NumArgs() >= 5) {
+        task.username = ev->GetString(5).c_str();
+    }
+    if (ev->NumArgs() >= 6) {
+        task.password = ev->GetString(6).c_str();
+    }
+    if (ev->NumArgs() >= 7) {
+        task.keepAlive = ev->GetInteger(7);
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttDisconnect(Event *ev)
+{
+    MqttTask task;
+    task.type = MQTT_TASK_DISCONNECT;
+
+    if (ev->NumArgs() >= 1) {
+        task.callbackLabel = ev->GetString(1).c_str();
+    }
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttPublish(Event *ev)
+{
+    if (ev->NumArgs() < 2) {
+        throw ScriptException("mqtt_publish requires at least 2 arguments: topic payload [qos] [callback]");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_PUBLISH;
+    task.topic = ev->GetString(1).c_str();
+    task.payload = ev->GetString(2).c_str();
+    task.qos = 0;
+    task.retain = false;
+
+    if (ev->NumArgs() >= 3) {
+        task.qos = ev->GetInteger(3);
+        if (task.qos < 0 || task.qos > 1) {
+            task.qos = 0;
+        }
+    }
+    if (ev->NumArgs() >= 4) {
+        task.callbackLabel = ev->GetString(4).c_str();
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttSubscribe(Event *ev)
+{
+    if (ev->NumArgs() < 2) {
+        throw ScriptException("mqtt_subscribe requires at least 2 arguments: topic message_callback [qos]");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_SUBSCRIBE;
+    task.topic = ev->GetString(1).c_str();
+    task.callbackLabel = ev->GetString(2).c_str();
+    task.qos = 0;
+
+    if (ev->NumArgs() >= 3) {
+        task.qos = ev->GetInteger(3);
+        if (task.qos < 0 || task.qos > 1) {
+            task.qos = 0;
+        }
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttUnsubscribe(Event *ev)
+{
+    if (ev->NumArgs() < 1) {
+        throw ScriptException("mqtt_unsubscribe requires 1 argument: topic");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_UNSUBSCRIBE;
+    task.topic = ev->GetString(1).c_str();
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttIsConnected(Event *ev)
+{
+    ev->AddInteger(g_MqttWorker.IsConnected() ? 1 : 0);
+}
+#endif // USE_MQTT
 
 CLASS_DECLARATION(Listener, OSFile, NULL) {
     {NULL, NULL}

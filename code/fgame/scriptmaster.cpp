@@ -34,6 +34,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptcompiler.h"
 #include "scriptexception.h"
 
+#ifdef USE_MQTT
+#include "mqttworker.h"
+#endif
+
 #ifdef WIN32
 #    include <direct.h>
 #else
@@ -411,6 +415,9 @@ const char *ScriptMaster::ConstStrings[] = {
 
 ScriptMaster::~ScriptMaster()
 {
+#ifdef USE_MQTT
+    g_MqttWorker.Stop();
+#endif
     Reset(false);
 }
 
@@ -734,6 +741,9 @@ ScriptThread *ScriptMaster::CreateScriptThread(ScriptClass *scriptClass, str lab
 
 ScriptMaster::ScriptMaster()
 {
+#ifdef USE_MQTT
+    g_MqttWorker.Start();
+#endif
 }
 
 void ScriptMaster::Reset(qboolean samemap)
@@ -775,6 +785,49 @@ void ScriptMaster::ExecuteRunning(void)
     int startMs;
     str fileName;
     str sourcePosString;
+
+#ifdef USE_MQTT
+    // Process MQTT Results
+    MqttResult mqttResult;
+    while (g_MqttWorker.GetResult(mqttResult)) {
+        if (!mqttResult.callbackLabel.empty()) {
+            str scriptName = mqttResult.sourceScript.empty() ? level.m_mapscript : str(mqttResult.sourceScript.c_str());
+            str label = mqttResult.callbackLabel.c_str();
+            GameScript *script = GetScript(scriptName);
+
+            const char *p = strstr(label.c_str(), "::");
+            if (p) {
+                scriptName = str(label.c_str(), p - label.c_str());
+                str labelPart = p + 2;
+                label = labelPart;
+                script = GetScript(scriptName);
+            }
+
+            if (script) {
+                ScriptThread *thread = CreateThread(script, label);
+                if (thread) {
+                    if (mqttResult.type == MQTT_RESULT_MESSAGE) {
+                        // Subscription message callback: (topic, payload)
+                        ScriptVariable *parms = new ScriptVariable[2];
+                        parms[0].setStringValue(mqttResult.topic.c_str());
+                        parms[1].setStringValue(mqttResult.payload.c_str());
+                        thread->Execute(parms, 2);
+                        delete[] parms;
+                    } else {
+                        // Connect/publish/subscribe callback: (success, error_message)
+                        ScriptVariable *parms = new ScriptVariable[2];
+                        parms[0].setIntValue(mqttResult.success ? 1 : 0);
+                        parms[1].setStringValue(mqttResult.errorMessage.c_str());
+                        thread->Execute(parms, 2);
+                        delete[] parms;
+                    }
+                }
+            } else {
+                gi.DPrintf("MQTT Callback Error: Could not load script '%s'\n", scriptName.c_str());
+            }
+        }
+    }
+#endif
 
     if (stackCount) {
         return;

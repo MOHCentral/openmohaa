@@ -356,6 +356,15 @@ public:
     void FS_OpenRead(Event *ev);
     void FS_OpenWrite(Event *ev);
     void FS_OpenAppend(Event *ev);
+
+#ifdef USE_MQTT
+    void MqttConnect(Event *ev);
+    void MqttDisconnect(Event *ev);
+    void MqttPublish(Event *ev);
+    void MqttSubscribe(Event *ev);
+    void MqttUnsubscribe(Event *ev);
+    void MqttIsConnected(Event *ev);
+#endif
 };
 
 class OSFile : public Listener
