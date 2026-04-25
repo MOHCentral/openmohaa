@@ -334,6 +334,11 @@ public:
     void StringBytesCopy(Event *ev);
     void Md5File(Event *ev);
     void Md5String(Event *ev);
+    void Md5String2(Event *ev);
+    void Sha256String(Event *ev);
+    void UuidString(Event *ev);
+    void MakeJson(Event *ev);
+    void FromJson(Event *ev);
     void RegisterEvent(Event *ev);
     void RestoreSound(Event *ev);
     void RemoveArchivedClass(Event *ev);
@@ -364,6 +369,15 @@ public:
     void MqttSubscribe(Event *ev);
     void MqttUnsubscribe(Event *ev);
     void MqttIsConnected(Event *ev);
+#endif
+
+#ifdef USE_HTTP
+    // ScriptThread wrappers that forward to ScriptMaster
+    void CurlGet(Event *ev);
+    void CurlPost(Event *ev);
+    void CurlCustom(Event *ev);
+    void CurlSetTimeout(Event *ev);
+    void NetUrlEncode(Event *ev);
 #endif
 };
 

@@ -42,6 +42,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "object.h"
 #include "../corepp/tiki.h"
 #include "weapturret.h"
+// #include "g_scriptevents.h"
+#include <algorithm>
+#include <cctype>
 
 Event EV_Sentient_ReloadWeapon
 (
@@ -562,8 +565,7 @@ Event EV_Sentient_GetForceDropWeapon
     EV_DEFAULT,
     NULL,
     NULL,
-    // Fixed in OPM
-    "Get if the sentient is forced to drop weapons no matter what level.nodropweapon is.",
+    "Get if the sentient is forced to drop health no matter what level.nodrophealth is.",
     EV_GETTER
 );
 
@@ -713,6 +715,7 @@ void Sentient::EventGiveDynItem(Event *ev)
 Sentient::Sentient()
     : mAccuracy(0.2f)
     , m_bIsAnimal(false)
+    , inventoryMapDirty(false)
 {
     SentientList.AddObject((Sentient *)this);
     entflags |= ECF_SENTIENT;
@@ -737,6 +740,7 @@ Sentient::Sentient()
     on_fire_tagnums[2]      = -1;
     attack_blocked_time     = 0;
     m_fHelmetSpeed          = 0;
+    m_iHelmetSurfaceIndex   = -1;
 
     inventory.ClearObjectList();
 
@@ -797,6 +801,8 @@ Sentient::Sentient()
     m_iThreatBias         = 0;
     m_bFootOnGround_Right = true;
     m_bFootOnGround_Left  = true;
+    m_iRightFootTag       = -2;
+    m_iLeftFootTag        = -2;
     iNextLandTime         = 0;
     m_bDontDropWeapons    = false;
 
@@ -913,6 +919,12 @@ void Sentient::SetBloodModel(Event *ev)
 void Sentient::AddItem(Item *object)
 {
     inventory.AddObject(object->entnum);
+
+    if (!inventoryMapDirty) {
+        std::string name = object->getName().c_str();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+        inventoryMap.insert({name, object->entnum});
+    }
 }
 
 void Sentient::RemoveItem(Item *object)
@@ -922,6 +934,20 @@ void Sentient::RemoveItem(Item *object)
     }
 
     inventory.RemoveObject(object->entnum);
+
+    if (!inventoryMapDirty) {
+        std::string name = object->getName().c_str();
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+
+        auto range = inventoryMap.equal_range(name);
+        for (auto it = range.first; it != range.second;) {
+            if (it->second == object->entnum) {
+                it = inventoryMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
 
     if (object->IsSubclassOfWeapon()) {
         DeactivateWeapon((Weapon *)object);
@@ -965,15 +991,18 @@ Weapon *Sentient::GetWeapon(int index)
 
 Item *Sentient::FindItemByExternalName(const char *itemname)
 {
-    int   num;
-    int   i;
-    Item *item;
+    if (inventoryMapDirty) {
+        RebuildInventoryMap();
+        inventoryMapDirty = false;
+    }
 
-    num = inventory.NumObjects();
-    for (i = 1; i <= num; i++) {
-        item = (Item *)G_GetEntity(inventory.ObjectAt(i));
-        assert(item);
-        if (!Q_stricmp(item->getName(), itemname)) {
+    std::string name = itemname;
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    auto range = inventoryMap.equal_range(name);
+    for (auto it = range.first; it != range.second; ++it) {
+        Item *item = (Item *)G_GetEntity(it->second);
+        if (item) {
             return item;
         }
     }
@@ -1054,6 +1083,8 @@ void Sentient::FreeInventory(void)
         item->Delete();
     }
     inventory.ClearObjectList();
+    inventoryMap.clear();
+    inventoryMapDirty = false;
 
     // Remove all ammo
     num = ammo_inventory.NumObjects();
@@ -2042,6 +2073,10 @@ void Sentient::setModel(const char *mdl)
     DetachAllActiveWeapons();
     Entity::setModel(mdl);
     AttachAllActiveWeapons();
+
+    UpdateHelmetSurfaceIndex();
+    m_iRightFootTag = -2;
+    m_iLeftFootTag  = -2;
 }
 
 void Sentient::TurnOffShadow(Event *ev)
@@ -2065,6 +2100,10 @@ void Sentient::Archive(Archiver& arc)
     arc.ArchiveSafePointer(&m_pPrevSquadMate);
 
     inventory.Archive(arc);
+    if (arc.Loading()) {
+        inventoryMapDirty = true;
+    }
+
     if (arc.Saving()) {
         num = ammo_inventory.NumObjects();
     } else {
@@ -2115,6 +2154,10 @@ void Sentient::Archive(Archiver& arc)
     arc.ArchiveString(&m_sHelmetTiki);
 
     arc.ArchiveFloat(&m_fHelmetSpeed);
+
+    if (arc.Loading()) {
+        UpdateHelmetSurfaceIndex();
+    }
 
     arc.ArchiveVector(&gunoffset);
     arc.ArchiveVector(&eyeposition);
@@ -2675,6 +2718,15 @@ void Sentient::SetDamageMult(Event *ev)
     m_fDamageMultipliers[index] = ev->GetFloat(2);
 }
 
+void Sentient::UpdateHelmetSurfaceIndex()
+{
+    if (m_sHelmetSurface1.length()) {
+        m_iHelmetSurfaceIndex = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
+    } else {
+        m_iHelmetSurfaceIndex = -1;
+    }
+}
+
 void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str sHelmetSurface1, str sHelmetSurface2)
 {
     m_sHelmetTiki     = sHelmetTiki;
@@ -2683,6 +2735,8 @@ void Sentient::SetupHelmet(str sHelmetTiki, float fSpeed, float fDamageMult, str
 
     m_fHelmetSpeed          = fSpeed;
     m_fDamageMultipliers[1] = fDamageMult;
+
+    UpdateHelmetSurfaceIndex();
 }
 
 void Sentient::EventSetupHelmet(Event *ev)
@@ -2702,16 +2756,11 @@ void Sentient::EventSetupHelmet(Event *ev)
 
 bool Sentient::WearingHelmet(void)
 {
-    if (!m_sHelmetSurface1.length()) {
+    if (m_iHelmetSurfaceIndex < 0) {
         return false;
     }
 
-    int iSurf = gi.Surface_NameToNum(edict->tiki, m_sHelmetSurface1);
-    if (iSurf >= 0) {
-        return (~edict->s.surfaces[iSurf] & MDL_SURFACE_NODRAW) != 0;
-    } else {
-        return false;
-    }
+    return (~edict->s.surfaces[m_iHelmetSurfaceIndex] & MDL_SURFACE_NODRAW) != 0;
 }
 
 void Sentient::EventPopHelmet(Event *ev)
@@ -2910,7 +2959,6 @@ void Sentient::UpdateFootsteps(void)
 {
     int iAnimNum;
     int iAnimFlags;
-    int iTagNum;
 
     iAnimFlags = 0;
 
@@ -2927,20 +2975,27 @@ void Sentient::UpdateFootsteps(void)
         return;
     }
 
+    if (m_iRightFootTag == -2) {
+        m_iRightFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
+    }
+
     if (m_bFootOnGround_Right) {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
-        if (iTagNum >= 0) {
-            m_bFootOnGround_Right = G_TIKI_IsOnGround(edict, iTagNum, 13.653847f);
+        if (m_iRightFootTag >= 0) {
+            m_bFootOnGround_Right = G_TIKI_IsOnGround(edict, m_iRightFootTag, 13.653847f);
         } else {
             m_bFootOnGround_Right = true;
         }
     } else {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
-        if (iTagNum >= 0) {
-            if (G_TIKI_IsOnGround(edict, iTagNum, 13.461539f)) {
+        if (m_iRightFootTag >= 0) {
+            if (G_TIKI_IsOnGround(edict, m_iRightFootTag, 13.461539f)) {
                 BroadcastAIEvent(AI_EVENT_FOOTSTEP, G_AIEventRadius(AI_EVENT_FOOTSTEP));
                 // simulate footstep sounds
-                Footstep("Bip01 L Foot", (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
+
+                if (m_iLeftFootTag == -2) {
+                    m_iLeftFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
+                }
+
+                Footstep(m_iLeftFootTag, (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
                 m_bFootOnGround_Right = true;
             }
         } else {
@@ -2948,20 +3003,27 @@ void Sentient::UpdateFootsteps(void)
         }
     }
 
+    if (m_iLeftFootTag == -2) {
+        m_iLeftFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
+    }
+
     if (m_bFootOnGround_Left) {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
-        if (iTagNum >= 0) {
-            m_bFootOnGround_Left = G_TIKI_IsOnGround(edict, iTagNum, 13.653847f);
+        if (m_iLeftFootTag >= 0) {
+            m_bFootOnGround_Left = G_TIKI_IsOnGround(edict, m_iLeftFootTag, 13.653847f);
         } else {
             m_bFootOnGround_Left = true;
         }
     } else {
-        iTagNum = gi.Tag_NumForName(edict->tiki, "Bip01 L Foot");
-        if (iTagNum >= 0) {
-            if (G_TIKI_IsOnGround(edict, iTagNum, 13.461539f)) {
+        if (m_iLeftFootTag >= 0) {
+            if (G_TIKI_IsOnGround(edict, m_iLeftFootTag, 13.461539f)) {
                 BroadcastAIEvent(AI_EVENT_FOOTSTEP, G_AIEventRadius(AI_EVENT_FOOTSTEP));
                 // simulate footstep sounds
-                Footstep("Bip01 R Foot", (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
+
+                if (m_iRightFootTag == -2) {
+                    m_iRightFootTag = gi.Tag_NumForName(edict->tiki, "Bip01 R Foot");
+                }
+
+                Footstep(m_iRightFootTag, (iAnimFlags & TAF_AUTOSTEPS_RUNNING), (iAnimFlags & TAF_AUTOSTEPS_EQUIPMENT));
                 m_bFootOnGround_Left = true;
             }
         } else {
@@ -3180,12 +3242,21 @@ void Sentient::FootstepMain(trace_t *trace, int iRunning, int iEquipment)
 
 void Sentient::Footstep(const char *szTagName, int iRunning, int iEquipment)
 {
+    int iTagNum = -1;
+
+    if (szTagName) {
+        iTagNum = gi.Tag_NumForName(this->edict->tiki, szTagName);
+    }
+
+    Footstep(iTagNum, iRunning, iEquipment);
+}
+
+void Sentient::Footstep(int iTagNum, int iRunning, int iEquipment)
+{
     int           i;
-    int           iTagNum;
     vec3_t        vStart, vEnd;
     vec3_t        midlegs;
     vec3_t        vMins, vMaxs;
-    str           sSoundName;
     trace_t       trace;
     orientation_t oTag;
 
@@ -3193,14 +3264,11 @@ void Sentient::Footstep(const char *szTagName, int iRunning, int iEquipment)
     VectorCopy(this->origin, vStart);
     vStart[2] += GROUND_DISTANCE;
 
-    if (szTagName) {
-        iTagNum = gi.Tag_NumForName(this->edict->tiki, szTagName);
-        if (iTagNum != -1) {
-            oTag = G_TIKI_Orientation(this->edict, iTagNum);
+    if (iTagNum >= 0) {
+        oTag = G_TIKI_Orientation(this->edict, iTagNum);
 
-            for (i = 0; i < 2; i++) {
-                VectorMA(vStart, oTag.origin[i], this->orientation[i], vStart);
-            }
+        for (i = 0; i < 2; i++) {
+            VectorMA(vStart, oTag.origin[i], this->orientation[i], vStart);
         }
     }
 
@@ -3342,4 +3410,43 @@ void Sentient::LandingSound(float volume, int iEquipment)
     if (iEquipment && random() < 0.5) {
         PlayNonPvsSound("snd_step_equipment", volume);
     }
+}
+
+void Sentient::RebuildInventoryMap()
+{
+    inventoryMap.clear();
+    int num = inventory.NumObjects();
+    for (int i = 1; i <= num; i++) {
+        Item *item = (Item *)G_GetEntity(inventory.ObjectAt(i));
+        if (item) {
+            std::string name = item->getName().c_str();
+            std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return std::tolower(c); });
+            inventoryMap.insert({name, item->entnum});
+        }
+    }
+}
+
+void Sentient::ItemNameChanged(Item *item, const char *oldName)
+{
+    if (inventoryMapDirty) {
+        return;
+    }
+
+    std::string sOldName = oldName;
+    std::transform(sOldName.begin(), sOldName.end(), sOldName.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    // Remove old
+    auto range = inventoryMap.equal_range(sOldName);
+    for (auto it = range.first; it != range.second;) {
+        if (it->second == item->entnum) {
+            it = inventoryMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Add new
+    std::string newName = item->getName().c_str();
+    std::transform(newName.begin(), newName.end(), newName.begin(), [](unsigned char c) { return std::tolower(c); });
+    inventoryMap.insert({newName, item->entnum});
 }

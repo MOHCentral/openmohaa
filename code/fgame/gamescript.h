@@ -32,6 +32,7 @@ class Listener;
 class ScriptThread;
 class ScriptVariable;
 class GameScript;
+class ScriptMaster;
 
 typedef struct {
     byte     *codepos;   // code position pointer
@@ -114,6 +115,14 @@ public:
     unsigned char *m_TryEndCodePos;
 };
 
+// Debug symbol table for local variables
+struct DebugLocalVar {
+    const_str name;          // Variable name
+    int stackOffset;         // Stack offset (0 = first local, 1 = second, etc.)
+    unsigned char* startPos; // Code position where variable comes into scope
+    unsigned char* endPos;   // Code position where variable goes out of scope (optional)
+};
+
 class GameScript : public AbstractScript
 {
 protected:
@@ -133,6 +142,9 @@ public:
 
     // stack variables
     unsigned int requiredStackSize;
+
+    // Debug symbol table for local variables
+    Container<DebugLocalVar> m_DebugLocalVars;
 
 public:
     GameScript();
@@ -159,6 +171,9 @@ public:
     StateScript *GetCatchStateScript(unsigned char *in, unsigned char *& out);
 
     bool ScriptCheck(void);
+    
+    // Debug symbol table access
+    const char* GetLocalVarName(unsigned char* codePos, int stackOffset);
 };
 
 class ScriptThreadLabel
@@ -197,6 +212,7 @@ public:
     void Archive(Archiver& arc);
 
     friend bool operator==(const ScriptThreadLabel& a, const ScriptThreadLabel& b);
+    friend class ScriptMaster;
 };
 
 inline bool operator==(const ScriptThreadLabel& a, const ScriptThreadLabel& b)

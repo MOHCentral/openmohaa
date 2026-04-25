@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "weaputils.h"
 #include "windows.h"
 #include "g_bot.h"
+#include "g_scriptevents.h"
 
 // We assume that we have limited access to the server-side
 // and that most logic come from the playerstate_s structure
@@ -67,6 +68,7 @@ BotController::BotController()
     m_botEyes.ofs[2]    = DEFAULT_VIEWHEIGHT;
 
     m_iCuriousTime        = 0;
+    m_iCuriousEventType   = AI_EVENT_NONE;
     m_iAttackTime         = 0;
     m_iEnemyEyesTag       = -1;
     m_iContinuousFireTime = 0;
@@ -75,6 +77,17 @@ BotController::BotController()
     m_iLastBurstTime      = 0;
 
     m_iNextTauntTime = 0;
+    
+    // Grenade state initialization
+    m_vGrenadeFleeDir = vec_zero;
+    m_fGrenadeDanger = 0;
+    m_iGrenadeFleeStartTime = 0;
+    
+    // Tactical state initialization
+    m_iTacticalStateTime = 0;
+    m_iTacticalMode = 0;
+    
+    m_tactics.Init(this);
 
     m_StateFlags = 0;
 }
@@ -86,6 +99,7 @@ BotController::~BotController()
         controlledEnt->delegate_killed.Remove(delegateHandle_killed);
         controlledEnt->delegate_stufftext.Remove(delegateHandle_stufftext);
         controlledEnt->delegate_spawned.Remove(delegateHandle_spawned);
+        controlledEnt->delegate_pain.Remove(delegateHandle_pain);
     }
 }
 
@@ -105,7 +119,7 @@ void BotController::Init(void)
     InitState_Curious(&botfuncs[1]);
     InitState_Grenade(&botfuncs[2]);
     InitState_Idle(&botfuncs[3]);
-    //InitState_Weapon(&botfuncs[4]);
+    InitState_Tactical(&botfuncs[4]);
 }
 
 void BotController::GetUsercmd(usercmd_t *ucmd)
@@ -387,7 +401,8 @@ void BotController::CheckReload(void)
 ====================
 NoticeEvent
 
-Warn the bot of an event
+Warn the bot of an event. Enhanced with skill-based hearing
+and tactical sound awareness.
 ====================
 */
 void BotController::NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDistanceSquared, float fRadiusSquared)
@@ -396,15 +411,31 @@ void BotController::NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDis
     float     fRangeFactor;
     Vector    delta1, delta2;
 
+    // Apply skill-based hearing sensitivity
+    // Higher skill = better hearing at range
+    float skill = g_bot_skill->value;
+    float hearingBonus = 1.0f + skill * 0.5f; // 1.0x to 1.5x effective hearing range
+    float effectiveRadiusSq = fRadiusSquared * hearingBonus * hearingBonus;
+
     if (m_iCuriousTime) {
         delta1 = vPos - controlledEnt->origin;
         delta2 = m_vNewCuriousPos - controlledEnt->origin;
-        if (delta1.lengthSquared() < delta2.lengthSquared()) {
-            return;
+        // Only skip if new sound is further AND lower priority
+        if (delta1.lengthSquared() > delta2.lengthSquared()) {
+            // Check if new event is higher priority
+            float newPriority = m_tactics.GetSoundPriority(iType);
+            float oldPriority = m_tactics.GetSoundPriority(m_iCuriousEventType);
+            if (newPriority <= oldPriority) {
+                return;
+            }
         }
     }
 
-    fRangeFactor = 1.0 - (fDistanceSquared / fRadiusSquared);
+    fRangeFactor = 1.0 - (fDistanceSquared / effectiveRadiusSq);
+    
+    // Lower skill bots have lower chance to notice sounds
+    float skillMod = 0.5f + skill * 0.5f; // 50%-100%
+    fRangeFactor *= skillMod;
 
     if (fRangeFactor < random()) {
         return;
@@ -445,6 +476,10 @@ void BotController::NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDis
         }
     }
 
+    // Store sound in tactics memory for coordination
+    int sourceEntNum = pSentOwner ? pSentOwner->entnum : -1;
+    m_tactics.ProcessSound(vPos, iType, sourceEntNum);
+
     switch (iType) {
     case AI_EVENT_MISC:
     case AI_EVENT_MISC_LOUD:
@@ -459,9 +494,47 @@ void BotController::NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDis
     case AI_EVENT_FOOTSTEP:
     case AI_EVENT_GRENADE:
     default:
-        m_iCuriousTime   = level.inttime + 20000;
+        // Duration varies by sound type and skill
+        // Important sounds = longer curiosity
+        float priority = m_tactics.GetSoundPriority(iType);
+        int baseDuration = (int)(10000 + priority * 15000); // 10-25 sec
+        int skillBonus = (int)(skill * 5000); // 0-5 sec extra for skilled bots
+        
+        m_iCuriousTime   = level.inttime + baseDuration + skillBonus;
         m_vNewCuriousPos = vPos;
+        m_iCuriousEventType = iType;  // Track what sound we're investigating
         break;
+    }
+}
+
+void BotController::ProcessVoiceCommand(const char *cmd, Entity *commander, bool teamOnly)
+{
+    if (!commander || !cmd || !controlledEnt) return;
+
+    if (teamOnly) {
+        if (!commander->isSubclassOf(Player)) return;
+        Player *pSpeaker = (Player *)commander;
+        Player *pMe = controlledEnt;
+        if (pSpeaker->GetTeam() != pMe->GetTeam()) return;
+    }
+
+    BotOrder order = ORDER_NONE;
+    if (!Q_stricmp(cmd, "follow")) order = ORDER_FOLLOW;
+    else if (!Q_stricmp(cmd, "hold")) order = ORDER_HOLD;
+    else if (!Q_stricmp(cmd, "attack")) order = ORDER_ATTACK;
+    else if (!Q_stricmp(cmd, "report")) {
+        float hPercent = (float)controlledEnt->health / (float)controlledEnt->max_health * 100.0f;
+        SendCommand(va("say_team Status: Health %.0f%%, Weapon %s", hPercent, "Ready"));
+        return;
+    }
+
+    if (order != ORDER_NONE) {
+        m_tactics.SetOrder(order, commander);
+        
+        // Acknowledge chance
+        if (random() < 0.3f) {
+             SendCommand("say_team Roger.");
+        }
     }
 }
 
@@ -576,7 +649,14 @@ Make the bot move to random directions
 void BotController::InitState_Idle(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Idle;
+    func->BeginState     = &BotController::State_BeginIdle;
     func->ThinkState     = &BotController::State_Idle;
+}
+
+void BotController::State_BeginIdle(void)
+{
+    State_DefaultBegin();
+    G_ScriptEvent("bot_roam", static_cast<Player*>(controlledEnt));
 }
 
 bool BotController::CheckCondition_Idle(void)
@@ -633,7 +713,14 @@ Forward to the last event position
 void BotController::InitState_Curious(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Curious;
+    func->BeginState     = &BotController::State_BeginCurious;
     func->ThinkState     = &BotController::State_Curious;
+}
+
+void BotController::State_BeginCurious(void)
+{
+    State_DefaultBegin();
+    G_ScriptEvent("bot_curious", static_cast<Player*>(controlledEnt));
 }
 
 bool BotController::CheckCondition_Curious(void)
@@ -665,14 +752,35 @@ void BotController::State_Curious(void)
     }
 
     AimAtAimNode();
+    
+    // Clear old sounds from memory
+    m_tactics.ClearOldSounds();
+    
+    // Check sound priority for tactical approach
+    float soundPriority = m_tactics.GetSoundPriority(m_iCuriousEventType);
+    float skill = g_bot_skill->value;
+    
+    // High priority sounds (gunfire, explosions) warrant tactical approach
+    // Higher skill bots are more tactical
+    bool useTacticalApproach = (soundPriority >= 0.6f) && (skill >= 0.4f || random() < skill);
 
     if (!movement.MoveToBestAttractivePoint(3) && (!movement.IsMoving() || m_vLastCuriousPos != m_vNewCuriousPos)) {
-        movement.MoveTo(m_vNewCuriousPos);
+        if (useTacticalApproach) {
+            // Use cover-to-cover movement for high-priority sounds
+            if (!m_tactics.AdvanceThroughCover(m_vNewCuriousPos)) {
+                // No cover available, move directly
+                movement.MoveTo(m_vNewCuriousPos);
+            }
+        } else {
+            // Direct movement for lower priority sounds (footsteps, misc)
+            movement.MoveTo(m_vNewCuriousPos);
+        }
         m_vLastCuriousPos = m_vNewCuriousPos;
     }
 
     if (movement.MoveDone()) {
         m_iCuriousTime = 0;
+        m_iCuriousEventType = AI_EVENT_NONE;
     }
 }
 
@@ -686,8 +794,15 @@ Attack the enemy
 void BotController::InitState_Attack(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Attack;
+    func->BeginState     = &BotController::State_BeginAttack;
     func->EndState       = &BotController::State_EndAttack;
     func->ThinkState     = &BotController::State_Attack;
+}
+
+void BotController::State_BeginAttack(void)
+{
+    State_DefaultBegin();
+    G_ScriptEvent("bot_attack", static_cast<Player*>(controlledEnt));
 }
 
 static Vector bot_origin;
@@ -1010,7 +1125,17 @@ void BotController::State_Attack(void)
             m_iLastAimTime = level.inttime;
         }
 
-        rotation.AimAt(vTarget + m_vAimOffset * g_bot_attack_spreadmult->value);
+        Vector predictedPos = m_tactics.GetPredictedPos();
+        if (predictedPos != vec_zero) {
+            vTarget = predictedPos;
+        }
+
+        // Skill affects aim accuracy: lower skill = more spread
+        // Effective spread = base spread * (2.0 - skill)
+        // skill 0.0 -> 2.0x spread, skill 0.5 -> 1.5x, skill 1.0 -> 1.0x
+        float skillMod = 2.0f - g_bot_skill->value;
+        if (skillMod < 1.0f) skillMod = 1.0f;
+        rotation.AimAt(vTarget + m_vAimOffset * g_bot_attack_spreadmult->value * skillMod);
     } else {
         AimAtAimNode();
     }
@@ -1052,55 +1177,86 @@ void BotController::State_Attack(void)
 ====================
 Grenade state
 
-Avoid any grenades
+Avoid any grenades and react to nearby explosives
 ====================
 */
 void BotController::InitState_Grenade(botfunc_t *func)
 {
     func->CheckCondition = &BotController::CheckCondition_Grenade;
+    func->BeginState     = &BotController::State_BeginGrenade;
+    func->EndState       = &BotController::State_EndGrenade;
     func->ThinkState     = &BotController::State_Grenade;
 }
 
 bool BotController::CheckCondition_Grenade(void)
 {
-    // FIXME: TODO
+    Vector fleeDir;
+    float danger;
+    
+    // Use the tactical system to detect grenades
+    if (m_tactics.ShouldFleeFromGrenade(fleeDir, danger)) {
+        // Only enter grenade state if danger is significant
+        if (danger > 0.3f) {
+            m_vGrenadeFleeDir = fleeDir;
+            m_fGrenadeDanger = danger;
+            return true;
+        }
+    }
+    
     return false;
+}
+
+void BotController::State_BeginGrenade(void)
+{
+    State_DefaultBegin();
+    m_iGrenadeFleeStartTime = level.inttime;
+    
+    // Stop any current movement to recalculate flee path
+    movement.ClearMove();
+}
+
+void BotController::State_EndGrenade(void)
+{
+    m_vGrenadeFleeDir = vec_zero;
+    m_fGrenadeDanger = 0;
 }
 
 void BotController::State_Grenade(void)
 {
-    // FIXME: TODO
-}
-
-/*
-====================
-Weapon state
-
-Change weapon when necessary
-====================
-*/
-void BotController::InitState_Weapon(botfunc_t *func)
-{
-    func->CheckCondition = &BotController::CheckCondition_Weapon;
-    func->BeginState     = &BotController::State_BeginWeapon;
-}
-
-bool BotController::CheckCondition_Weapon(void)
-{
-    return controlledEnt->GetActiveWeapon(WEAPON_MAIN)
-        != controlledEnt->BestWeapon(NULL, false, WEAPON_CLASS_THROWABLE);
-}
-
-void BotController::State_BeginWeapon(void)
-{
-    Weapon *weap = controlledEnt->BestWeapon(NULL, false, WEAPON_CLASS_THROWABLE);
-
-    if (weap == NULL) {
-        SendCommand("safeholster 1");
+    // Update flee direction each frame
+    Vector fleeDir;
+    float danger;
+    
+    if (!m_tactics.ShouldFleeFromGrenade(fleeDir, danger)) {
+        // Grenade is gone or we're safe
         return;
     }
-
-    SendCommand(va("use \"%s\"", weap->model.c_str()));
+    
+    m_vGrenadeFleeDir = fleeDir;
+    m_fGrenadeDanger = danger;
+    
+    // Calculate flee destination
+    float fleeDist = 400.0f * danger; // Flee further if more dangerous
+    Vector fleeTarget = controlledEnt->origin + m_vGrenadeFleeDir * fleeDist;
+    
+    // Move away from grenade
+    movement.MoveTo(fleeTarget);
+    
+    // Sprint while fleeing
+    m_botCmd.buttons |= BUTTON_RUN;
+    
+    // Don't shoot while fleeing from grenades - focus on survival
+    m_botCmd.buttons &= ~(BUTTON_ATTACKLEFT | BUTTON_ATTACKRIGHT);
+    
+    // Look where we're going
+    AimAtAimNode();
+    
+    // Time limit on grenade flee (don't get stuck)
+    if (level.inttime > m_iGrenadeFleeStartTime + 3000) {
+        // Force exit grenade state after 3 seconds
+        m_vGrenadeFleeDir = vec_zero;
+        m_fGrenadeDanger = 0;
+    }
 }
 
 Weapon *BotController::FindWeaponWithAmmo()
@@ -1183,6 +1339,64 @@ Weapon *BotController::FindMeleeWeapon()
     return bestweapon;
 }
 
+/*
+====================
+Tactical state
+
+Advanced tactical behavior when engaged in combat
+====================
+*/
+void BotController::InitState_Tactical(botfunc_t *func)
+{
+    func->CheckCondition = &BotController::CheckCondition_Tactical;
+    func->BeginState     = &BotController::State_BeginTactical;
+    func->EndState       = &BotController::State_EndTactical;
+    func->ThinkState     = &BotController::State_Tactical;
+}
+
+bool BotController::CheckCondition_Tactical(void)
+{
+    // Active when we have an enemy or recently had one (but not at level start)
+    return m_pEnemy != NULL || (m_iAttackTime != 0 && level.inttime < m_iAttackTime + 5000);
+}
+
+void BotController::State_BeginTactical(void)
+{
+    m_iTacticalStateTime = level.inttime;
+    m_iTacticalMode = 0; // Reset tactical mode
+}
+
+void BotController::State_EndTactical(void)
+{
+    m_iTacticalMode = 0;
+}
+
+void BotController::State_Tactical(void)
+{
+    // This state works alongside Attack state to provide additional tactical behavior
+    // The behavior tree in BotTactics handles most of the tactical decision making
+    
+    if (!controlledEnt) return;
+    
+    // Determine tactical mode based on situation
+    float healthPercent = (float)controlledEnt->health / (float)controlledEnt->max_health;
+    
+    // Low health = defensive mode
+    if (healthPercent < 0.3f) {
+        m_iTacticalMode = 1; // Defensive
+    }
+    // High health with enemy = aggressive mode
+    else if (healthPercent > 0.7f && m_pEnemy) {
+        m_iTacticalMode = 2; // Aggressive
+    }
+    // Default = balanced mode
+    else {
+        m_iTacticalMode = 0; // Balanced
+    }
+    
+    // Tactical mode influences movement behavior in Attack state via m_tactics
+}
+
 void BotController::UseWeaponWithAmmo()
 {
     Weapon *bestWeapon = FindWeaponWithAmmo();
@@ -1205,6 +1419,9 @@ void BotController::Spawned(void)
     ClearEnemy();
     m_iCuriousTime   = 0;
     m_botCmd.buttons = 0;
+
+    // HOOK: bot_spawn
+    G_ScriptEvent("bot_spawn", controlledEnt);
 }
 
 void BotController::Think()
@@ -1213,6 +1430,8 @@ void BotController::Think()
     usereyes_t eyeinfo;
 
     UpdateBotStates();
+    m_tactics.Update(&m_botCmd);
+    
     GetUsercmd(&ucmd);
     GetEyeInfo(&eyeinfo);
 
@@ -1222,6 +1441,10 @@ void BotController::Think()
 void BotController::Killed(const Event& ev)
 {
     Entity *attacker;
+
+    // HOOK: bot_killed
+    attacker = ev.GetEntity(1);
+    G_ScriptEvent("bot_killed", controlledEnt, attacker);
 
     // send the respawn buttons
     if (!(m_botCmd.buttons & BUTTON_ATTACKLEFT)) {
@@ -1291,6 +1514,44 @@ void BotController::EventStuffText(const str& text)
     SendCommand(text);
 }
 
+void BotController::Pain(Event *ev)
+{
+    Entity *attacker = ev->GetEntity(1);
+    if (attacker && attacker->isSubclassOf(Sentient) && attacker != controlledEnt) {
+        // React to being hit: always turn toward attacker first
+        Sentient *sentAttacker = static_cast<Sentient *>(attacker);
+        
+        // Check if we should switch focus to this attacker
+        bool shouldSwitchTarget = !m_pEnemy;
+        if (!shouldSwitchTarget && m_pEnemy) {
+            // Switch if new attacker is closer than current enemy
+            float newDistSq = (attacker->origin - controlledEnt->origin).lengthSquared();
+            float oldDistSq = (m_pEnemy->origin - controlledEnt->origin).lengthSquared();
+            shouldSwitchTarget = (newDistSq < oldDistSq * 0.8f); // Only switch if significantly closer
+        }
+        
+        if (shouldSwitchTarget) {
+            m_pEnemy = sentAttacker;
+            m_iEnemyEyesTag = -1;
+        }
+        
+        // Always turn toward attacker when hit (even if not switching target)
+        rotation.TurnTowards(attacker->origin);
+        
+        // Store attacker position so we can hunt them down
+        m_vLastEnemyPos = attacker->origin;
+        
+        // Keep attack state active for 5 seconds after being shot
+        // This keeps us hunting even if we lose sight briefly
+        m_iAttackTime = level.inttime + 5000;
+        
+        // Also activate curious mode toward the attacker position
+        // in case we lose them - we'll investigate their last known position
+        m_iCuriousTime = level.inttime + 10000;
+        m_vNewCuriousPos = attacker->origin;
+    }
+}
+
 void BotController::setControlledEntity(Player *player)
 {
     controlledEnt = player;
@@ -1303,6 +1564,9 @@ void BotController::setControlledEntity(Player *player)
     delegateHandle_stufftext =
         player->delegate_stufftext.Add(std::bind(&BotController::EventStuffText, this, std::placeholders::_1));
     delegateHandle_spawned = player->delegate_spawned.Add(std::bind(&BotController::Spawned, this));
+    delegateHandle_pain = player->delegate_pain.Add(std::bind(&BotController::Pain, this, std::placeholders::_1));
+
+    m_tactics.Init(this);
 }
 
 Player *BotController::getControlledEntity() const

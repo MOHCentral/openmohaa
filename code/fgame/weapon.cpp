@@ -40,6 +40,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "vehicleturret.h"
 #include "debuglines.h"
 #include "g_spawn.h"
+#include "g_scriptevents.h"
 
 Event EV_Weapon_Shoot("shoot", EV_DEFAULT, "S", "mode", "Shoot the weapon", EV_NORMAL);
 Event EV_Weapon_DoneRaising(
@@ -775,6 +776,9 @@ Weapon::Weapon()
     // Defaults to no secondary HUD
     m_bSecondaryAmmoInHud = false;
 
+    m_iAttachToTagIndex = -1;
+    m_pAttachToTagTiki = NULL;
+
     PostEvent(EV_Weapon_IdleInit, 0);
 
     last_owner_trigger_time = 0;
@@ -1216,7 +1220,16 @@ void Weapon::GetMuzzlePosition(vec3_t position, vec3_t vBarrelPos, vec3_t forwar
     }
 
     if (owner) {
-        tagnum = gi.Tag_NumForName(owner->edict->tiki, current_attachToTag.c_str());
+        if (!owner->edict || !owner->edict->tiki) {
+            // If tiki is NULL, we can't get the tag number
+            tagnum = -1;
+        } else {
+            if (m_iAttachToTagIndex == -1 || m_pAttachToTagTiki != owner->edict->tiki) {
+                m_iAttachToTagIndex = gi.Tag_NumForName(owner->edict->tiki, current_attachToTag.c_str());
+                m_pAttachToTagTiki  = owner->edict->tiki;
+            }
+            tagnum = m_iAttachToTagIndex;
+        }
 
         // Get the orientation based on the frame and anim stored off in the owner.
         // This is to prevent weird timing with getting orientations on different frames of firing
@@ -1382,6 +1395,11 @@ void Weapon::Shoot(Event *ev)
     if (!mc) {
         ForceIdle();
         return;
+    }
+
+    // HOOK: weapon_fire
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_fire", owner, getName().c_str(), AmmoAvailable(mode));
     }
 
     GetMuzzlePosition(pos, vBarrel, forward, right, up);
@@ -1834,6 +1852,10 @@ qboolean Weapon::ReadyToFire(firemode_t mode, qboolean playsound)
         } else if (playsound) {
             if (level.time > next_noammo_time) {
                 Sound(m_NoAmmoSound);
+                // HOOK: weapon_no_ammo
+                if (owner) {
+                    G_ScriptEvent("weapon_no_ammo", owner, getName().c_str());
+                }
             }
             next_noammo_time = level.time + level.frametime + FireDelay(mode);
         }
@@ -1855,6 +1877,11 @@ void Weapon::PutAway(void)
 //======================
 void Weapon::DetachFromOwner(void)
 {
+    // HOOK: weapon_holster
+    if (owner) {
+        G_ScriptEvent("weapon_holster", owner, getName().c_str());
+    }
+
     DetachGun();
     weaponstate = WEAPON_HOLSTERED;
 }
@@ -1864,6 +1891,11 @@ void Weapon::DetachFromOwner(void)
 //======================
 void Weapon::AttachToOwner(weaponhand_t hand)
 {
+    // HOOK: weapon_raise
+    if (owner) {
+        G_ScriptEvent("weapon_raise", owner, getName().c_str());
+    }
+
     AttachGun(hand);
     ForceIdle();
 }
@@ -2007,7 +2039,11 @@ qboolean Weapon::Drop(void)
     CancelEventsOfType(EV_Weapon_DoneReloading);
 
     // Remove this from the owner's item list
+    Entity *previousOwner = owner;
     RemoveFromOwner();
+
+    // HOOK: weapon_drop
+    G_ScriptEvent("weapon_drop", previousOwner, this);
 
     if (g_droppeditemlife->value > 0) {
         PostEvent(EV_Remove, g_droppeditemlife->value);
@@ -2232,6 +2268,8 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
 
     if (!owner) {
         current_attachToTag = "";
+        m_iAttachToTagIndex = -1;
+        m_pAttachToTagTiki  = NULL;
         return;
     }
 
@@ -2247,6 +2285,8 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
         lastValid  = qtrue;
 
         current_attachToTag = holster_attachToTag;
+        m_iAttachToTagIndex = -1;
+        m_pAttachToTagTiki  = NULL;
 
         vOffset = holsterOffset;
         setAngles(holsterAngles);
@@ -2264,9 +2304,13 @@ void Weapon::AttachGun(weaponhand_t hand, qboolean holstering)
         switch (hand) {
         case WEAPON_MAIN:
             current_attachToTag = attachToTag_main;
+            m_iAttachToTagIndex = -1;
+            m_pAttachToTagTiki  = NULL;
             break;
         case WEAPON_OFFHAND:
             current_attachToTag = attachToTag_offhand;
+            m_iAttachToTagIndex = -1;
+            m_pAttachToTagTiki  = NULL;
             break;
         default:
             warning("Weapon::AttachGun", "Invalid hand for attachment of weapon specified");
@@ -2327,7 +2371,19 @@ void Weapon::AttachToHand(Event *ev)
 
     current_attachToTag = tag;
 
-    int tagnum = gi.Tag_NumForName(owner->edict->tiki, tag);
+    if (!owner->edict || !owner->edict->tiki) {
+        warning(
+            "Weapon::AttachToHand",
+            "Cannot attach weapon '%s': owner edict or tiki is NULL\n",
+            getName().c_str()
+        );
+        return;
+    }
+
+    m_iAttachToTagIndex = gi.Tag_NumForName(owner->edict->tiki, tag);
+    m_pAttachToTagTiki  = owner->edict->tiki;
+
+    int tagnum = m_iAttachToTagIndex;
     if (tagnum < 0) {
         warning(
             "Weapon::AttachToHand",
@@ -2527,6 +2583,8 @@ void Weapon::PickupWeapon(Event *ev)
 
         DetachFromOwner();
         current_attachToTag        = "";
+        m_iAttachToTagIndex        = -1;
+        m_pAttachToTagTiki         = NULL;
         lastValid                  = qfalse;
         edict->s.tag_num           = -1;
         edict->s.attach_use_angles = qfalse;
@@ -2542,6 +2600,10 @@ void Weapon::PickupWeapon(Event *ev)
         iGiveAmmo = startammo[FIRE_PRIMARY];
 
         Sound(sPickupSound);
+
+        if (sen->IsSubclassOfPlayer()) {
+            G_ScriptEvent("item_pickup", sen, item_name.c_str(), iGiveAmmo);
+        }
     } else {
         bool bSameAmmo[MAX_FIREMODES] = {false};
 
@@ -2779,6 +2841,11 @@ void Weapon::DoneRaising(Event *ev)
     weaponstate = WEAPON_READY;
     ForceIdle();
 
+    // HOOK: weapon_ready (weapon raised and now ready)
+    if (owner) {
+        G_ScriptEvent("weapon_ready", owner, getName().c_str());
+    }
+
     if (!owner) {
         PostEvent(EV_Remove, 0);
         return;
@@ -2927,6 +2994,11 @@ void Weapon::StartReloading(void)
         return;
     }
 
+    // HOOK: weapon_reload
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("weapon_reload", owner, getName().c_str());
+    }
+
     if (SetWeaponAnim("reload", EV_Weapon_DoneReloading)) {
         weaponstate = WEAPON_RELOADING;
     } else {
@@ -2944,6 +3016,11 @@ void Weapon::DoneReloading(Event *ev)
 {
     SetShouldReload(qfalse);
     weaponstate = WEAPON_READY;
+
+    // HOOK: weapon_reload_done
+    if (owner) {
+        G_ScriptEvent("weapon_reload_done", owner, getName().c_str());
+    }
 
     // Added in OPM
     //  Set to idle when done reloading
@@ -4108,6 +4185,8 @@ str Weapon::GetCurrentAttachToTag(void)
 void Weapon::SetCurrentAttachToTag(str s)
 {
     current_attachToTag = s;
+    m_iAttachToTagIndex = -1;
+    m_pAttachToTagTiki  = NULL;
 }
 
 //======================

@@ -996,36 +996,25 @@ void ScriptVariable::evalArrayAt(ScriptVariable& var)
         break;
 
     case VARIABLE_ARRAY:
-    {
-        ScriptVariable result;
-
         array = m_data.arrayValue->arrayValue.find(var);
 
         if (array) {
-            result = *array;
-            *this = result;
+            *this = *array;
         } else {
             Clear();
         }
 
         break;
-    }
 
     case VARIABLE_CONSTARRAY:
-    {
-        ScriptVariable result;
-
         index = var.intValue();
 
         if (index == 0 || index > m_data.constArrayValue->size) {
             throw ScriptException("array index %d out of range", index);
         }
 
-        result = m_data.constArrayValue->constArrayValue[index - 1];
-        *this = result;
-
+        *this = m_data.constArrayValue->constArrayValue[index - 1];
         break;
-    }
 
     case VARIABLE_CONTAINER:
         index = var.intValue();
@@ -1209,7 +1198,8 @@ str ScriptVariable::stringValue() const
              + str(m_data.vectorValue[2]) + str(" )");
 
     default:
-        return "Type: '" + str(GetTypeName()) + "'";
+        throw ScriptException("Cannot cast '%s' to string", GetTypeName());
+        break;
     }
 
     return "";
