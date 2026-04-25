@@ -83,6 +83,12 @@ protected:
     void        Cache(Event *ev);
     void        RegisterAliasAndCache(Event *ev);
     void        RegisterAlias(Event *ev);
+#ifdef USE_HTTP
+    void        CurlGet(Event *ev);
+    void        CurlPost(Event *ev);
+    void        CurlCustom(Event *ev);
+    void        CurlSetTimeout(Event *ev);
+#endif
 
 public:
     CLASS_PROTOTYPE(ScriptMaster);
@@ -144,6 +150,13 @@ public:
 extern Event EV_RegisterAlias;
 extern Event EV_RegisterAliasAndCache;
 extern Event EV_Cache;
+
+#ifdef USE_HTTP
+extern Event EV_ScriptMaster_CurlGet;
+extern Event EV_ScriptMaster_CurlPost;
+extern Event EV_ScriptMaster_CurlCustom;
+extern Event EV_ScriptMaster_CurlSetTimeout;
+#endif
 
 extern qboolean disable_team_change;
 extern qboolean disable_team_spectate;
