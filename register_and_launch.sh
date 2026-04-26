@@ -1,13 +1,16 @@
 #!/bin/bash
 
-# Defaults
-SERVER_NAME="${1:-Dev Server $(date +%s)}"
-SERVER_IP="${2:-127.0.0.1}"
-SERVER_PORT="${3:-12203}"
+# Server identity — set via env vars, not positional args (those are passed to the game)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVER_NAME="${OPM_SERVER_NAME:-Dev Server $(date +%s)}"
+SERVER_IP="${OPM_SERVER_IP:-127.0.0.1}"
+SERVER_PORT="${OPM_SERVER_PORT:-12203}"
 API_BASE="http://localhost:8084/api/v1/servers"
 API_URL="$API_BASE/register"
 CFG_DIR="/home/elgan/.local/share/openmohaa/main"
 CFG_FILE="$CFG_DIR/opm_server.cfg"
+GAME_BIN="$SCRIPT_DIR/build/Debug/omohaaded-dbg"
+CLIENT_BIN="$SCRIPT_DIR/build/Debug/openmohaa-dbg"
 
 # Ensure cfg directory exists
 mkdir -p "$CFG_DIR"
@@ -34,21 +37,25 @@ if [ -f "$CFG_FILE" ]; then
             
             # Skip registration, go straight to launch
             # Skip registration, go straight to launch
-            cd "$(dirname "$0")/build"
-            GAME_BIN="/home/elgan/dev/openmohaa-central/build/Debug/openmohaa-dbg"
             
             if [ -n "$GAME_BIN" ]; then
                 clear
-                echo "Launching $GAME_BIN..."
-                ls -l "$GAME_BIN"
-                
-                # Determine build dir for library path
-                # Force add Debug dir to path since that's where game-dbg.so is
                 BUILD_DIR=$(dirname "$GAME_BIN")
-                export LD_LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/Debug:$LD_LIBRARY_PATH"
-                echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+                export LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH"
 
-                gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg "$@"
+                echo "Launching dedicated server in background..."
+                gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg &
+                SERVER_PID=$!
+                echo "Server PID: $SERVER_PID"
+
+                # Give the server a moment to start
+                sleep 2
+
+                echo "Launching game client..."
+                "$CLIENT_BIN" +set r_fullscreen 0 +connect 127.0.0.1:$SERVER_PORT "$@"
+
+                # Kill server when client exits
+                kill $SERVER_PID 2>/dev/null
             else
                 echo "Could not find openmohaa executable."
                 exit 1
@@ -114,22 +121,25 @@ cat "$CFG_FILE"
 echo "----------------------------------------"
 
 # Find and launch the game
-cd "$(dirname "$0")/build"
-
-    GAME_BIN="/home/elgan/dev/openmohaa-central/build/Debug/openmohaa-dbg"
 
 if [ -n "$GAME_BIN" ]; then
     clear
-    echo "Launching $GAME_BIN..."
-    ls -l "$GAME_BIN"
-    
-    # Determine build dir for library path
-    # Force add Debug dir to path since that's where game-dbg.so is
     BUILD_DIR=$(dirname "$GAME_BIN")
-    export LD_LIBRARY_PATH="$BUILD_DIR:$BUILD_DIR/Debug:$LD_LIBRARY_PATH"
-    echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+    export LD_LIBRARY_PATH="$BUILD_DIR:$LD_LIBRARY_PATH"
 
-    gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg "$@"
+    echo "Launching dedicated server in background..."
+    gdb -batch -ex "run" -ex "bt" --args "$GAME_BIN" +set developer 1 +set logfile 1 +set fs_game main +exec server.cfg +exec opm_server.cfg &
+    SERVER_PID=$!
+    echo "Server PID: $SERVER_PID"
+
+    # Give the server a moment to start
+    sleep 2
+
+    echo "Launching game client..."
+    "$CLIENT_BIN" +set r_fullscreen 0 +connect 127.0.0.1:$SERVER_PORT "$@"
+
+    # Kill server when client exits
+    kill $SERVER_PID 2>/dev/null
 else
     echo "Could not find openmohaa executable."
     exit 1

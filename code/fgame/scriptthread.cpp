@@ -8169,18 +8169,18 @@ void ScriptThread::MqttConnect(Event *ev)
 
     MqttTask task;
     task.type = MQTT_TASK_CONNECT;
-    task.host = ev->GetString(1).c_str();
+    task.host = ev->GetValue(1).stringValue().c_str();
     task.port = ev->GetInteger(2);
-    task.clientId = ev->GetString(3).c_str();
-    task.callbackLabel = ev->GetString(4).c_str();
+    task.clientId = ev->GetValue(3).stringValue().c_str();
+    task.callbackLabel = ev->GetValue(4).stringValue().c_str();
     task.keepAlive = 60;
 
     // Optional: username and password as 5th and 6th args
     if (ev->NumArgs() >= 5) {
-        task.username = ev->GetString(5).c_str();
+        task.username = ev->GetValue(5).stringValue().c_str();
     }
     if (ev->NumArgs() >= 6) {
-        task.password = ev->GetString(6).c_str();
+        task.password = ev->GetValue(6).stringValue().c_str();
     }
     if (ev->NumArgs() >= 7) {
         task.keepAlive = ev->GetInteger(7);
@@ -8199,7 +8199,7 @@ void ScriptThread::MqttDisconnect(Event *ev)
     task.type = MQTT_TASK_DISCONNECT;
 
     if (ev->NumArgs() >= 1) {
-        task.callbackLabel = ev->GetString(1).c_str();
+        task.callbackLabel = ev->GetValue(1).stringValue().c_str();
     }
     if (Director.CurrentThread()) {
         task.sourceScript = Director.CurrentThread()->FileName();
@@ -8228,7 +8228,7 @@ void ScriptThread::MqttPublish(Event *ev)
         }
     }
     if (ev->NumArgs() >= 4) {
-        task.callbackLabel = ev->GetString(4).c_str();
+        task.callbackLabel = ev->GetValue(4).stringValue().c_str();
     }
 
     if (Director.CurrentThread()) {
@@ -8246,8 +8246,8 @@ void ScriptThread::MqttSubscribe(Event *ev)
 
     MqttTask task;
     task.type = MQTT_TASK_SUBSCRIBE;
-    task.topic = ev->GetString(1).c_str();
-    task.callbackLabel = ev->GetString(2).c_str();
+    task.topic = ev->GetValue(1).stringValue().c_str();
+    task.callbackLabel = ev->GetValue(2).stringValue().c_str();
     task.qos = 0;
 
     if (ev->NumArgs() >= 3) {
