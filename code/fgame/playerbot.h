@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "player.h"
 #include "navigate.h"
 #include "navigation_path.h"
+#include "bottactics.h"
 
 #define MAX_BOT_FUNCTIONS 5
 
@@ -131,6 +132,7 @@ public:
     const Vector& GetTargetAngles() const;
     void          SetTargetAngles(Vector vAngles);
     void          AimAt(Vector vPos);
+    void          TurnTowards(Vector vPos);
 
 private:
     SafePtr<Player> controlledEntity;
@@ -165,9 +167,11 @@ private:
 
     BotMovement movement;
     BotRotation rotation;
+    BotTactics  m_tactics;
 
     // States
     int    m_iCuriousTime;
+    int    m_iCuriousEventType;  // AI_EVENT_* type we're investigating
     int    m_iAttackTime;
     int    m_iAttackStopAimTime;
     int    m_iLastBurstTime;
@@ -203,6 +207,7 @@ private:
     DelegateHandle delegateHandle_killed;
     DelegateHandle delegateHandle_stufftext;
     DelegateHandle delegateHandle_spawned;
+    DelegateHandle delegateHandle_pain;
 
 private:
     Weapon *FindWeaponWithAmmo(void);
@@ -241,12 +246,21 @@ private:
     void        State_BeginGrenade(void);
     void        State_EndGrenade(void);
     void        State_Grenade(void);
+    
+    // Grenade state variables
+    Vector      m_vGrenadeFleeDir;
+    float       m_fGrenadeDanger;
+    int         m_iGrenadeFleeStartTime;
 
-    static void InitState_Weapon(botfunc_t *func);
-    bool        CheckCondition_Weapon(void);
-    void        State_BeginWeapon(void);
-    void        State_EndWeapon(void);
-    void        State_Weapon(void);
+    static void InitState_Tactical(botfunc_t *func);
+    bool        CheckCondition_Tactical(void);
+    void        State_BeginTactical(void);
+    void        State_EndTactical(void);
+    void        State_Tactical(void);
+    
+    // Tactical state variables  
+    int         m_iTacticalStateTime;
+    int         m_iTacticalMode;  // 0=balanced, 1=defensive, 2=aggressive
 
     void CheckStates(void);
 
@@ -269,6 +283,7 @@ public:
     void NoticeEvent(Vector vPos, int iType, Entity *pEnt, float fDistanceSquared, float fRadiusSquared);
     void ClearEnemy(void);
 
+    void ProcessVoiceCommand(const char *cmd, Entity *commander, bool teamOnly);
     void SendCommand(const char *text);
 
     void Think();
@@ -277,9 +292,12 @@ public:
 
     void Killed(const Event& ev);
     void GotKill(const Event& ev);
+    void Pain(Event *ev);
     void EventStuffText(const str& text);
 
     BotMovement& GetMovement();
+    BotRotation& GetRotation() { return rotation; }
+    Sentient*    GetEnemy() const { return m_pEnemy; }
 
 public:
     void    setControlledEntity(Player *player);
@@ -322,6 +340,7 @@ public:
     void Cleanup();
     void Frame();
     void BroadcastEvent(Entity *originator, Vector origin, int iType, float radius);
+    void ProcessVoiceCommand(Entity *speaker, const char *text, bool teamOnly);
 
 private:
     BotControllerManager botControllerManager;

@@ -27,8 +27,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptexception.h"
 
 #include "g_spawn.h"
+#include "g_scriptevents.h"
 #include "level.h"
 #include "game.h"
+#include "gamecmds.h"
 #include "camera.h"
 #include "dm_manager.h"
 #include "hud.h"
@@ -44,7 +46,21 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "slre.h"
 
+#ifdef USE_HTTP
+#include <curl/curl.h>
+#endif
+
 #include "md5.h"
+#include "../qcommon/crypto/picosha2.h"
+
+#include <random>
+#include <sstream>
+#include <iomanip>
+#include <cstdio>
+
+#ifdef USE_MQTT
+#include "mqttworker.h"
+#endif
 
 #ifdef WIN32
 #    include <direct.h>
@@ -2012,6 +2028,51 @@ Event EV_ScriptThread_Md5String
     "generates MD5 hash of given text",
     EV_RETURN
 );
+Event EV_ScriptThread_Md5String2
+(
+    "md5_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates MD5 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_Sha256String
+(
+    "sha256_string",
+    EV_DEFAULT,
+    "s",
+    "text",
+    "generates SHA256 hash of given text",
+    EV_RETURN
+);
+Event EV_ScriptThread_UuidString
+(
+    "uuid_string",
+    EV_DEFAULT,
+    "I",
+    "length",
+    "generates a random hex string of given length, or UUID v4 if no length specified",
+    EV_RETURN
+);
+Event EV_ScriptThread_MakeJson
+(
+    "make_json",
+    EV_DEFAULT,
+    "e",
+    "array",
+    "converts a script array to a JSON string",
+    EV_RETURN
+);
+Event EV_ScriptThread_FromJson
+(
+    "from_json",
+    EV_DEFAULT,
+    "s",
+    "json_string",
+    "parses a JSON string and returns a script array",
+    EV_RETURN
+);
 Event EV_ScriptThread_GetEntity
 (
     "getentity",
@@ -2121,6 +2182,126 @@ Event EV_ScriptThread_FS_OpenAppend
     "Opens the specified file for appending. Returns an FSFile object.",
     EV_RETURN
 );
+
+#ifdef USE_MQTT
+Event EV_ScriptThread_MqttConnect
+(
+    "mqtt_connect",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Connects to an MQTT broker asynchronously.\n"
+    "Usage: mqtt_connect host port client_id callback\n"
+    "Callback receives (success, error_message)."
+);
+
+Event EV_ScriptThread_MqttDisconnect
+(
+    "mqtt_disconnect",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Disconnects from the MQTT broker.\n"
+    "Usage: mqtt_disconnect [callback]"
+);
+
+Event EV_ScriptThread_MqttPublish
+(
+    "mqtt_publish",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Publishes a message to an MQTT topic asynchronously.\n"
+    "Usage: mqtt_publish topic payload [qos] [callback]\n"
+    "QoS defaults to 0. Callback receives (success, error_message)."
+);
+
+Event EV_ScriptThread_MqttSubscribe
+(
+    "mqtt_subscribe",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Subscribes to an MQTT topic.\n"
+    "Usage: mqtt_subscribe topic message_callback [qos]\n"
+    "Message callback receives (topic, payload) for each message."
+);
+
+Event EV_ScriptThread_MqttUnsubscribe
+(
+    "mqtt_unsubscribe",
+    EV_DEFAULT,
+    "s",
+    "topic",
+    "Unsubscribes from an MQTT topic.\n"
+    "Usage: mqtt_unsubscribe topic"
+);
+
+Event EV_ScriptThread_MqttIsConnected
+(
+    "mqtt_is_connected",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Returns 1 if connected to an MQTT broker, 0 otherwise.",
+    EV_RETURN
+);
+#endif // USE_MQTT
+
+#ifdef USE_HTTP
+// ScriptThread wrappers that forward to ScriptMaster
+Event EV_ScriptThread_CurlGet
+(
+    "curl_get",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP GET request asynchronously.\n"
+    "Usage: curl_get url headers callback\n"
+    "Calls the callback label with (success, data, http_code).",
+    EV_NORMAL
+);
+Event EV_ScriptThread_CurlPost
+(
+    "curl_post",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP POST request asynchronously.\n"
+    "Usage: curl_post url headers data callback\n"
+    "Calls the callback label with (success, data, http_code).",
+    EV_NORMAL
+);
+Event EV_ScriptThread_CurlCustom
+(
+    "curl_custom",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP custom request asynchronously.\n"
+    "Usage: curl_custom method url headers data callback\n"
+    "Calls the callback label with (success, data, http_code).",
+    EV_NORMAL
+);
+Event EV_ScriptThread_CurlSetTimeout
+(
+    "curl_set_timeout",
+    EV_DEFAULT,
+    "i",
+    "timeout",
+    "Sets the default timeout for curl requests in seconds.",
+    EV_NORMAL
+);
+Event EV_ScriptThread_NetUrlEncode
+(
+    "net_url_encode",
+    EV_DEFAULT,
+    "s",
+    "string",
+    "Encodes a string for URL usage.",
+    EV_RETURN
+);
+#endif
 
 CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetCvar,                 &ScriptThread::Getcvar                 },
@@ -2275,6 +2456,11 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_GetTanH,                 &ScriptThread::EventTanH               },
     {&EV_ScriptThread_strncpy,                 &ScriptThread::StringBytesCopy         },
     {&EV_ScriptThread_Md5String,               &ScriptThread::Md5String               },
+    {&EV_ScriptThread_Md5String2,              &ScriptThread::Md5String2              },
+    {&EV_ScriptThread_Sha256String,            &ScriptThread::Sha256String            },
+    {&EV_ScriptThread_UuidString,              &ScriptThread::UuidString              },
+    {&EV_ScriptThread_MakeJson,                &ScriptThread::MakeJson                },
+    {&EV_ScriptThread_FromJson,                &ScriptThread::FromJson                },
     {&EV_ScriptThread_GetEntity,               &ScriptThread::GetEntByEntnum          },
     {&EV_ScriptThread_TypeOf,                  &ScriptThread::TypeOfVariable          },
     {&EV_ScriptThread_RegisterEv,              &ScriptThread::RegisterEvent           },
@@ -2357,6 +2543,21 @@ CLASS_DECLARATION(Listener, ScriptThread, NULL) {
     {&EV_ScriptThread_FS_OpenRead,             &ScriptThread::FS_OpenRead             },
     {&EV_ScriptThread_FS_OpenWrite,            &ScriptThread::FS_OpenWrite            },
     {&EV_ScriptThread_FS_OpenAppend,           &ScriptThread::FS_OpenAppend           },
+#ifdef USE_MQTT
+    {&EV_ScriptThread_MqttConnect,             &ScriptThread::MqttConnect             },
+    {&EV_ScriptThread_MqttDisconnect,          &ScriptThread::MqttDisconnect          },
+    {&EV_ScriptThread_MqttPublish,             &ScriptThread::MqttPublish             },
+    {&EV_ScriptThread_MqttSubscribe,           &ScriptThread::MqttSubscribe           },
+    {&EV_ScriptThread_MqttUnsubscribe,         &ScriptThread::MqttUnsubscribe         },
+    {&EV_ScriptThread_MqttIsConnected,         &ScriptThread::MqttIsConnected         },
+#endif
+#ifdef USE_HTTP
+    {&EV_ScriptThread_CurlGet,                 &ScriptThread::CurlGet                 },
+    {&EV_ScriptThread_CurlPost,                &ScriptThread::CurlPost                },
+    {&EV_ScriptThread_CurlCustom,              &ScriptThread::CurlCustom              },
+    {&EV_ScriptThread_CurlSetTimeout,          &ScriptThread::CurlSetTimeout          },
+    {&EV_ScriptThread_NetUrlEncode,            &ScriptThread::NetUrlEncode            },
+#endif
     {NULL,                                     NULL                                   }
 };
 
@@ -4529,7 +4730,7 @@ void ScriptThread::AddObjective(int index, int status, str text, Vector location
         sTmp = Info_ValueForKey(sTmp, "flags");
         if (!(atoi(sTmp) & OBJ_FLAG_CURRENT)) {
             if (last_time != level.inttime) {
-                gi.SendServerCommand(-1, "print \"" HUD_MESSAGE_WHITE "An objective has been added!\n\"");
+                gi.Printf("An objective has been added!\n");
                 last_time = level.inttime;
             }
         }
@@ -4537,7 +4738,7 @@ void ScriptThread::AddObjective(int index, int status, str text, Vector location
         break;
     case OBJ_STATUS_COMPLETED:
         if (last_time != level.inttime) {
-            gi.SendServerCommand(-1, "print \"" HUD_MESSAGE_WHITE "An objective has been completed!\n\"");
+            gi.Printf("An objective has been completed!\n");
             last_time = level.inttime;
         }
         if (g_gametype->integer == GT_SINGLE_PLAYER) {
@@ -4556,6 +4757,9 @@ void ScriptThread::AddObjective(int index, int status, str text, Vector location
     Info_SetValueForKey(szSend, "loc", va("%f %f %f", location[0], location[1], location[2]));
 
     gi.setConfigstring(CS_OBJECTIVES + index, szSend);
+
+    // HOOK: objective_update
+    G_ScriptEvent("objective_update", NULL, index, status);
 }
 
 void ScriptThread::SetCurrentObjective(int iObjective, int iTeam)
@@ -4821,11 +5025,19 @@ void ScriptThread::SetTimer(Event *ev)
 
 void ScriptThread::EventRegisterCommand(Event *ev)
 {
-    ScriptThreadLabel scriptLabel;
+    ScriptThreadLabel label;
+    str commandName;
 
-    scriptLabel.SetThread(ev->GetValue(2));
-
-    m_scriptCmds.addKeyValue(ev->GetString(1)) = scriptLabel;
+    commandName = ev->GetString(1);
+    
+    // Set the script label using current script context
+    label.SetThread(ev->GetValue(2));
+    
+    // Store in ScriptMaster's command map
+    Director.m_scriptCmds.addKeyValue(commandName) = label;
+    
+    // Register command so it's recognized by the engine
+    gi.AddCommand(commandName.c_str(), NULL);
 }
 
 void ScriptThread::CreateHUD(Event *ev)
@@ -7085,10 +7297,460 @@ void ScriptThread::Md5String(Event *ev)
     ret = checkMD5String(text, hash, sizeof(hash));
     if (ret != 0) {
         ev->AddInteger(-1);
+        throw ScriptException("Error while generating MD5 checksum for string!\n");
+    }
+
+    ev->AddString(hash);
+}
+
+void ScriptThread::Md5String2(Event *ev)
+{
+    char hash[64];
+    str  text;
+    int  ret = 0;
+
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for md5_string!\n");
+    }
+
+    text = ev->GetString(1);
+
+    ret = checkMD5String(text, hash, sizeof(hash));
+    if (ret != 0) {
+        ev->AddInteger(-1);
         throw ScriptException("Error while generating MD5 checksum for strin!\n");
     }
 
     ev->AddString(hash);
+}
+
+void ScriptThread::Sha256String(Event *ev)
+{
+    str text;
+    std::string hash;
+
+    if (ev->NumArgs() != 1) {
+        throw ScriptException("Wrong arguments count for sha256_string!\n");
+    }
+
+    text = ev->GetString(1);
+
+    picosha2::hash256_hex_string(std::string(text.c_str()), hash);
+
+    ev->AddString(hash.c_str());
+}
+
+void ScriptThread::UuidString(Event *ev)
+{
+    thread_local std::random_device rd;
+    thread_local std::mt19937 gen(rd());
+    thread_local std::uniform_int_distribution<> dis(0, 15);
+    thread_local std::uniform_int_distribution<> dis2(8, 11);
+
+    std::stringstream ss;
+    int i;
+    ss << std::hex;
+
+    if (ev->NumArgs() > 0) {
+        // Generate random hex string of specified length
+        int length = ev->GetInteger(1);
+        if (length < 1) {
+            length = 1;
+        } else if (length > 1024) {
+            length = 1024;
+        }
+        for (i = 0; i < length; i++) {
+            ss << dis(gen);
+        }
+    } else {
+        // Generate standard UUID v4
+        for (i = 0; i < 8; i++) {
+            ss << dis(gen);
+        }
+        ss << "-";
+        for (i = 0; i < 4; i++) {
+            ss << dis(gen);
+        }
+        ss << "-4";
+        for (i = 0; i < 3; i++) {
+            ss << dis(gen);
+        }
+        ss << "-";
+        ss << dis2(gen);
+        for (i = 0; i < 3; i++) {
+            ss << dis(gen);
+        }
+        ss << "-";
+        for (i = 0; i < 12; i++) {
+            ss << dis(gen);
+        }
+    }
+
+    ev->AddString(ss.str().c_str());
+}
+
+// Helper function to escape a string for JSON
+static str JsonEscapeString(const char *s)
+{
+    str result = "\"";
+    while (*s) {
+        switch (*s) {
+        case '"':
+            result += "\\\"";
+            break;
+        case '\\':
+            result += "\\\\";
+            break;
+        case '\b':
+            result += "\\b";
+            break;
+        case '\f':
+            result += "\\f";
+            break;
+        case '\n':
+            result += "\\n";
+            break;
+        case '\r':
+            result += "\\r";
+            break;
+        case '\t':
+            result += "\\t";
+            break;
+        default:
+            if ((unsigned char)*s < 32) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)*s);
+                result += buf;
+            } else {
+                result += *s;
+            }
+            break;
+        }
+        s++;
+    }
+    result += "\"";
+    return result;
+}
+
+// Forward declaration for recursive call
+static str ScriptVariableToJson(ScriptVariable var, int depth);
+
+// Helper function to convert ScriptVariable to JSON string
+static str ScriptVariableToJson(ScriptVariable var, int depth)
+{
+    if (depth > 100) {
+        return "null"; // Prevent infinite recursion
+    }
+
+    // Handle references by dereferencing first
+    while (var.GetType() == VARIABLE_REF) {
+        var = *var.m_data.refValue;
+    }
+
+    switch (var.GetType()) {
+    case VARIABLE_NONE:
+        return "null";
+
+    case VARIABLE_STRING:
+    case VARIABLE_CONSTSTRING:
+        return JsonEscapeString(var.stringValue().c_str());
+
+    case VARIABLE_INTEGER:
+        {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%d", var.intValue());
+            return buf;
+        }
+
+    case VARIABLE_FLOAT:
+        {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", var.floatValue());
+            return buf;
+        }
+
+    case VARIABLE_VECTOR:
+        {
+            Vector v = var.vectorValue();
+            char buf[128];
+            snprintf(buf, sizeof(buf), "[%g, %g, %g]", v[0], v[1], v[2]);
+            return buf;
+        }
+
+    case VARIABLE_ARRAY:
+        {
+            if (!var.m_data.arrayValue) {
+                return "{}";
+            }
+            str result = "{";
+            con_map_enum<ScriptVariable, ScriptVariable> en = var.m_data.arrayValue->arrayValue;
+            ScriptVariable *key;
+            bool first = true;
+
+            for (key = en.NextKey(); key != NULL; key = en.NextKey()) {
+                ScriptVariable *value = en.CurrentValue();
+                if (!first) {
+                    result += ", ";
+                }
+                first = false;
+
+                // Convert key to string for JSON object key
+                str keyStr = JsonEscapeString(key->stringValue().c_str());
+                result += keyStr;
+                result += ": ";
+                result += ScriptVariableToJson(*value, depth + 1);
+            }
+            result += "}";
+            return result;
+        }
+
+    case VARIABLE_CONSTARRAY:
+        {
+            str result = "[";
+            int arraysize = var.arraysize();
+            for (int i = 1; i <= arraysize; i++) {
+                if (i > 1) {
+                    result += ", ";
+                }
+                ScriptVariable *elem = var[i];
+                if (elem) {
+                    result += ScriptVariableToJson(*elem, depth + 1);
+                } else {
+                    result += "null";
+                }
+            }
+            result += "]";
+            return result;
+        }
+
+    case VARIABLE_LISTENER:
+        {
+            Listener *l = var.listenerValue();
+            if (l) {
+                Entity *ent = dynamic_cast<Entity*>(l);
+                if (ent) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "\"<entity %d>\"", ent->entnum);
+                    return buf;
+                }
+                return "\"<listener>\"";
+            }
+            return "null";
+        }
+
+    default:
+        return "null";
+    }
+}
+
+void ScriptThread::MakeJson(Event *ev)
+{
+    ScriptVariable var = ev->GetValue(1);
+    str json = ScriptVariableToJson(var, 0);
+    ev->AddString(json.c_str());
+}
+
+// JSON Parser helper class
+class JsonParser {
+private:
+    const char *json;
+    size_t pos;
+    size_t len;
+
+    void skipWhitespace() {
+        while (pos < len && (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\n' || json[pos] == '\r')) {
+            pos++;
+        }
+    }
+
+    char peek() {
+        skipWhitespace();
+        return pos < len ? json[pos] : '\0';
+    }
+
+    char consume() {
+        skipWhitespace();
+        return pos < len ? json[pos++] : '\0';
+    }
+
+    str parseString() {
+        str result;
+        if (consume() != '"') {
+            throw ScriptException("Expected '\"' at start of string");
+        }
+        while (pos < len && json[pos] != '"') {
+            if (json[pos] == '\\' && pos + 1 < len) {
+                pos++;
+                switch (json[pos]) {
+                case '"': result += '"'; break;
+                case '\\': result += '\\'; break;
+                case '/': result += '/'; break;
+                case 'b': result += '\b'; break;
+                case 'f': result += '\f'; break;
+                case 'n': result += '\n'; break;
+                case 'r': result += '\r'; break;
+                case 't': result += '\t'; break;
+                case 'u':
+                    // Skip unicode escape for simplicity
+                    if (pos + 4 < len) {
+                        pos += 4;
+                    }
+                    result += '?';
+                    break;
+                default:
+                    result += json[pos];
+                    break;
+                }
+            } else {
+                result += json[pos];
+            }
+            pos++;
+        }
+        if (pos < len && json[pos] == '"') {
+            pos++;
+        }
+        return result;
+    }
+
+    ScriptVariable parseNumber() {
+        ScriptVariable result;
+        str numStr;
+        bool isFloat = false;
+
+        while (pos < len && (isdigit(json[pos]) || json[pos] == '-' || json[pos] == '+' || json[pos] == '.' || json[pos] == 'e' || json[pos] == 'E')) {
+            if (json[pos] == '.' || json[pos] == 'e' || json[pos] == 'E') {
+                isFloat = true;
+            }
+            numStr += json[pos++];
+        }
+
+        if (isFloat) {
+            result.setFloatValue((float)atof(numStr.c_str()));
+        } else {
+            result.setIntValue(atoi(numStr.c_str()));
+        }
+        return result;
+    }
+
+public:
+    JsonParser(const char *jsonStr) : json(jsonStr), pos(0), len(strlen(jsonStr)) {}
+
+    ScriptVariable parse(int depth = 0) {
+        ScriptVariable result;
+
+        if (depth > 100) {
+            throw ScriptException("JSON nesting too deep");
+        }
+
+        char c = peek();
+
+        if (c == '{') {
+            // Parse object
+            consume(); // consume '{'
+            ScriptVariable *ref = new ScriptVariable;
+            ScriptVariable *newArray = new ScriptVariable;
+            ref->setRefValue(newArray);
+
+            if (peek() != '}') {
+                while (true) {
+                    skipWhitespace();
+                    str key = parseString();
+                    skipWhitespace();
+                    if (consume() != ':') {
+                        throw ScriptException("Expected ':' in JSON object");
+                    }
+                    ScriptVariable value = parse(depth + 1);
+
+                    ScriptVariable keyVar;
+                    keyVar.setStringValue(key);
+                    ref->setArrayAt(keyVar, value);
+
+                    skipWhitespace();
+                    if (peek() == '}') {
+                        break;
+                    }
+                    if (consume() != ',') {
+                        throw ScriptException("Expected ',' or '}' in JSON object");
+                    }
+                }
+            }
+            consume(); // consume '}'
+            result = *newArray;
+        } else if (c == '[') {
+            // Parse array
+            consume(); // consume '['
+            Container<ScriptVariable> elements;
+
+            if (peek() != ']') {
+                while (true) {
+                    ScriptVariable elem = parse(depth + 1);
+                    elements.AddObject(elem);
+
+                    skipWhitespace();
+                    if (peek() == ']') {
+                        break;
+                    }
+                    if (consume() != ',') {
+                        throw ScriptException("Expected ',' or ']' in JSON array");
+                    }
+                }
+            }
+            consume(); // consume ']'
+
+            // Convert to const array
+            int size = elements.NumObjects();
+            if (size > 0) {
+                ScriptVariable *arr = new ScriptVariable[size];
+                for (int i = 0; i < size; i++) {
+                    arr[i] = elements.ObjectAt(i + 1);
+                }
+                result.setConstArrayValue(arr, size);
+            }
+        } else if (c == '"') {
+            // Parse string
+            str s = parseString();
+            result.setStringValue(s);
+        } else if (c == 't') {
+            // true
+            if (pos + 4 <= len && strncmp(json + pos, "true", 4) == 0) {
+                pos += 4;
+                result.setIntValue(1);
+            } else {
+                throw ScriptException("Invalid JSON token");
+            }
+        } else if (c == 'f') {
+            // false
+            if (pos + 5 <= len && strncmp(json + pos, "false", 5) == 0) {
+                pos += 5;
+                result.setIntValue(0);
+            } else {
+                throw ScriptException("Invalid JSON token");
+            }
+        } else if (c == 'n') {
+            // null
+            if (pos + 4 <= len && strncmp(json + pos, "null", 4) == 0) {
+                pos += 4;
+                result.Clear();
+            } else {
+                throw ScriptException("Invalid JSON token");
+            }
+        } else if (c == '-' || isdigit(c)) {
+            // Parse number
+            result = parseNumber();
+        } else {
+            throw ScriptException("Unexpected character in JSON");
+        }
+
+        return result;
+    }
+};
+
+void ScriptThread::FromJson(Event *ev)
+{
+    str jsonStr = ev->GetString(1);
+    JsonParser parser(jsonStr.c_str());
+    ScriptVariable result = parser.parse();
+    ev->AddValue(result);
 }
 
 scriptedEvType_t EventNameToType(const char *eventname, char *fullname)
@@ -7497,6 +8159,195 @@ void ScriptThread::FS_OpenAppend(Event *ev) {
     file = new FSFile(f);
     ev->AddListener(file);
 }
+
+#ifdef USE_MQTT
+void ScriptThread::MqttConnect(Event *ev)
+{
+    if (ev->NumArgs() < 4) {
+        throw ScriptException("mqtt_connect requires 4 arguments: host port client_id callback");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_CONNECT;
+    task.host = ev->GetValue(1).stringValue().c_str();
+    task.port = ev->GetInteger(2);
+    task.clientId = ev->GetValue(3).stringValue().c_str();
+    task.callbackLabel = ev->GetValue(4).stringValue().c_str();
+    task.keepAlive = 60;
+
+    // Optional: username and password as 5th and 6th args
+    if (ev->NumArgs() >= 5) {
+        task.username = ev->GetValue(5).stringValue().c_str();
+    }
+    if (ev->NumArgs() >= 6) {
+        task.password = ev->GetValue(6).stringValue().c_str();
+    }
+    if (ev->NumArgs() >= 7) {
+        task.keepAlive = ev->GetInteger(7);
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttDisconnect(Event *ev)
+{
+    MqttTask task;
+    task.type = MQTT_TASK_DISCONNECT;
+
+    if (ev->NumArgs() >= 1) {
+        task.callbackLabel = ev->GetValue(1).stringValue().c_str();
+    }
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttPublish(Event *ev)
+{
+    if (ev->NumArgs() < 2) {
+        throw ScriptException("mqtt_publish requires at least 2 arguments: topic payload [qos] [callback]");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_PUBLISH;
+    task.topic = ev->GetString(1).c_str();
+    task.payload = ev->GetString(2).c_str();
+    task.qos = 0;
+    task.retain = false;
+
+    if (ev->NumArgs() >= 3) {
+        task.qos = ev->GetInteger(3);
+        if (task.qos < 0 || task.qos > 1) {
+            task.qos = 0;
+        }
+    }
+    if (ev->NumArgs() >= 4) {
+        task.callbackLabel = ev->GetValue(4).stringValue().c_str();
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttSubscribe(Event *ev)
+{
+    if (ev->NumArgs() < 2) {
+        throw ScriptException("mqtt_subscribe requires at least 2 arguments: topic message_callback [qos]");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_SUBSCRIBE;
+    task.topic = ev->GetValue(1).stringValue().c_str();
+    task.callbackLabel = ev->GetValue(2).stringValue().c_str();
+    task.qos = 0;
+
+    if (ev->NumArgs() >= 3) {
+        task.qos = ev->GetInteger(3);
+        if (task.qos < 0 || task.qos > 1) {
+            task.qos = 0;
+        }
+    }
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttUnsubscribe(Event *ev)
+{
+    if (ev->NumArgs() < 1) {
+        throw ScriptException("mqtt_unsubscribe requires 1 argument: topic");
+    }
+
+    MqttTask task;
+    task.type = MQTT_TASK_UNSUBSCRIBE;
+    task.topic = ev->GetString(1).c_str();
+
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    g_MqttWorker.AddTask(task);
+}
+
+void ScriptThread::MqttIsConnected(Event *ev)
+{
+    ev->AddInteger(g_MqttWorker.IsConnected() ? 1 : 0);
+}
+#endif // USE_MQTT
+
+#ifdef USE_HTTP
+// ScriptThread wrappers that forward to ScriptMaster
+
+void ScriptThread::CurlGet(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlGet);
+    for (int i = 1; i <= ev->NumArgs(); i++) {
+        newEvent->AddValue(ev->GetValue(i));
+    }
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::CurlPost(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlPost);
+    for (int i = 1; i <= ev->NumArgs(); i++) {
+        newEvent->AddValue(ev->GetValue(i));
+    }
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::CurlCustom(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlCustom);
+    for (int i = 1; i <= ev->NumArgs(); i++) {
+        newEvent->AddValue(ev->GetValue(i));
+    }
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::CurlSetTimeout(Event *ev)
+{
+    // Forward to ScriptMaster
+    Event *newEvent = new Event(EV_ScriptMaster_CurlSetTimeout);
+    for (int i = 1; i <= ev->NumArgs(); i++) {
+        newEvent->AddValue(ev->GetValue(i));
+    }
+    Director.ProcessEvent(newEvent);
+}
+
+void ScriptThread::NetUrlEncode(Event *ev)
+{
+    str in = ev->GetString(1);
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        char *output = curl_easy_escape(curl, in.c_str(), in.length());
+        if (output) {
+            ev->AddString(output);
+            curl_free(output);
+        } else {
+            ev->AddString("");
+        }
+        curl_easy_cleanup(curl);
+    } else {
+        ev->AddString("");
+    }
+}
+#endif
 
 CLASS_DECLARATION(Listener, OSFile, NULL) {
     {NULL, NULL}

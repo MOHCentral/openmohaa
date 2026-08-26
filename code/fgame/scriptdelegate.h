@@ -1,6 +1,6 @@
 /*
 ===========================================================================
-Copyright (C) 2026 the OpenMoHAA team
+Copyright (C) 2025 the OpenMoHAA team
 
 This file is part of OpenMoHAA source code.
 
@@ -22,7 +22,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 // scriptdelegate -- manages function delegate
 
-#pragma once
+#ifndef __SCRIPTDELEGATE_H__
+#define __SCRIPTDELEGATE_H__
 
 #include "../corepp/listener.h"
 #include "../corepp/delegate.h"
@@ -196,3 +197,5 @@ private:
     Container<ScriptRegisteredDelegate_Code>       list_code;
     Container<ScriptRegisteredDelegate_CodeMember> list_codeMember;
 };
+
+#endif // __SCRIPTDELEGATE_H__

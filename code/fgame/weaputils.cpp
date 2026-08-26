@@ -38,6 +38,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "trigger.h"
 #include "debuglines.h"
 #include "smokegrenade.h"
+#include "g_scriptevents.h"
 
 constexpr unsigned long MAX_TRAVEL_DIST = 16216;
 
@@ -545,6 +546,17 @@ Event EV_Projectile_DieInWater
     EV_NORMAL
 );
 
+// Added in OPM
+Event EV_Projectile_GetOwner
+(
+    "owner",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Returns the owner of the projectile",
+    EV_GETTER
+);
+
 CLASS_DECLARATION(Animate, Projectile, NULL) {
     {&EV_Touch,                            &Projectile::Touch                   },
     {&EV_Projectile_Speed,                 &Projectile::SetSpeed                },
@@ -589,6 +601,7 @@ CLASS_DECLARATION(Animate, Projectile, NULL) {
     {&EV_Stop,                             &Projectile::Stopped                 },
     {&EV_Projectile_ArcToTarget,           &Projectile::ArcToTarget             },
     {&EV_Projectile_DieInWater,            &Projectile::DieInWater              },
+    {&EV_Projectile_GetOwner,              &Projectile::EventGetOwner            },
     {NULL,                                 NULL                                 }
 };
 
@@ -896,6 +909,10 @@ void Projectile::Explode(Event *ev)
 
     // Spawn an explosion model
     if (explosionmodel.length()) {
+        if (owner && owner->IsSubclassOfPlayer()) {
+            G_ScriptEvent("grenade_explode", owner, this);
+        }
+
         // Move the projectile back off the surface a bit so we can see
         // explosion effects.
         Vector dir, v;
@@ -1262,6 +1279,11 @@ void Projectile::Touch(Event *ev)
             this, owner, damage, origin, velocity, level.impact_trace.plane.normal, knockback, 0, meansofdeath
         );
 
+        // HOOK: weapon_hit (projectile)
+        if (owner && owner->IsSubclassOfPlayer()) {
+            G_ScriptEvent("weapon_hit", owner, other, "projectile");
+        }
+
         if (g_gametype->integer == GT_SINGLE_PLAYER && weap) {
             if (other->IsSubclassOfSentient() || other->IsSubclassOfVehicle() || other->IsSubclassOfVehicleTank()
                 || other->isSubclassOf(VehicleCollisionEntity)) {
@@ -1484,6 +1506,16 @@ bool Projectile::CheckTeams(void)
 Listener *Projectile::GetScriptOwner()
 {
     return G_GetEntity(owner);
+}
+
+void Projectile::EventGetOwner(Event *ev)
+{
+    Sentient *pOwner = GetOwner();
+    if (pOwner) {
+        ev->AddEntity(pOwner);
+    } else {
+        ev->AddNil();
+    }
 }
 
 Event EV_Explosion_Radius
@@ -1936,6 +1968,10 @@ Projectile *ProjectileAttack(
     proj->setMoveType(MOVETYPE_BOUNCE);
     proj->ProcessInitCommands();
     proj->SetOwner(owner);
+
+    if (owner && owner->IsSubclassOfPlayer()) {
+        G_ScriptEvent("grenade_throw", owner, proj);
+    }
     proj->angles          = dir.toAngles();
     proj->charge_fraction = fraction;
     proj->weap            = weap;
@@ -2054,6 +2090,7 @@ void BulletAttack_Stat(Entity *owner, Entity *target, trace_t *trace, Weapon *we
     case HITLOC_HELMET:
     case HITLOC_NECK:
         weap->m_iNumHeadShots++;
+        // Note: Headshot info can be derived from player_killed event (location parameter)
         break;
     case HITLOC_TORSO_UPPER:
     case HITLOC_TORSO_MID:
@@ -2346,6 +2383,11 @@ float BulletAttack(
                         // Get the original value of the victims health or water
 
                         original_value = ent->health;
+
+                        // HOOK: weapon_hit (bullet)
+                        if (owner && owner->IsSubclassOfPlayer()) {
+                            G_ScriptEvent("weapon_hit", owner, ent, trace.location);
+                        }
 
                         ent->Damage(
                             world,
