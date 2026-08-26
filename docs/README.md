@@ -18,7 +18,7 @@ Welcome to the [OpenMoHAA](https://www.openmohaa.org/) documentation. Here you'l
 
 ## 📚 Resources
 
-- 🌐 [MOH-DB](https://www.moh-db.com/) - A large archive of maps, mods, tools, and tutorials for Medal of Honor: Allied Assault
+- 🌐 [MOHAAAA](https://www.mohaaaa.co.uk/) - A large archive of maps, mods, tools, and tutorials for Medal of Honor: Allied Assault
 - 📂 [ModDB](https://www.moddb.com/games/medal-of-honor-allied-assault) - Mods, updates, and community content
 - 📂 [GameBanana](https://gamebanana.com/games/720) - Skins, mods, and custom content
 - 🕹️ [333networks](https://master.333networks.com/g) - Online server list used by OpenMoHAA

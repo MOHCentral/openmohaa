@@ -161,6 +161,7 @@ static void CON_Show( void )
 	}
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 CON_Shutdown
@@ -179,6 +180,7 @@ void CON_Shutdown( void )
 	// Restore blocking to stdin reads
 	fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) & ~O_NONBLOCK);
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==================
@@ -266,6 +268,7 @@ void CON_SigCont(int signum)
 	CON_Init();
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 CON_Init
@@ -495,6 +498,7 @@ char *CON_Input( void )
 	}
 	return NULL;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==================

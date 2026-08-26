@@ -1511,6 +1511,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
     }
 
     model.reType = RT_MODEL;
+
     if (!(s1->renderfx & RF_DONTDRAW)) {
         cgi.R_Model_GetHandle(model.hModel);
         if (VectorCompare(model.origin, vec3_origin)) {

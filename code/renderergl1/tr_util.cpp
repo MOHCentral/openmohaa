@@ -64,6 +64,7 @@ static float Lines[13][4] = {
 RB_StreamBegin
 ===============
 */
+#ifndef GODOT_GDEXTENSION
 void RB_StreamBegin(shader_t *shader)
 {
     RB_BeginSurface(shader);
@@ -130,6 +131,7 @@ void RB_StreamEndDrawSurf(void)
         tess.numIndexes += 3;
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (RB_StreamBegin, RB_StreamEnd, RB_StreamBeginDrawSurf, RB_StreamEndDrawSurf) */
 
 /*
 ===============
@@ -153,6 +155,7 @@ static void addTriangle(void)
 RB_Vertex3fv
 ===============
 */
+#ifndef GODOT_GDEXTENSION
 void RB_Vertex3fv(vec3_t v)
 {
     VectorCopy(v, tess.xyz[tess.numVertexes]);
@@ -385,6 +388,7 @@ void R_DebugRotatedBBox(
         R_DebugLine(points[i], points[i + 4], r, g, b, alpha);
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (RB_Vertex3fv, RB_Vertex3f, RB_Vertex2f, RB_Color4f, RB_Color3f, RB_Color3fv, RB_Color4bv, RB_Texcoord2f, RB_Texcoord2fv, R_DrawDebugNumber, R_DebugRotatedBBox) */
 
 /*
 ===============

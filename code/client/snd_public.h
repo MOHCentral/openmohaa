@@ -184,3 +184,9 @@ void S_MasterGain( float gain );
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef GODOT_GDEXTENSION
+/* Godot build: pull in extended sound declarations (S_StopAllSounds2 macro,
+   soundsystemsavegame_t, S_SaveData/S_LoadData etc.) that cl_main.cpp needs. */
+#include "snd_local_new.h"
+#endif

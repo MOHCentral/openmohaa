@@ -23,6 +23,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "cl_ui.h"
 #include "../qcommon/localization.h"
 
+#ifdef GODOT_GDEXTENSION
+extern "C" void  Godot_Renderer_SetFontScale(float scale);
+extern "C" float Godot_Renderer_GetFontScale(void);
+#endif
+
 Event EV_GMBox_Goin
 (
 	"_gmbox_goin",
@@ -287,6 +292,14 @@ void UIGMBox::Print(const char *text)
 {
     const char *text1 = text;
 
+#ifdef GODOT_GDEXTENSION
+    /* Apply gmbox font scale so CalculateBreaks wraps at the correct width. */
+    float oldScale = Godot_Renderer_GetFontScale();
+    if (ui_gmbox_scale && ui_gmbox_scale->value > 0.0f) {
+        Godot_Renderer_SetFontScale(oldScale * ui_gmbox_scale->value);
+    }
+#endif
+
     if (m_numitems > 4) {
         //
         // Overwrite an item
@@ -313,6 +326,10 @@ void UIGMBox::Print(const char *text)
     m_numitems++;
     VerifyBoxOut();
     PostDecayEvent();
+
+#ifdef GODOT_GDEXTENSION
+    Godot_Renderer_SetFontScale(oldScale);
+#endif
 }
 
 void UIGMBox::OnSizeChanged(Event *ev)
@@ -358,6 +375,14 @@ void UIGMBox::Draw(void)
     float alpha;
     float alphaScale;
 
+#ifdef GODOT_GDEXTENSION
+    /* Apply gmbox font scale for all text rendered by this widget. */
+    float oldScale = Godot_Renderer_GetFontScale();
+    if (ui_gmbox_scale && ui_gmbox_scale->value > 0.0f) {
+        Godot_Renderer_SetFontScale(oldScale * ui_gmbox_scale->value);
+    }
+#endif
+
     alphaScale = 1.0;
     HandleBoxMoving();
 
@@ -365,6 +390,9 @@ void UIGMBox::Draw(void)
         //
         // Nothing to show
         //
+#ifdef GODOT_GDEXTENSION
+        Godot_Renderer_SetFontScale(oldScale);
+#endif
         return;
     }
 
@@ -397,6 +425,10 @@ void UIGMBox::Draw(void)
             break;
         }
     }
+
+#ifdef GODOT_GDEXTENSION
+    Godot_Renderer_SetFontScale(oldScale);
+#endif
 }
 
 void UIGMBox::setRealShow(bool b)

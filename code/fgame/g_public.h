@@ -179,7 +179,11 @@ typedef struct gentity_s {
 
     // Leave reminder to the game dll
 #if defined(GAME_DLL)
+#ifdef __cplusplus
     class Entity *entity;
+#else
+    void *entity;
+#endif
     float         freetime;
     float         spawntime;
     float         radius2;

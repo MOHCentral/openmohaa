@@ -29,14 +29,30 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #if defined(GAME_DLL)
 #    include "../fgame/g_local.h"
 
-#    define ARRAYSET_Alloc gi.Malloc
-#    define ARRAYSET_Free  gi.Free
+#    ifdef GODOT_GDEXTENSION
+extern "C" void *Z_Malloc(int size);
+extern "C" void  Z_Free(void *ptr);
+#        define ARRAYSET_Alloc Z_Malloc
+#        define ARRAYSET_Free  Z_Free
+#    else
+#        define ARRAYSET_Alloc gi.Malloc
+#        define ARRAYSET_Free  gi.Free
+#    endif
 
 #elif defined(CGAME_DLL)
 #    include "../cgame/cg_local.h"
 
-#    define ARRAYSET_Alloc cgi.Malloc
-#    define ARRAYSET_Free  cgi.Free
+#    ifdef GODOT_GDEXTENSION
+         /* Safe wrappers — cgi.Free/Malloc become NULL after CL_ShutdownCGame.
+          * Global C++ destructors may run after that point (atexit handlers). */
+         static inline void  ARRAYSET_cgi_Free_Safe(void *ptr)  { if (cgi.Free) cgi.Free(ptr); else free(ptr); }
+         static inline void *ARRAYSET_cgi_Alloc_Safe(int size)   { if (cgi.Malloc) return cgi.Malloc(size); else return malloc(size); }
+#        define ARRAYSET_Alloc ARRAYSET_cgi_Alloc_Safe
+#        define ARRAYSET_Free  ARRAYSET_cgi_Free_Safe
+#    else
+#        define ARRAYSET_Alloc cgi.Malloc
+#        define ARRAYSET_Free  cgi.Free
+#    endif
 
 #elif defined(REF_DLL)
 #    include "../renderercommon/tr_common.h"

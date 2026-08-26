@@ -25,15 +25,32 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #if defined(GAME_DLL)
 
 #    include "../fgame/g_local.h"
+#    ifdef GODOT_GDEXTENSION
+#        include <cstdlib>  // fallback malloc/free for library teardown
+// Forward-declare engine allocators (from qcommon.h, extern "C")
+extern "C" void *Z_Malloc(int size);
+extern "C" void  Z_Free(void *ptr);
+#    endif
 
 void *MEM_Alloc(int size)
 {
+#ifdef GODOT_GDEXTENSION
+    // Monolithic build: always use engine zone allocator directly.
+    // gi.Malloc (= SV_Malloc) tags memory with TAG_GAME and may not
+    // be populated when corepp code is called from CL_Init.
+    return Z_Malloc(size);
+#else
     return gi.Malloc(size);
+#endif
 }
 
 void MEM_Free(void *ptr)
 {
+#ifdef GODOT_GDEXTENSION
+    return Z_Free(ptr);
+#else
     return gi.Free(ptr);
+#endif
 }
 
 #elif defined(CGAME_DLL)

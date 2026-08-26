@@ -27,8 +27,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifdef GAME_DLL
 #    include "../fgame/g_local.h"
 
-#    define MEM_TempAllocate(x) gi.Malloc(x)
-#    define MEM_TempFree(x)     gi.Free(x)
+#    ifdef GODOT_GDEXTENSION
+extern "C" void *Z_Malloc(int size);
+extern "C" void  Z_Free(void *ptr);
+#        define MEM_TempAllocate(x) Z_Malloc(x)
+#        define MEM_TempFree(x)     Z_Free(x)
+#    else
+#        define MEM_TempAllocate(x) gi.Malloc(x)
+#        define MEM_TempFree(x)     gi.Free(x)
+#    endif
 
 #elif defined(CGAME_DLL)
 

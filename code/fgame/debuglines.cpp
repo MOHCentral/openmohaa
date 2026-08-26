@@ -29,7 +29,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define NUM_CIRCLE_SEGMENTS 24
 
 debugline_t   *DebugLines   = NULL;
+int            numDebugLines = 0;
 debugstring_t *DebugStrings = NULL;
+int            numDebugStrings = 0;
 Vector         currentVertex(0, 0, 0);
 Vector         vertColor(1, 1, 1);
 float          vertAlpha         = 1;

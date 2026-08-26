@@ -135,8 +135,6 @@ clientStatic_t		cls;
 clientGameExport_t	*cge;
 //vm_t				*cgvm;
 
-char				cl_reconnectArgs[MAX_OSPATH];
-
 // Structure containing functions exported from refresh DLL
 refexport_t	re;
 #ifdef USE_RENDERER_DLOPEN
@@ -1300,10 +1298,12 @@ CL_Reconnect_f
 ================
 */
 void CL_Reconnect_f( void ) {
-	if ( !strlen( cl_reconnectArgs ) )
+	if ( !strlen( clc.servername ) || !strcmp( clc.servername, "localhost" ) ) {
+		Com_Printf( "Can't reconnect to localhost.\n" );
 		return;
+	}
 	Cvar_Set("ui_singlePlayerActive", "0");
-	Cbuf_AddText( va("connect %s\n", cl_reconnectArgs ) );
+	Cbuf_AddText( va("connect %s\n", clc.servername ) );
 }
 
 /*
@@ -1314,22 +1314,6 @@ CL_Connect
 */
 void CL_Connect( const char *server, netadrtype_t family ) {
 	const char *serverString;
-
-	// save arguments for reconnect
-	switch(family)
-	{
-	case netadrtype_t::NA_IP:
-		Q_strncpyz( cl_reconnectArgs, "-4 ", sizeof( cl_reconnectArgs ) );
-		break;
-	case netadrtype_t::NA_IP6:
-		Q_strncpyz( cl_reconnectArgs, "-6 ", sizeof( cl_reconnectArgs ) );
-		break;
-	default:
-		cl_reconnectArgs[0] = 0;
-		break;
-	}
-
-	Q_strcat( cl_reconnectArgs, sizeof( cl_reconnectArgs ), server );
 
 	Cvar_Set( "ui_singlePlayerActive", "0" );
 
@@ -1408,9 +1392,14 @@ void CL_Connect_f(void) {
     int argc = Cmd_Argc();
     netadrtype_t family = NA_UNSPEC;
 
-	if ( argc != 2 && argc != 3 ) {
-		Com_Printf( "usage: connect [-4|-6] server\n");
-		return;	
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: connect [server]\n");
+		return;
+	}
+
+	if (argc != 2 && argc != 3) {
+		Com_Printf("usage: connect [-4|-6] server\n");
+		return;
 	}
 
 	if (argc == 2)
@@ -1633,8 +1622,6 @@ void CL_Vid_Restart_f( void ) {
 	CL_InitRef();
 	// initialize the UI
 	//CL_InitializeUI();
-	// initialize the ui library
-	UI_ResolutionChange();
 	// clear aliases
 	Alias_Clear();
 
@@ -1642,6 +1629,14 @@ void CL_Vid_Restart_f( void ) {
 	Com_Unpause();
 
 	CL_StartHunkUsers(qfalse);
+
+	/* UI_ResolutionChange must run AFTER CL_StartHunkUsers because
+	 * GR_BeginRegistration (called from CL_BeginRegistration inside
+	 * CL_StartHunkUsers) resolves the new r_mode and writes the
+	 * updated vidWidth/vidHeight into cls.glconfig.  Running it
+	 * before that point uses the OLD resolution and the menu
+	 * widgets never rescale to the new window size. */
+	UI_ResolutionChange();
 
 #if !defined(NO_MODERN_DMA) || !NO_MODERN_DMA
     s_bSoundPaused = true;
@@ -2702,18 +2697,43 @@ void CL_Frame ( int msec ) {
 #endif
 
 	if (CL_FinishedIntro()) {
+#ifdef GODOT_GDEXTENSION
+		/* Under Godot, UI_MenuEscape("main") fails silently when menu
+		   .urc files aren't loaded (e.g. web skip mode).  Without this
+		   guard the block fires every frame, spamming music-load warnings
+		   and keeping the screen black.  Try once per disconnect. */
+		static qboolean s_disconnected_menu_attempted = qfalse;
+#endif
 		if (clc.state == CA_DISCONNECTED) {
 			if (!UI_MenuActive() && !com_sv_running->integer) {
+#ifdef GODOT_GDEXTENSION
+				if (!s_disconnected_menu_attempted) {
+					s_disconnected_menu_attempted = qtrue;
+					S_StopAllSounds2(qtrue);
+					S_TriggeredMusic_PlayIntroMusic();
+					UI_MenuEscape("main");
+				}
+#else
 				// if disconnected, bring up the menu
 				S_StopAllSounds2(qtrue);
 				S_TriggeredMusic_PlayIntroMusic();
 				UI_MenuEscape("main");
+#endif
 			}
 
             CL_VerifyUpdate();
 		} else if (clc.state == CA_CINEMATIC) {
 			UI_ForceMenuOff(qtrue);
+#ifdef GODOT_GDEXTENSION
+			s_disconnected_menu_attempted = qfalse;
+#endif
 		}
+#ifdef GODOT_GDEXTENSION
+		else {
+			/* No longer disconnected — reset so menu retry works on next disconnect */
+			s_disconnected_menu_attempted = qfalse;
+		}
+#endif
 	}
 
 	// if recording an avi, lock to a fixed fps
@@ -2932,7 +2952,6 @@ void CL_StartHunkUsers( qboolean rendererOnly ) {
 	if ( !cls.rendererRegistered ) {
 		cls.rendererRegistered = qtrue;
 		CL_BeginRegistration();
-		UI_ResolutionChange();
 	}
 
 	if( !cls.cgameStarted ) {
@@ -2944,6 +2963,12 @@ void CL_StartHunkUsers( qboolean rendererOnly ) {
 	if ( !cls.uiStarted ) {
 		cls.uiStarted = qtrue;
 		CL_InitializeUI();
+
+		/* UI_ResolutionChange must run AFTER CL_InitializeUI so that
+		 * uie.ResolutionChange (set by UI_InitExports) is valid.
+		 * Otherwise the early-return guard skips menuManager.RealignMenus
+		 * and the GUI never scales from 640x480 to the actual viewport. */
+		UI_ResolutionChange();
 	}
 }
 
@@ -4879,6 +4904,10 @@ void CL_ShowIP_f(void) {
 bool CL_CDKeyValidate
 =================
 */
+#ifdef GODOT_GDEXTENSION
+/* Under Godot the no-op stub in stubs.cpp is used instead. */
+#define GODOT_CDKEY_STUB_NOT_NEEDED
+#else
 qboolean CL_CDKeyValidate( const char *key, const char *checksum ) {
 	char	ch;
 	byte	sum;
@@ -4938,6 +4967,7 @@ qboolean CL_CDKeyValidate( const char *key, const char *checksum ) {
 
 	return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 void TIKI_CG_Command_ProcessFile(char* filename, qboolean quiet, dtiki_t* curTiki)
 {

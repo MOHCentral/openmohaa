@@ -719,6 +719,7 @@ void CG_Init(clientGameImport_t *imported, int serverMessageNum, int serverComma
 
     memset(&cg, 0, sizeof(cg));
     memset(&cgs, 0, sizeof(cgs));
+
     // clear fog values
     cg.farclipOverride = 0;
     cg.farplaneColorOverride[0] = -1;
@@ -811,6 +812,9 @@ GetCGameAPI
 The only exported function from this module
 ================
 */
+#ifdef GODOT_GDEXTENSION
+__attribute__((visibility("default")))
+#endif
 clientGameExport_t *GetCGameAPI(void)
 {
     cge.CG_Init                     = CG_Init;

@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // configurator.cpp: Config class for INI files.
 
 #include "configurator.h"
+#include "../fgame/glb_local.h"
 
 CLASS_DECLARATION(Class, Configurator, NULL) {
     {NULL, NULL}
@@ -386,7 +387,7 @@ void Configurator::WriteData(char **data, size_t *size)
                     currentData = new char[currentSize + 1];
                     strncpy(currentData, oldData, offset);
                     Com_sprintf(
-                        currentData + offset, currentSize + 1 - offset "\n%s=%s", key->name.c_str(), value.c_str()
+                        currentData + offset, currentSize + 1 - offset, "\n%s=%s", key->name.c_str(), value.c_str()
                     );
                     Q_strncpyz(currentData + offset + len, oldData + offset2, currentSize + 1 - offset - len);
 

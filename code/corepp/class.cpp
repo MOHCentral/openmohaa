@@ -30,9 +30,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #    include "../fgame/g_local.h"
 
-#    define CLASS_Printf  gi.Printf
-#    define CLASS_DPrintf gi.DPrintf
-#    define CLASS_Error   gi.Error
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+#        define CLASS_Printf  Com_Printf
+#        define CLASS_DPrintf Com_DPrintf
+#        define CLASS_Error   Com_Error
+#    else
+#        define CLASS_Printf  gi.Printf
+#        define CLASS_DPrintf gi.DPrintf
+#        define CLASS_Error   gi.Error
+#    endif
 
 #elif defined(CGAME_DLL)
 

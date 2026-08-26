@@ -9,6 +9,7 @@
 #include "../gsPlatformThread.h"
 #include "../gsAssert.h"
 #include "../gsDebug.h"
+#include "../gsMemory.h"
 #include <pthread.h>
 
 #define _REENTRANT
@@ -54,14 +55,16 @@ void gsiCancelThread(GSIThreadID id)
 	//should i destroy the attributes here?
 	pthread_attr_destroy(&id.attr);
 
+#ifndef ANDROID
 	if (pthread_cancel(id.thread) != PTHREAD_NO_ERROR) {
 		//there was an error - how should we handle these? or should we?
 		gsDebugFormat(GSIDebugCat_Common, GSIDebugType_Misc, GSIDebugLevel_WarmError,
 			"Failed to cancel thread\r\n");
 	}
+#endif
 	//free up memory and set to NULL
 
-	gsifree(&id.thread);
+	// gsifree(&id.thread); // WRONG: Address of stack variable
 }
 
 // This must be called from INSIDE the thread you wish to exit
@@ -204,9 +207,9 @@ void gsiCloseSemaphore(GSISemaphoreID theSemaphore)
 	}
 
 	//need to free up memory
-	gsifree(&theSemaphore.mValue);
-	gsifree(&theSemaphore.mMax);
-	gsifree(&theSemaphore);
+	// gsifree(&theSemaphore.mValue);
+	// gsifree(&theSemaphore.mMax);
+	// gsifree(&theSemaphore);
 }
 
 

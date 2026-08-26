@@ -22,7 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 /*****************************************************************************
  * name:		files.c
  *
- * desc:		handle based filesystem for Quake III Arena 
+ * desc:		handle based filesystem for Quake III Arena
  *
  * $Archive: /MissionPack/code/qcommon/files.c $
  *
@@ -34,6 +34,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "unzip.h"
 
 #ifndef _WIN32
+#   include <sys/types.h>
+#   include <sys/stat.h>
+#   include <errno.h>
+#   include <dirent.h>
+#elif defined(GODOT_GDEXTENSION) && (defined(__MINGW32__) || defined(__MINGW64__))
+// MinGW defines _WIN32 but has POSIX headers — needed for struct stat, etc.
 #   include <sys/types.h>
 #   include <sys/stat.h>
 #   include <errno.h>
@@ -51,7 +57,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 QUAKE3 FILESYSTEM
 
-All of Quake's data access is through a hierarchical file system, but the contents of 
+All of Quake's data access is through a hierarchical file system, but the contents of
 the file system can be transparently merged from several sources.
 
 A "qpath" is a reference to game file data.  MAX_ZPATH is 256 characters, which must include
@@ -296,9 +302,31 @@ typedef struct {
 	int			zipFileLen;
 	qboolean	zipFile;
 	char		name[MAX_ZPATH];
+	char		auditSource[MAX_OSPATH];
 } fileHandleData_t;
 
+typedef struct fsAssetAuditEntry_s {
+	char *qpath;
+	char *source;
+	unsigned int reads;
+	unsigned int bytes;
+	struct fsAssetAuditEntry_s *next;
+} fsAssetAuditEntry_t;
+
+#define FS_ASSET_AUDIT_HASH_SIZE 8192
+
+static cvar_t *fs_assetAudit;
+static cvar_t *fs_assetAuditFile;
+static char fs_assetAuditSessionStamp[32];
+static fsAssetAuditEntry_t *fs_assetAuditHash[FS_ASSET_AUDIT_HASH_SIZE];
+static int fs_assetAuditUniqueCount;
+static unsigned int fs_assetAuditTotalReads;
+static unsigned int fs_assetAuditTotalBytes;
+
 static fileHandleData_t	fsh[MAX_FILE_HANDLES];
+#ifdef __EMSCRIPTEN__
+static int fs_zipCurrentPos[MAX_FILE_HANDLES];
+#endif
 
 // TTimo - https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=540
 // whether we did a reorder on the current search path when joining the server
@@ -431,6 +459,275 @@ static long FS_HashFileName( const char *fname, int hashSize ) {
 	return hash;
 }
 
+/*
+================
+FS_AssetAudit_Enabled
+================
+*/
+static qboolean FS_AssetAudit_Enabled( void ) {
+	return fs_assetAudit && fs_assetAudit->integer;
+}
+
+/*
+================
+FS_AssetAudit_ClearInternal
+================
+*/
+static void FS_AssetAudit_ClearInternal( void ) {
+	int i;
+
+	for ( i = 0; i < FS_ASSET_AUDIT_HASH_SIZE; i++ ) {
+		fsAssetAuditEntry_t *entry = fs_assetAuditHash[i];
+
+		while ( entry ) {
+			fsAssetAuditEntry_t *next = entry->next;
+			Z_Free( entry->qpath );
+			Z_Free( entry->source );
+			Z_Free( entry );
+			entry = next;
+		}
+
+		fs_assetAuditHash[i] = NULL;
+	}
+
+	fs_assetAuditUniqueCount = 0;
+	fs_assetAuditTotalReads = 0;
+	fs_assetAuditTotalBytes = 0;
+}
+
+/*
+================
+FS_AssetAudit_Record
+================
+*/
+static void FS_AssetAudit_Record( const char *qpath, const char *source, size_t bytesRead ) {
+	long hash;
+	fsAssetAuditEntry_t *entry;
+
+	if ( !FS_AssetAudit_Enabled() || !qpath || !qpath[0] || bytesRead == 0 ) {
+		return;
+	}
+
+	hash = FS_HashFileName( qpath, FS_ASSET_AUDIT_HASH_SIZE );
+	for ( entry = fs_assetAuditHash[hash]; entry; entry = entry->next ) {
+		if ( !FS_FilenameCompare( entry->qpath, qpath ) ) {
+			entry->reads++;
+			entry->bytes += (unsigned int)bytesRead;
+			fs_assetAuditTotalReads++;
+			fs_assetAuditTotalBytes += (unsigned int)bytesRead;
+			return;
+		}
+	}
+
+	entry = (fsAssetAuditEntry_t*)Z_Malloc( sizeof( *entry ) );
+	entry->qpath = CopyString( qpath );
+	entry->source = CopyString( source && source[0] ? source : "unknown" );
+	entry->reads = 1;
+	entry->bytes = (unsigned int)bytesRead;
+	entry->next = fs_assetAuditHash[hash];
+	fs_assetAuditHash[hash] = entry;
+
+	fs_assetAuditUniqueCount++;
+	fs_assetAuditTotalReads++;
+	fs_assetAuditTotalBytes += (unsigned int)bytesRead;
+}
+
+/*
+================
+FS_AssetAudit_SortCmp
+================
+*/
+static int QDECL FS_AssetAudit_SortCmp( const void *a, const void *b ) {
+	const fsAssetAuditEntry_t *ea = *(const fsAssetAuditEntry_t *const *)a;
+	const fsAssetAuditEntry_t *eb = *(const fsAssetAuditEntry_t *const *)b;
+	return Q_stricmp( ea->qpath, eb->qpath );
+}
+
+/*
+================
+FS_AssetAudit_InitSessionStamp
+================
+*/
+static void FS_AssetAudit_InitSessionStamp( void ) {
+	qtime_t qt;
+
+	Com_RealTime( &qt );
+	Com_sprintf(
+		fs_assetAuditSessionStamp,
+		sizeof( fs_assetAuditSessionStamp ),
+		"%04d%02d%02d_%02d%02d%02d",
+		1900 + qt.tm_year,
+		qt.tm_mon + 1,
+		qt.tm_mday,
+		qt.tm_hour,
+		qt.tm_min,
+		qt.tm_sec
+	);
+}
+
+/*
+================
+FS_AssetAudit_BuildSessionFileName
+================
+*/
+static void FS_AssetAudit_BuildSessionFileName( char *out, int outSize ) {
+	const char *name;
+	const char *dot;
+	const char *slash;
+	const char *bslash;
+	const char *lastSep;
+
+	name = fs_assetAuditFile ? fs_assetAuditFile->string : "asset_usage_keep_list.txt";
+	dot = strrchr( name, '.' );
+	slash = strrchr( name, '/' );
+	bslash = strrchr( name, '\\' );
+	lastSep = slash;
+	if ( bslash && ( !lastSep || bslash > lastSep ) ) {
+		lastSep = bslash;
+	}
+
+	if ( dot && ( !lastSep || dot > lastSep ) ) {
+		int prefixLen = (int)( dot - name );
+		Com_sprintf( out, outSize, "%.*s_%s%s", prefixLen, name, fs_assetAuditSessionStamp, dot );
+	} else {
+		Com_sprintf( out, outSize, "%s_%s", name, fs_assetAuditSessionStamp );
+	}
+}
+
+/*
+================
+FS_AssetAudit_WriteSortedList
+================
+*/
+static void FS_AssetAudit_WriteSortedList( FILE *out, fsAssetAuditEntry_t **entries, int count ) {
+	int i;
+
+	for ( i = 0; i < count; i++ ) {
+		const fsAssetAuditEntry_t *entry = entries[i];
+		fprintf( out, "%s\n", entry->qpath );
+	}
+}
+
+/*
+================
+FS_AssetAudit_Dump
+================
+*/
+static qboolean FS_AssetAudit_Dump( qboolean verbose ) {
+	FILE *appendOut;
+	FILE *sessionOut;
+	char *appendPath;
+	char *sessionPath;
+	char sessionFileName[MAX_OSPATH];
+	fsAssetAuditEntry_t **entries;
+	int i;
+	int idx;
+
+	if ( !FS_AssetAudit_Enabled() ) {
+		if ( verbose ) {
+			Com_Printf( "asset audit is disabled (set fs_assetAudit 1)\n" );
+		}
+		return qfalse;
+	}
+
+	if ( !fs_assetAuditFile || !fs_assetAuditFile->string[0] ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit file name is empty\n" );
+		}
+		return qfalse;
+	}
+
+	appendPath = FS_BaseDir_BuildOSPath( fs_homedatapath->string, fs_assetAuditFile->string );
+	if ( FS_CreatePath( appendPath ) ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to create path for %s\n", appendPath );
+		}
+		return qfalse;
+	}
+
+	appendOut = Sys_FOpen( appendPath, "at" );
+	if ( !appendOut ) {
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to open %s\n", appendPath );
+		}
+		return qfalse;
+	}
+
+	FS_AssetAudit_BuildSessionFileName( sessionFileName, sizeof( sessionFileName ) );
+	sessionPath = FS_BaseDir_BuildOSPath( fs_homedatapath->string, sessionFileName );
+	if ( FS_CreatePath( sessionPath ) ) {
+		fclose( appendOut );
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to create path for %s\n", sessionPath );
+		}
+		return qfalse;
+	}
+
+	sessionOut = Sys_FOpen( sessionPath, "wt" );
+	if ( !sessionOut ) {
+		fclose( appendOut );
+		if ( verbose ) {
+			Com_Printf( S_COLOR_YELLOW "asset audit: failed to open %s\n", sessionPath );
+		}
+		return qfalse;
+	}
+
+	entries = NULL;
+	if ( fs_assetAuditUniqueCount > 0 ) {
+		entries = (fsAssetAuditEntry_t**)Z_Malloc( sizeof( *entries ) * fs_assetAuditUniqueCount );
+		idx = 0;
+		for ( i = 0; i < FS_ASSET_AUDIT_HASH_SIZE; i++ ) {
+			fsAssetAuditEntry_t *entry = fs_assetAuditHash[i];
+			while ( entry ) {
+				entries[idx++] = entry;
+				entry = entry->next;
+			}
+		}
+
+		qsort( entries, idx, sizeof( *entries ), FS_AssetAudit_SortCmp );
+	}
+
+	FS_AssetAudit_WriteSortedList( appendOut, entries, fs_assetAuditUniqueCount );
+	FS_AssetAudit_WriteSortedList( sessionOut, entries, fs_assetAuditUniqueCount );
+
+	if ( entries ) {
+		Z_Free( entries );
+	}
+
+	fclose( appendOut );
+	fclose( sessionOut );
+
+	if ( verbose ) {
+		Com_Printf(
+			"asset audit dumped %d unique files to %s (append) and %s (session)\n",
+			fs_assetAuditUniqueCount,
+			appendPath,
+			sessionPath
+		);
+	}
+
+	return qtrue;
+}
+
+/*
+================
+FS_AssetAuditDump_f
+================
+*/
+static void FS_AssetAuditDump_f( void ) {
+	FS_AssetAudit_Dump( qtrue );
+}
+
+/*
+================
+FS_AssetAuditClear_f
+================
+*/
+static void FS_AssetAuditClear_f( void ) {
+	FS_AssetAudit_ClearInternal();
+	Com_Printf( "asset audit cleared\n" );
+}
+
 static fileHandle_t	FS_HandleForFile(void) {
 	int		i;
 
@@ -453,7 +750,7 @@ static FILE	*FS_FileForHandle( fileHandle_t f ) {
 	if ( ! fsh[f].handleFiles.file.o ) {
 		Com_Error( ERR_DROP, "FS_FileForHandle: NULL" );
 	}
-	
+
 	return fsh[f].handleFiles.file.o;
 }
 
@@ -497,7 +794,7 @@ long FS_filelength(fileHandle_t f)
 	FILE	*h;
 
 	h = FS_FileForHandle(f);
-	
+
 	if(h == NULL)
 		return -1;
 	else
@@ -675,7 +972,7 @@ Creates any directories needed to store the given filename
 qboolean FS_CreatePath (const char *OSPath) {
 	char	*ofs;
 	char	path[MAX_OSPATH];
-	
+
 	if (!OSPath || !*OSPath) {
 		return qfalse;
 	}
@@ -768,13 +1065,13 @@ qboolean FS_FileInPathExists(const char *testpath)
 	FILE *filep;
 
 	filep = Sys_FOpen(testpath, "rb");
-	
+
 	if(filep)
 	{
 		fclose(filep);
 		return qtrue;
 	}
-	
+
 	return qfalse;
 }
 
@@ -995,6 +1292,9 @@ void FS_FCloseFile( fileHandle_t f ) {
 
 	if (fsh[f].zipFile == qtrue) {
 		unzCloseCurrentFile( fsh[f].handleFiles.file.z );
+		#ifdef __EMSCRIPTEN__
+		fs_zipCurrentPos[f] = 0;
+		#endif
 		if ( fsh[f].handleFiles.unique ) {
 			unzClose( fsh[f].handleFiles.file.z );
 		}
@@ -1321,7 +1621,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 	// make absolutely sure that it can't back up the path.
 	// The searchpaths do guarantee that something will always
-	// be prepended, so we don't need to worry about "c:" or "//limbo" 
+	// be prepended, so we don't need to worry about "c:" or "//limbo"
 	if(strstr(filename, ".." ) || strstr(filename, "::"))
 	{
 		if(file == NULL)
@@ -1429,9 +1729,9 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					// found it!
 
 					// mark the pak as having been referenced and mark specifics on cgame and ui
-					// shaders, txt, arena files  by themselves do not count as a reference as 
-					// these are loaded from all pk3s 
-					// from every pk3 file.. 
+					// shaders, txt, arena files  by themselves do not count as a reference as
+					// these are loaded from all pk3s
+					// from every pk3 file..
 					len = strlen(filename);
 
 					if (!(pak->referenced & FS_GENERAL_REF))
@@ -1468,6 +1768,12 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 					Q_strncpyz(fsh[*file].name, filename, sizeof(fsh[*file].name));
 					fsh[*file].zipFile = qtrue;
+					Com_sprintf(
+						fsh[*file].auditSource,
+						sizeof( fsh[*file].auditSource ),
+						"pk3:%s",
+						pak->pakFilename
+					);
 
 					// set the file position in the zip file (also sets the current file info)
 					unzSetOffset(fsh[*file].handleFiles.file.z, pakFile->pos);
@@ -1476,12 +1782,17 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 					unzOpenCurrentFile(fsh[*file].handleFiles.file.z);
 					fsh[*file].zipFilePos = pakFile->pos;
 					fsh[*file].zipFileLen = pakFile->len;
+					#ifdef __EMSCRIPTEN__
+					fs_zipCurrentPos[*file] = 0;
+					#endif
 
 					if(fs_debug->integer)
 					{
-						Com_Printf("FS_FOpenFileRead: %s (found in '%s')\n", 
+						Com_Printf("FS_FOpenFileRead: %s (found in '%s')\n",
 								filename, pak->pakFilename);
 					}
+
+					FS_AssetAudit_Record( fsh[*file].name, fsh[*file].auditSource, 1 );
 
 					return pakFile->len;
 				}
@@ -1532,6 +1843,14 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 
 		Q_strncpyz(fsh[*file].name, filename, sizeof(fsh[*file].name));
 		fsh[*file].zipFile = qfalse;
+		Com_sprintf(
+			fsh[*file].auditSource,
+			sizeof( fsh[*file].auditSource ),
+			"dir:%s%c%s",
+			dir->path,
+			PATH_SEP,
+			dir->gamedir
+		);
 
 		if(fs_debug->integer)
 		{
@@ -1540,6 +1859,7 @@ long FS_FOpenFileReadDir(const char *filename, searchpath_t *search, fileHandle_
 		}
 
 		fsh[*file].handleFiles.file.o = filep;
+		FS_AssetAudit_Record( fsh[*file].name, fsh[*file].auditSource, 1 );
 		return FS_fplength(filep);
 	}
 
@@ -1587,7 +1907,7 @@ long FS_FOpenFileRead(const char *filename, fileHandle_t *file, qboolean uniqueF
 			FS_FCloseFile(*file);
 		}
 	}
-	
+
 #ifdef FS_MISSING
 	if(missingFiles)
 		fprintf(missingFiles, "%s\n", filename);
@@ -1652,7 +1972,13 @@ size_t FS_Read( void *buffer, size_t len, fileHandle_t f ) {
 		}
 		return len;
 	} else {
-		return unzReadCurrentFile(fsh[f].handleFiles.file.z, buffer, ( unsigned int )len);
+		int zip_read = unzReadCurrentFile(fsh[f].handleFiles.file.z, buffer, ( unsigned int )len);
+		#ifdef __EMSCRIPTEN__
+		if (zip_read > 0) {
+			fs_zipCurrentPos[f] += zip_read;
+		}
+		#endif
+		return zip_read;
 	}
 }
 
@@ -1729,15 +2055,25 @@ FS_Seek
 =================
 */
 int FS_Seek( fileHandle_t f, long offset, int origin ) {
+	#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[FSDBG] enter FS_Seek f=%d offset=%ld origin=%d\n", f, offset, origin);
+	#endif
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 		return -1;
 	}
 
 	if (fsh[f].zipFile == qtrue) {
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek zip f=%d offset=%ld origin=%d cur=%d len=%d\n", f, offset, origin, FS_FTell(f), fsh[f].zipFileLen);
+		#endif
 		//FIXME: this is really, really crappy
 		//(but better than what was here before)
+		#ifdef __EMSCRIPTEN__
+		static byte buffer[PK3_SEEK_BUFFER_SIZE];
+		#else
 		byte	buffer[PK3_SEEK_BUFFER_SIZE];
+		#endif
 		int		remainder;
 		int		currentPosition = FS_FTell( f );
 
@@ -1776,8 +2112,20 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 				if ( remainder == currentPosition ) {
 					return offset;
 				}
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip setOffset pos=%d remainder=%d\n", fsh[f].zipFilePos, remainder);
+				#endif
 				unzSetOffset(fsh[f].handleFiles.file.z, fsh[f].zipFilePos);
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip unzSetOffset done\n");
+				#endif
 				unzOpenCurrentFile(fsh[f].handleFiles.file.z);
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip unzOpenCurrentFile done\n");
+				#endif
+				#ifdef __EMSCRIPTEN__
+				fs_zipCurrentPos[f] = 0;
+				#endif
 				//fallthrough
 
 			case FS_SEEK_END:
@@ -1786,7 +2134,13 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 					FS_Read( buffer, PK3_SEEK_BUFFER_SIZE, f );
 					remainder -= PK3_SEEK_BUFFER_SIZE;
 				}
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip draining remainder=%d\n", remainder);
+				#endif
 				FS_Read( buffer, remainder, f );
+				#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+				Com_Printf("[FSDBG] FS_Seek zip final read done\n");
+				#endif
 				return offset;
 
 			default:
@@ -1795,7 +2149,13 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 		}
 	} else {
 		FILE *file;
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular f=%d offset=%ld origin=%d\n", f, offset, origin);
+		#endif
 		file = FS_FileForHandle(f);
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular got FILE*\n");
+		#endif
 		int _origin = SEEK_SET;
 		switch( origin ) {
 		case FS_SEEK_CUR:
@@ -1812,7 +2172,11 @@ int FS_Seek( fileHandle_t f, long offset, int origin ) {
 			break;
 		}
 
-		return fseek( file, offset, _origin );
+		int seek_ret = fseek( file, offset, _origin );
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[FSDBG] FS_Seek regular fseek ret=%d\n", seek_ret);
+		#endif
+		return seek_ret;
 	}
 }
 
@@ -2434,7 +2798,7 @@ char **FS_ListFilteredFiles( const char *path, const char *extension, const char
 
 					// check for directory match
 					name = buildBuffer[i].name;
-					
+
 					zpathLen = FS_ReturnPath(name, zpath, &depth);
 
 					if ( pathLength > (zpathLen + 1) || Q_stricmpn( name, path, pathLength ) || ((!wantSubs || bDirSearch) && depth - pathDepth != 1) ) {
@@ -3289,7 +3653,7 @@ qboolean FS_CheckDirTraversal(const char *checkdir)
 {
 	if(strstr(checkdir, "../") || strstr(checkdir, "..\\"))
 		return qtrue;
-	
+
 	return qfalse;
 }
 
@@ -3445,6 +3809,11 @@ void FS_Shutdown( qboolean closemfp ) {
 	searchpath_t	*p, *next;
 	int	i;
 
+	if ( FS_AssetAudit_Enabled() ) {
+		FS_AssetAudit_Dump( qtrue );
+	}
+	FS_AssetAudit_ClearInternal();
+
 	for(i = 0; i < MAX_FILE_HANDLES; i++) {
 		if (fsh[i].fileSize) {
 			FS_FCloseFile(i);
@@ -3473,6 +3842,9 @@ void FS_Shutdown( qboolean closemfp ) {
 	Cmd_RemoveCommand( "dir" );
 	Cmd_RemoveCommand( "fdir" );
 	Cmd_RemoveCommand( "touchFile" );
+	Cmd_RemoveCommand( "which" );
+	Cmd_RemoveCommand( "assetAuditDump" );
+	Cmd_RemoveCommand( "assetAuditClear" );
 
 #ifdef FS_MISSING
 	if (closemfp) {
@@ -3602,9 +3974,14 @@ static void FS_Startup(const char* gameName)
 	fs_homestatepath = Cvar_Get ("fs_homestatepath", statePath, CVAR_INIT|CVAR_PROTECTED );
 	fs_gamedirvar = Cvar_Get ("fs_game", "", CVAR_INIT|CVAR_SYSTEMINFO );
 	fs_restrict = Cvar_Get( "fs_restrict", "", CVAR_INIT );
+	fs_assetAudit = Cvar_Get( "fs_assetAudit", "0", 0 );
+	fs_assetAuditFile = Cvar_Get( "fs_assetAuditFile", "asset_usage_keep_list.txt", 0 );
 	fs_steampath = Cvar_Get ("fs_steampath", Sys_SteamPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_gogpath = Cvar_Get ("fs_gogpath", Sys_GogPath(), CVAR_INIT|CVAR_PROTECTED );
 	fs_microsoftstorepath = Cvar_Get ("fs_microsoftstorepath", Sys_MicrosoftStorePath(), CVAR_INIT|CVAR_PROTECTED );
+
+	FS_AssetAudit_InitSessionStamp();
+	FS_AssetAudit_ClearInternal();
 
 #ifdef __APPLE__
 	fs_apppath = Cvar_Get ("fs_apppath", Sys_DefaultAppPath(), CVAR_INIT|CVAR_PROTECTED );
@@ -3667,6 +4044,8 @@ static void FS_Startup(const char* gameName)
 	Cmd_AddCommand ("fdir", FS_NewDir_f );
 	Cmd_AddCommand ("touchFile", FS_TouchFile_f );
 	Cmd_AddCommand ("which", FS_Which_f );
+	Cmd_AddCommand ("assetAuditDump", FS_AssetAuditDump_f );
+	Cmd_AddCommand ("assetAuditClear", FS_AssetAuditClear_f );
 
 	Sys_Mkdir(fs_homepath->string);
 
@@ -4255,7 +4634,11 @@ int		FS_FOpenFileByMode( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
 int		FS_FTell( fileHandle_t f ) {
 	int pos;
 	if (fsh[f].zipFile == qtrue) {
+		#ifdef __EMSCRIPTEN__
+		pos = fs_zipCurrentPos[f];
+		#else
 		pos = unztell(fsh[f].handleFiles.file.z);
+		#endif
 	} else {
 		pos = ftell(fsh[f].handleFiles.file.o);
 	}

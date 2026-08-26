@@ -25,7 +25,7 @@ Updated 11-9-00 (JED)
 #if defined(applec) || defined(THINK_C) || defined(__MWERKS__) && !defined(__KATANA__) && !defined(__mips64)
     #include "::nonport.h"
 #else
-    #include "../nonport.h"
+#include "nonport.h"
 #endif
 #include "goaceng.h"
 #include "gserver.h"

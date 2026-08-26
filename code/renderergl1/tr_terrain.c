@@ -70,11 +70,29 @@ typedef struct poolInfo_s {
 
 static int modeTable[8];
 
+#ifdef GODOT_GDEXTENSION
+#if defined(_MSC_VER)
+/* MSVC mangles C++ globals; keep C-linkage definitions here.
+   /FORCE:MULTIPLE resolves duplicates from navigation_bsp_load_terrain.cpp. */
+terraTri_t    *g_pTris;
+terrainVert_t *g_pVert;
+poolInfo_t g_tri;
+poolInfo_t g_vert;
+#else
+/* Under GODOT_GDEXTENSION these are defined in navigation_bsp_load_terrain.cpp;
+ * use extern to avoid duplicate symbol errors with wasm-ld. */
+extern terraTri_t    *g_pTris;
+extern terrainVert_t *g_pVert;
+extern poolInfo_t g_tri;
+extern poolInfo_t g_vert;
+#endif
+#else
 terraTri_t    *g_pTris;
 terrainVert_t *g_pVert;
 
 poolInfo_t g_tri;
 poolInfo_t g_vert;
+#endif /* GODOT_GDEXTENSION */
 
 /*
 ================
@@ -1314,6 +1332,7 @@ void R_MarkTerrainPatch(cTerraPatchUnpacked_t *pPatch)
 R_AddTerrainSurfaces
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddTerrainSurfaces()
 {
     int                    i;
@@ -1483,6 +1502,7 @@ qboolean R_TerrainHeightForPoly(cTerraPatchUnpacked_t *pPatch, polyVert_t *pVert
     );
     return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddTerrainSurfaces, R_TerrainHeightForPoly) */
 
 /*
 ================
@@ -1597,6 +1617,7 @@ void R_CraterTerrain(const vec3_t pos, const vec3_t dir, float fDepth, float fRa
 R_TerrainCrater_f
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_TerrainCrater_f(void)
 {
     vec3_t dir;
@@ -1615,6 +1636,7 @@ void R_TerrainCrater_f(void)
     R_CraterTerrain(tr.refdef.vieworg, dir, 256.0, 256.0);
     R_TerrainRestart_f();
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_TerrainCrater_f) */
 
 /*
 ================
@@ -1690,6 +1712,7 @@ R_SwapTerraPatch
 Swaps the patch on big-endian
 ====================
 */
+#ifndef GODOT_GDEXTENSION
 void R_SwapTerraPatch(cTerraPatch_t *pPatch)
 {
 #ifdef Q3_BIG_ENDIAN
@@ -1717,3 +1740,136 @@ void R_SwapTerraPatch(cTerraPatch_t *pPatch)
     }
 #endif
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_SwapTerraPatch) */
+
+/* ================================================================
+ *  Godot terrain visibility accessors
+ *  These query per-patch visibility state set by R_MarkTerrainPatch
+ *  during the per-frame BSP tree walk (R_MarkTerrainForGodot).
+ * ================================================================ */
+#ifdef GODOT_GDEXTENSION
+
+int Godot_Terrain_GetVisCount(void) {
+    return g_terVisCount;
+}
+
+int Godot_Terrain_IsPatchMarked(int patchIdx) {
+    if (!tr.world || patchIdx < 0 || patchIdx >= tr.world->numTerraPatches)
+        return 0;
+    return (tr.world->terraPatches[patchIdx].visCountDraw == g_terVisCount) ? 1 : 0;
+}
+
+int Godot_Terrain_GetRendererPatchCount(void) {
+    return tr.world ? tr.world->numTerraPatches : 0;
+}
+
+void Godot_Terrain_TessellateForGodot(void) {
+    if (!tr.world || tr.world->numTerraPatches < 0) {
+        return;
+    }
+
+    // Match renderer behaviour: terrain tessellation is skipped only when
+    // ter_lock is enabled. Godot-side terrain export reads drawinfo, so it
+    // must run after visibility marking each frame.
+    if (!ter_lock || !ter_lock->integer) {
+        R_TessellateTerrain();
+    }
+}
+
+int Godot_Terrain_GetPatchMesh(int patchIdx,
+    float *xyz_out, float *uv0_out, float *uv1_out,
+    int max_verts, int *indices_out, int max_indices,
+    int *out_vert_count, int *out_index_count)
+{
+    static int s_vert_map[65536];
+    static unsigned short s_vert_stamp[65536];
+    static unsigned short s_stamp = 1;
+
+    int vcount = 0;
+    int icount = 0;
+    terraInt i;
+
+    if (out_vert_count) {
+        *out_vert_count = 0;
+    }
+    if (out_index_count) {
+        *out_index_count = 0;
+    }
+
+    if (!tr.world || !xyz_out || !uv0_out || !uv1_out || !indices_out ||
+        !out_vert_count || !out_index_count || max_verts <= 0 || max_indices <= 0 ||
+        patchIdx < 0 || patchIdx >= tr.world->numTerraPatches) {
+        return 0;
+    }
+
+    s_stamp++;
+    if (s_stamp == 0) {
+        memset(s_vert_stamp, 0, sizeof(s_vert_stamp));
+        s_stamp = 1;
+    }
+
+    {
+        const srfTerrain_t *draw = &tr.world->terraPatches[patchIdx].drawinfo;
+
+        for (i = draw->iVertHead; i != 0; i = g_pVert[i].iNext) {
+            const terrainVert_t *v = &g_pVert[i];
+            if (vcount >= max_verts) {
+                return 0;
+            }
+
+            xyz_out[vcount * 3 + 0] = v->xyz[0];
+            xyz_out[vcount * 3 + 1] = v->xyz[1];
+            xyz_out[vcount * 3 + 2] = v->xyz[2];
+
+            uv0_out[vcount * 2 + 0] = v->texCoords[0][0];
+            uv0_out[vcount * 2 + 1] = v->texCoords[0][1];
+
+            if (draw->dlightMap[0]) {
+                float lmScale = (1.0f / LIGHTMAP_SIZE) / draw->lmapStep;
+                uv1_out[vcount * 2 + 0] = v->xyz[0] * lmScale + draw->lmapX;
+                uv1_out[vcount * 2 + 1] = v->xyz[1] * lmScale + draw->lmapY;
+            } else {
+                uv1_out[vcount * 2 + 0] = v->texCoords[1][0];
+                uv1_out[vcount * 2 + 1] = v->texCoords[1][1];
+            }
+
+            s_vert_map[i] = vcount;
+            s_vert_stamp[i] = s_stamp;
+            vcount++;
+        }
+
+        for (i = draw->iTriHead; i != 0; i = g_pTris[i].iNext) {
+            const terraTri_t *t = &g_pTris[i];
+            terraInt p0, p1, p2;
+
+            if (!(t->byConstChecks & 4)) {
+                continue;
+            }
+
+            p0 = t->iPt[0];
+            p1 = t->iPt[1];
+            p2 = t->iPt[2];
+
+            if (s_vert_stamp[p0] != s_stamp ||
+                s_vert_stamp[p1] != s_stamp ||
+                s_vert_stamp[p2] != s_stamp) {
+                return 0;
+            }
+
+            if (icount + 3 > max_indices) {
+                return 0;
+            }
+
+            indices_out[icount + 0] = s_vert_map[p0];
+            indices_out[icount + 1] = s_vert_map[p1];
+            indices_out[icount + 2] = s_vert_map[p2];
+            icount += 3;
+        }
+    }
+
+    *out_vert_count = vcount;
+    *out_index_count = icount;
+    return 1;
+}
+
+#endif /* GODOT_GDEXTENSION */

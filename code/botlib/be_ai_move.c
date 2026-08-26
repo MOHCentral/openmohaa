@@ -103,7 +103,11 @@ typedef struct bot_movestate_s
 
 libvar_t *sv_maxstep;
 libvar_t *sv_maxbarrier;
+#ifdef GODOT_GDEXTENSION
+static libvar_t *sv_gravity;
+#else
 libvar_t *sv_gravity;
+#endif
 libvar_t *weapindex_rocketlauncher;
 libvar_t *weapindex_bfg10k;
 libvar_t *weapindex_grapple;

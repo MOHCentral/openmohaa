@@ -22,6 +22,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "cl_ui.h"
 
+#ifdef GODOT_GDEXTENSION
+extern "C" void  Godot_Renderer_SetFontScale(float scale);
+extern "C" float Godot_Renderer_GetFontScale(void);
+#endif
+
 Event EV_Minicon_Goin("_minicon_goin", EV_DEFAULT, NULL, NULL, "Event to make the miniconsole disappear");
 
 CLASS_DECLARATION(UIWidget, FakkMiniconsole, NULL) {
@@ -160,6 +165,14 @@ void FakkMiniconsole::Draw(void)
     float aty;
     int   i;
 
+#ifdef GODOT_GDEXTENSION
+    /* Apply minicon font scale for all text rendered by this widget. */
+    float oldScale = Godot_Renderer_GetFontScale();
+    if (ui_minicon_scale && ui_minicon_scale->value > 0.0f) {
+        Godot_Renderer_SetFontScale(oldScale * ui_minicon_scale->value);
+    }
+#endif
+
     HandleBoxMoving();
 
     m_font->setColor(m_foreground_color);
@@ -172,6 +185,10 @@ void FakkMiniconsole::Draw(void)
         m_font->Print(0, aty / getHighResScale()[1], m_lines.ObjectAt(i), -1, getHighResScale());
         aty -= m_font->getHeight(getHighResScale());
     }
+
+#ifdef GODOT_GDEXTENSION
+    Godot_Renderer_SetFontScale(oldScale);
+#endif
 }
 
 void FakkMiniconsole::Create(const UISize2D& size, const UColor& fore, const UColor& back, float alpha)

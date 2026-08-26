@@ -144,9 +144,11 @@ static char *Sys_DefaultHomePath(void)
 	return homePath;
 }
 
+#ifndef GODOT_GDEXTENSION
 char *Sys_DefaultHomeConfigPath(void) { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeDataPath(void)   { return Sys_DefaultHomePath(); }
 char *Sys_DefaultHomeStatePath(void)  { return Sys_DefaultHomePath(); }
+#endif /* !GODOT_GDEXTENSION */
 
 #else // __APPLE__
 
@@ -439,6 +441,7 @@ static qboolean Sys_ShouldUseLegacyHomePath(void)
 	return qtrue;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_DefaultHomeConfigPath
@@ -477,9 +480,11 @@ char *Sys_DefaultHomeStatePath(void)
 
 	return Sys_HomeStatePath( );
 }
+#endif /* !GODOT_GDEXTENSION */
 
 #endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_SteamPath
@@ -501,7 +506,9 @@ char *Sys_GogPath( void )
 	// GOG doesn't let you install Quake 3 on Mac/Linux
 	return "";
 }
+#endif /* !GODOT_GDEXTENSION */
 
+#ifndef GODOT_GDEXTENSION
 /*
 ================
 Sys_MicrosoftStorePath
@@ -512,6 +519,7 @@ char* Sys_MicrosoftStorePath(void)
 	// Microsoft Store doesn't exist on Mac/Linux
 	return "";
 }
+#endif /* !GODOT_GDEXTENSION */
 
 
 /*
@@ -528,6 +536,8 @@ unsigned long sys_timeBase = 0;
      0x7fffffff ms - ~24 days
    although timeval:tv_usec is an int, I'm not sure whether it is actually used as an unsigned int
      (which would affect the wrap period) */
+
+#ifndef GODOT_GDEXTENSION
 int curtime;
 int Sys_Milliseconds (void)
 {
@@ -545,7 +555,9 @@ int Sys_Milliseconds (void)
 
 	return curtime;
 }
+#endif /* !GODOT_GDEXTENSION */
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_RandomBytes
@@ -585,6 +597,7 @@ char *Sys_GetCurrentUser( void )
 	}
 	return p->pw_name;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 #define MEM_THRESHOLD 96*1024*1024
 
@@ -600,6 +613,7 @@ qboolean Sys_LowPhysicalMemory( void )
 	return qfalse;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_Basename
@@ -697,6 +711,7 @@ char *Sys_Cwd( void )
 
 	return cwd;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==================
@@ -803,6 +818,7 @@ void Sys_ListFilteredFiles(
     closedir(fdir);
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==================
 Sys_ListFiles
@@ -928,6 +944,7 @@ void Sys_FreeFileList( char **list )
 
 	Z_Free( list );
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==================
@@ -1178,6 +1195,7 @@ dialogResult_t Sys_Dialog( dialogType_t type, const char *message, const char *t
 }
 #endif
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_GLimpSafeInit
@@ -1201,6 +1219,7 @@ void Sys_GLimpInit( void )
 {
 	// NOP
 }
+#endif /* !GODOT_GDEXTENSION */
 
 void Sys_SetFloatEnv(void)
 {
@@ -1208,6 +1227,7 @@ void Sys_SetFloatEnv(void)
 	fesetround(FE_TONEAREST);
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_PlatformInit
@@ -1230,7 +1250,9 @@ void Sys_PlatformInit( void )
 	stdinIsATTY = isatty( STDIN_FILENO ) &&
 		!( term && ( !strcmp( term, "raw" ) || !strcmp( term, "dumb" ) ) );
 }
+#endif /* !GODOT_GDEXTENSION */
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_PlatformExit
@@ -1241,7 +1263,9 @@ Unix specific deinitialisation
 void Sys_PlatformExit( void )
 {
 }
+#endif /* !GODOT_GDEXTENSION */
 
+#ifndef GODOT_GDEXTENSION
 /*
 ==============
 Sys_SetEnv
@@ -1326,6 +1350,7 @@ qboolean Sys_DllExtension( const char *name ) {
 
 	return qfalse;
 }
+#endif /* !GODOT_GDEXTENSION */
 
 /*
 ==============
