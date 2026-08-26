@@ -93,6 +93,16 @@ void SV_GetChallenge(netadr_t from)
 		return;
 	}
 
+	{
+		char vpnReason[MAX_REASON_LENGTH];
+
+		if (SV_VpnBlockShouldRefuse(from, vpnReason, sizeof(vpnReason))) {
+			SV_NET_OutOfBandPrint(&svs.netprofile, from, "print\n%s\n",
+				vpnReason[0] ? vpnReason : "VPN/proxy connections are not allowed on this server.");
+			return;
+		}
+	}
+
 	if (com_protocol->integer < PROTOCOL_MOHTA_MIN) {
 		// mohaa below 2.0 doesn't handle gamespy key
 		// so send the challenge response directly
@@ -396,6 +406,13 @@ void SV_DirectConnect( netadr_t from ) {
 			SV_NET_OutOfBandPrint( &svs.netprofile, from, "droperror\nYou are banned from this server.\n");
             Com_DPrintf("    rejected connect due to banned IP (reason unspecified)\n");
 		}
+		return;
+	}
+
+	if (SV_VpnBlockShouldRefuse(from, banReason, sizeof(banReason))) {
+		SV_NET_OutOfBandPrint(&svs.netprofile, from, "droperror\n%s\n",
+			banReason[0] ? banReason : "VPN/proxy connections are not allowed on this server.");
+		Com_Printf("vpnblock: dropped connecting client %s\n", NET_AdrToString(from));
 		return;
 	}
 
