@@ -1040,8 +1040,9 @@ int Com_HexStrToInt( const char *str )
 	if( str[ 0 ] == '0' && str[ 1 ] == 'x' )
 	{
 		int i, n = 0;
+		size_t len = strlen( str );
 
-		for( i = 2; i < strlen( str ); i++ )
+		for( i = 2; i < len; i++ )
 		{
 			char digit;
 
