@@ -169,8 +169,11 @@ void MpMapPickerClass::SetupFiles(void)
         for (i = 0; i < numfiles; i++) {
             const char *filename = filenames[i];
 
-            strcpy(mapname, filename);
-            mapname[strlen(mapname) - 4] = 0;
+            Q_strncpyz(mapname, filename, sizeof(mapname));
+            size_t mapnameLen = strlen(mapname);
+            if (mapnameLen >= 4) {
+                mapname[mapnameLen - 4] = 0;
+            }
 
             if (COM_IsMapValid(mapname)) {
                 listbox->AddItem(new MpMapPickerItem(mapname, rootDirectory));
@@ -208,8 +211,11 @@ void MpMapPickerClass::SetupSecondaryFiles(const char *path, bool bTugOfWar, boo
         const char *filename = filenames[i];
         const char *token;
 
-        strcpy(mapname, filename);
-        mapname[strlen(mapname) - 4] = 0;
+        Q_strncpyz(mapname, filename, sizeof(mapname));
+        size_t mapnameLen = strlen(mapname);
+        if (mapnameLen >= 4) {
+            mapname[mapnameLen - 4] = 0;
+        }
 
         if (!COM_IsMapValid(mapname)) {
             continue;
@@ -218,7 +224,7 @@ void MpMapPickerClass::SetupSecondaryFiles(const char *path, bool bTugOfWar, boo
         if (bTugOfWar || bObjective || bLiberation) {
             bool bHasMP = false, bHasTOW = false, bHasLib = false;
 
-            strcpy(string, mapname);
+            Q_strncpyz(string, mapname, sizeof(string));
 
             for (token = strtok(string, "_"); token; token = strtok(NULL, "_")) {
                 if (bObjective) {
