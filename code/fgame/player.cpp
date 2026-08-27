@@ -12633,14 +12633,18 @@ void Player::GetUserInfo(Event *ev)
 
 void Player::HideEntity(Event *ev)
 {
-    // FIXME: todo
-    UNIMPLEMENTED();
+    Entity *ent = ev->GetEntity(1);
+    if (ent != NULL) {
+        ent->hideModel();
+    }
 }
 
 void Player::ShowEntity(Event *ev)
 {
-    // FIXME: REDO
-    UNIMPLEMENTED();
+    Entity *ent = ev->GetEntity(1);
+    if (ent != NULL) {
+        ent->showModel();
+    }
 }
 
 void Player::Inventory(Event *ev)
