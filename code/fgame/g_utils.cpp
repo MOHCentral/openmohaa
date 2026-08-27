@@ -160,11 +160,9 @@ void G_TouchSolids(Entity *ent)
 
         assert(hit->entity);
 
-        //FIXME
-        // should we post the events so that we don't have to worry about any entities going away
         ev = new Event(EV_Touch);
         ev->AddEntity(ent);
-        hit->entity->ProcessEvent(ev);
+        hit->entity->PostEvent(ev, 0.0f);
     }
 }
 
