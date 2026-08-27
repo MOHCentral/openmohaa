@@ -496,13 +496,16 @@ void SV_ChangeMaxClients( void ) {
 	int		i;
 	client_t	*oldClients;
 	int		count;
+	int		activeCount;
 
 	// get the highest client number in use
 	count = 0;
+	activeCount = 0;
 	for ( i = 0 ; i < svs.iNumClients ; i++ ) {
 		if ( svs.clients[i].state >= CS_CONNECTED ) {
 			if (i > count)
 				count = i;
+			activeCount++;
 		}
 	}
 	count++;
@@ -515,7 +518,30 @@ void SV_ChangeMaxClients( void ) {
 		return;
 	}
 
+	// CRITICAL FIX: Prevent reallocation while clients are connected to avoid use-after-free
+	// with pending network operations (fragments, queued messages, etc.)
+	if ( activeCount > 0 ) {
+		Com_Printf( "WARNING: Cannot change sv_maxclients while clients are connected.\n" );
+		Com_Printf( "         Disconnect all clients first or restart the server.\n" );
+		// Restore the old value
+		Cvar_Set( "sv_maxclients", va("%i", oldMaxClients) );
+		return;
+	}
+
 	oldClients = svs.clients;
+	
+	// SAFETY: Clean up all network state before freeing to prevent dangling references
+	for ( i = 0; i < svs.iNumClients; i++ ) {
+		if ( oldClients[i].state > CS_FREE ) {
+			// Clear pending fragment transmissions
+			oldClients[i].netchan.unsentFragments = qfalse;
+			oldClients[i].netchan.unsentFragmentStart = 0;
+			oldClients[i].netchan.unsentLength = 0;
+			// Free queued message buffers
+			SV_Netchan_FreeQueue(&oldClients[i]);
+		}
+	}
+	
 	SV_ClientsAlloc();
 
 	// copy the clients to hunk memory
@@ -1150,6 +1176,12 @@ void SV_Init (void)
     if (com_firstConfig) {
         SV_ApplyFirstConfigTweaks();
     }
+
+    // Added in OPM
+    // Used by the game DLL to detect first-time vs subsequent initializations
+    Cvar_Get("sv_firstinit", "1", 0);
+    // Used to signal to the game DLL that this is a final quit, not a map change
+    Cvar_Get("sv_quitting", "0", 0);
 }
 
 
@@ -1169,7 +1201,7 @@ void SV_FinalMessage( const char *message ) {
 	
 	// send it twice, ignoring rate
 	for ( j = 0 ; j < 2 ; j++ ) {
-		for (i=0, cl = svs.clients ; i < sv_maxclients->integer ; i++, cl++) {
+		for (i=0, cl = svs.clients ; i < svs.iNumClients ; i++, cl++) {
 			if (cl->state >= CS_CONNECTED) {
 				// don't send a disconnect to a local client
 				if ( cl->netchan.remoteAddress.type != NA_LOOPBACK ) {
@@ -1204,6 +1236,10 @@ void SV_Shutdown( const char *finalmsg ) {
 		SV_FinalMessage( finalmsg );
 	}
 
+	// Added in OPM
+	// Signal to the game DLL that this is a final quit (not a map change)
+	Cvar_Set("sv_quitting", "1");
+
 	SV_RemoveOperatorCommands();
 	SV_ShutdownGamespy();
 	SV_MasterShutdown();
@@ -1217,7 +1253,7 @@ void SV_Shutdown( const char *finalmsg ) {
 	{
 		int index;
 		
-		for(index = 0; index < sv_maxclients->integer; index++)
+		for(index = 0; index < svs.iNumClients; index++)
 			SV_FreeClient(&svs.clients[index]);
 		
 		Z_Free(svs.clients);
