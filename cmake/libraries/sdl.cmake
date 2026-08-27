@@ -54,6 +54,7 @@ if(USE_INTERNAL_SDL AND HAVE_INTERNAL_SDL)
     endif()
 else()
     find_package(SDL2 REQUIRED)
+    set(SDL2_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS} ${SOURCE_DIR}/thirdparty/SDL2-2.32.8/include)
 endif()
 
 list(APPEND CLIENT_LIBRARIES ${SDL2_LIBRARIES})
