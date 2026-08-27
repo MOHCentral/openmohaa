@@ -556,6 +556,18 @@ void CL_StopRecord_f(void);
 void CL_InitDownloads(void);
 void CL_NextDownload(void);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+void CL_InitWebcam(void);
+void CL_WebcamFrame(void);
+void CL_ShutdownWebcam(void);
+qboolean CL_WebcamRendererReady(void);
+void CL_UploadWebcamTex(int cols, int rows, const byte *data);
+#ifdef __cplusplus
+}
+#endif
+
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );
 void CL_ClearPing( int n );

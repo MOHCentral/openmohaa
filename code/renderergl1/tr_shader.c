@@ -3909,6 +3909,21 @@ static void CreateInternalShaders( void ) {
     shader.lightmapIndex = LIGHTMAP_NONE;
 	currentShader = FindShaderText(shader.name);
 	tr.shadowShader = FinishShader();
+
+	if (tr.webcamImage) {
+		Com_Memset(&shader, 0, sizeof(shader));
+		Com_Memset(&unfoggedStages, 0, sizeof(unfoggedStages));
+		Q_strncpyz(shader.name, "webcamface", sizeof(shader.name));
+		shader.lightmapIndex = LIGHTMAP_2D;
+		shader.cullType = CT_TWO_SIDED;
+		unfoggedStages[0].bundle[0].image[0] = tr.webcamImage;
+		unfoggedStages[0].active = qtrue;
+		unfoggedStages[0].rgbGen = CGEN_VERTEX;
+		unfoggedStages[0].alphaGen = AGEN_VERTEX;
+		unfoggedStages[0].stateBits = GLS_SRCBLEND_SRC_ALPHA | GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA | GLS_ATEST_GT_0;
+		currentShader = FindShaderText(shader.name);
+		FinishShader();
+	}
 }
 
 static void CreateExternalShaders( void ) {

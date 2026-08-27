@@ -2683,6 +2683,8 @@ void CL_Frame ( int msec ) {
 		return;
 	}
 
+	CL_WebcamFrame();
+
 #ifdef USE_CURL
 	if(clc.downloadCURLM) {
 		CL_cURL_PerformDownload();
@@ -3180,6 +3182,16 @@ CL_IsRendererLoaded
 */
 qboolean CL_IsRendererLoaded(void) {
 	return re.Shutdown != NULL;
+}
+
+extern "C" qboolean CL_WebcamRendererReady(void) {
+	return (CL_IsRendererLoaded() && re.UploadWebcam) ? qtrue : qfalse;
+}
+
+extern "C" void CL_UploadWebcamTex(int cols, int rows, const byte *data) {
+	if (re.UploadWebcam) {
+		re.UploadWebcam(cols, rows, data);
+	}
 }
 
 /*
@@ -3762,6 +3774,8 @@ void CL_Init( void ) {
 	Cvar_Get( "cl_guid", "", CVAR_USERINFO | CVAR_ROM );
 	CL_UpdateGUID( NULL, 0 );
 
+	CL_InitWebcam();
+
 	CL_StartHunkUsers(qfalse);
 
 	end = Sys_Milliseconds();
@@ -3801,6 +3815,8 @@ void CL_Shutdown(const char* finalmsg, qboolean disconnect, qboolean quit) {
 
 	if(disconnect)
 		CL_Disconnect();
+
+	CL_ShutdownWebcam();
 
 #if defined(NO_MODERN_DMA) && NO_MODERN_DMA
 	S_Shutdown();

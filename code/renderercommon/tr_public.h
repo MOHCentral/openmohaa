@@ -180,6 +180,9 @@ typedef struct {
     void (*FreeRawImage)(byte *pic);
 
     void (*Set2DInitialShaderTime)(float startTime);
+
+	// Local webcam face overlay. cols/rows must be power-of-two RGBA.
+	void (*UploadWebcam)(int cols, int rows, const byte *data);
 } refexport_t;
 
 //

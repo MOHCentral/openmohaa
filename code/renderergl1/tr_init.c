@@ -1972,6 +1972,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
     re.FreeRawImage = R_FreeRawImage;
 
 	re.Set2DInitialShaderTime = Set2DInitialShaderTime;
+	re.UploadWebcam = RE_UploadWebcam;
 
 	return &re;
 }

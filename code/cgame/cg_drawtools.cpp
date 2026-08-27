@@ -1521,6 +1521,45 @@ void CG_DrawVote()
 
 /*
 ==============
+CG_DrawWebcamPreview
+==============
+*/
+void CG_DrawWebcamPreview(void)
+{
+    float  x, y, w, h;
+    vec4_t backdrop;
+
+    if (!cg_webcam || !cg_webcam->integer || !cg_webcamPreview || !cg_webcamPreview->integer) {
+        return;
+    }
+    if (!cgs.media.webcamFaceShader) {
+        cgs.media.webcamFaceShader = cgi.R_RegisterShader("webcamface");
+        if (!cgs.media.webcamFaceShader) {
+            return;
+        }
+    }
+
+    /* Bottom-right, away from score HUD. */
+    x = 512.0f;
+    y = 352.0f;
+    w = 112.0f;
+    h = 112.0f;
+    CG_AdjustFrom640(&x, &y, &w, &h);
+
+    backdrop[0] = 0.0f;
+    backdrop[1] = 0.0f;
+    backdrop[2] = 0.0f;
+    backdrop[3] = 0.55f;
+    cgi.R_SetColor(backdrop);
+    if (cgs.media.lagometerShader) {
+        cgi.R_DrawStretchPic(x - 4.0f, y - 4.0f, w + 8.0f, h + 8.0f, 0.0f, 0.0f, 1.0f, 1.0f, cgs.media.lagometerShader);
+    }
+    cgi.R_SetColor(NULL);
+    cgi.R_DrawStretchPic(x, y, w, h, 0.0f, 0.0f, 1.0f, 1.0f, cgs.media.webcamFaceShader);
+}
+
+/*
+==============
 CG_Draw2D
 ==============
 */
@@ -1540,4 +1579,5 @@ void CG_Draw2D(void)
     CG_DrawVote();
     CG_DrawInstantMessageMenu();
     CG_DrawCrosshair();
+    CG_DrawWebcamPreview();
 }
