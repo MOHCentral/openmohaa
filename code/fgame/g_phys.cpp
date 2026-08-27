@@ -712,8 +712,7 @@ qboolean G_Push(Entity *pusher, Vector pushermove, Vector pusheramove)
         // try moving the contacted entity
         move2 = move;
 
-        // FIXME: doesn't rotate monsters?
-        if (check->client && amove[YAW]) {
+        if ((check->client || check->isSubclassOf(Actor)) && amove[YAW]) {
             Sentient *sent = (Sentient *)check;
             Vector    a    = sent->GetViewAngles() + Vector(0, amove[YAW], 0);
             sent->SetViewAngles(a);
