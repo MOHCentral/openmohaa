@@ -452,7 +452,8 @@ void CG_VoteOptions_FinishReadFromServer(const char *string)
         return;
     }
 
-    for (i = 0; i < g_sVoteString.length(); i++) {
+    int len = g_sVoteString.length();
+    for (i = 0; i < len; i++) {
         if (g_sVoteString[i] == 1) {
             g_sVoteString[i] = '"';
         }
