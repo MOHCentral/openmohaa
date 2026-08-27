@@ -3084,6 +3084,51 @@ void	R_InitImages( void ) {
 
 /*
 ===============
+R_DeleteImageFromHash
+===============
+*/
+void R_DeleteImageFromHash(image_t* image) {
+	image_t* current;
+	image_t* prev;
+	int hash;
+
+    hash = generateHashValue(image->imgName);
+    current = hashTable[hash];
+    prev = NULL;
+
+    while (current)
+    {
+        if (image == current)
+        {
+			if (prev) {
+				prev->next = current->next;
+			} else {
+                hashTable[hash] = current->next;
+			}
+            return;
+        }
+
+        prev = current;
+        current = current->next;
+    }
+}
+
+/*
+===============
+R_FreeImage
+===============
+*/
+void R_FreeImage(image_t* image) {
+	if (image->texnum) {
+		qglDeleteTextures(1, &image->texnum);
+	}
+
+    R_DeleteImageFromHash(image);
+	memset(image, 0, sizeof(image_t));
+}
+
+/*
+===============
 R_DeleteTextures
 ===============
 */
@@ -3091,7 +3136,7 @@ void R_DeleteTextures( void ) {
 	int		i;
 
 	for ( i=0; i<tr.numImages ; i++ ) {
-		qglDeleteTextures( 1, &tr.images[i]->texnum );
+		R_FreeImage(tr.images[i]);
 	}
 	Com_Memset( tr.images, 0, sizeof( tr.images ) );
 
@@ -3395,8 +3440,30 @@ void	R_SkinList_f( void ) {
 //
 
 image_t* R_RefreshImageFile(const char* name, imgType_t type, imgFlags_t flags) {
-	// FIXME: unimplemented (GL2)
-	return NULL;
+	image_t* image;
+	long hash;
+
+	if (!name) {
+		return NULL;
+	}
+
+	hash = generateHashValue(name);
+	image = hashTable[hash];
+
+    if (image)
+    {
+        while (strcmp(name, image->imgName))
+        {
+            image = image->next;
+			if (!image) {
+				return R_FindImageFile(name, type, flags);
+			}
+        }
+
+        R_FreeImage(image);
+    }
+
+    return R_FindImageFile(name, type, flags);
 }
 
 /*
