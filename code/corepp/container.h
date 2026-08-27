@@ -284,7 +284,7 @@ void Container<Type>::ClearObjectList(void)
 template<class Type>
 void Container<Type>::FreeObjectList(void)
 {
-    size_t i;
+    int i;
 
     if (objlist) {
         for (i = 0; i < numobjects; ++i) {
