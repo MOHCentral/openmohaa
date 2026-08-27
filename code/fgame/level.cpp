@@ -1572,7 +1572,7 @@ void Level::SetMap(const char *themapname)
     current_map = (char *)themapname;
 
     level_name = mapname;
-    size_t len = level_name.length();
+    int len = level_name.length();
     for (i = 0; i < len; i++) {
         if (level_name[i] == '.') {
             level_name[i] = 0;
