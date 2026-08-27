@@ -1,0 +1,5 @@
+🔒 [security fix] Fix buffer overflow in server console chat commands
+
+🎯 **What:** Fixed stack buffer overflow vulnerability in server console commands `SV_ConSay_f`, `SV_ConTell_f`, and `SV_ConSayto_f`.
+⚠️ **Risk:** The previous `strcat` could write beyond the 1024-byte `text` buffer if the input arguments were sufficiently long, leading to a stack buffer overflow. A malicious player or admin could potentially exploit this to cause a denial of service (server crash) or execute arbitrary code.
+🛡️ **Solution:** Replaced `strcat(text, p)` with `Q_strcat(text, sizeof(text), p)` in `code/server/sv_ccmds.c`, which enforces bounds checking and prevents buffer overflows.
