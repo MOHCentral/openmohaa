@@ -28,34 +28,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 qboolean Compress(skelAnimGameFrame_t *current, skelAnimGameFrame_t *last, int channelIndex, int numChannels)
 {
-    float tolerance;
-    float difference;
-    int   i;
-
     // high-end PC don't need to compress...
     return false;
-
-    for (i = 0; i < numChannels; i++) {
-        tolerance = current->pChannels[channelIndex][i];
-        if (tolerance > -0.000001 && tolerance < 0.000001) {
-            current->pChannels[channelIndex][i] = 0.0f;
-        }
-    }
-
-    if (last) {
-        for (i = 0; i < numChannels; i++) {
-            difference = last->pChannels[channelIndex][i] - current->pChannels[channelIndex][i];
-            if (difference < -0.001f || difference >= 0.001f) {
-                return false;
-            }
-        }
-    }
-
-    return true;
 }
 
 skelAnimDataGameHeader_t *EncodeFrames(
     skelAnimDataGameHeader_t *enAnim,
+    skelAnimDataFileHeader_t *pHeader,
     skelAnimGameFrame_t      *m_frame,
     qboolean                  bLog,
     skelChannelList_c        *channelList,
@@ -114,10 +93,11 @@ skelAnimDataGameHeader_t *EncodeFrames(
                         indexLastFrameAdded++;
                     }
 
-                    pFrame->pChannelData[0] = pCurrFrame->pChannels[i][0];
-                    pFrame->pChannelData[1] = pCurrFrame->pChannels[i][1];
-                    pFrame->pChannelData[2] = pCurrFrame->pChannels[i][2];
-                    pFrame->pChannelData[3] = pCurrFrame->pChannels[i][3];
+                    vec4_t *pChannels = (vec4_t *)((byte *)pHeader + sizeof(skelAnimDataFileHeader_t) + sizeof(skelAnimFileFrame_t) * (pHeader->numFrames - 1) + sizeof(vec4_t) * pHeader->numChannels * j);
+                    pFrame->pChannelData[0] = LittleFloat(pChannels[i][0]);
+                    pFrame->pChannelData[1] = LittleFloat(pChannels[i][1]);
+                    pFrame->pChannelData[2] = LittleFloat(pChannels[i][2]);
+                    pFrame->pChannelData[3] = LittleFloat(pChannels[i][3]);
 
                     pLastFrame = pCurrFrame;
                 }
@@ -157,9 +137,10 @@ skelAnimDataGameHeader_t *EncodeFrames(
                         indexLastFrameAdded++;
                     }
 
-                    pFrame->pChannelData[0] = pCurrFrame->pChannels[i][0];
-                    pFrame->pChannelData[1] = pCurrFrame->pChannels[i][1];
-                    pFrame->pChannelData[2] = pCurrFrame->pChannels[i][2];
+                    vec4_t *pChannels = (vec4_t *)((byte *)pHeader + sizeof(skelAnimDataFileHeader_t) + sizeof(skelAnimFileFrame_t) * (pHeader->numFrames - 1) + sizeof(vec4_t) * pHeader->numChannels * j);
+                    pFrame->pChannelData[0] = LittleFloat(pChannels[i][0]);
+                    pFrame->pChannelData[1] = LittleFloat(pChannels[i][1]);
+                    pFrame->pChannelData[2] = LittleFloat(pChannels[i][2]);
 
                     pLastFrame = pCurrFrame;
                 }
@@ -204,7 +185,8 @@ skelAnimDataGameHeader_t *EncodeFrames(
                         indexLastFrameAdded++;
                     }
 
-                    pFrame->pChannelData[0] = pCurrFrame->pChannels[i][0];
+                    vec4_t *pChannels = (vec4_t *)((byte *)pHeader + sizeof(skelAnimDataFileHeader_t) + sizeof(skelAnimFileFrame_t) * (pHeader->numFrames - 1) + sizeof(vec4_t) * pHeader->numChannels * j);
+                    pFrame->pChannelData[0] = LittleFloat(pChannels[i][0]);
 
                     pLastFrame = pCurrFrame;
                 }
@@ -242,8 +224,6 @@ skeletor_c::ConvertSkelFileToGame(skelAnimDataFileHeader_t *pHeader, int iBuffLe
     newFrame   = pGameFrame;
 
     for (i = 0; i < pHeader->numFrames; i++) {
-        vec4_t *pChannels;
-
         newFrame->bounds[0][0] = LittleFloat(pFileFrame->bounds[0][0]);
         newFrame->bounds[0][1] = LittleFloat(pFileFrame->bounds[0][1]);
         newFrame->bounds[0][2] = LittleFloat(pFileFrame->bounds[0][2]);
@@ -256,20 +236,6 @@ skeletor_c::ConvertSkelFileToGame(skelAnimDataFileHeader_t *pHeader, int iBuffLe
         newFrame->delta[2]     = LittleFloat(pFileFrame->delta[2]);
         newFrame->angleDelta   = LittleFloat(pFileFrame->angleDelta);
         //
-        // Load channels
-        //
-        newFrame->pChannels = new vec4_t[pHeader->numChannels];
-        pChannels =
-            (vec4_t *)((byte *)pHeader
-                       + (sizeof(skelAnimDataFileHeader_t) + sizeof(skelAnimFileFrame_t) * (pHeader->numFrames - 1)
-                          + sizeof(vec4_t) * pHeader->numChannels * i));
-        for (j = 0; j < pHeader->numChannels; j++) {
-            newFrame->pChannels[j][0] = LittleFloat(pChannels[j][0]);
-            newFrame->pChannels[j][1] = LittleFloat(pChannels[j][1]);
-            newFrame->pChannels[j][2] = LittleFloat(pChannels[j][2]);
-            newFrame->pChannels[j][3] = LittleFloat(pChannels[j][3]);
-        }
-
         AddToBounds(newFrame->bounds, pFileFrame->bounds);
 
         pFileFrame++;
@@ -295,7 +261,6 @@ skeletor_c::ConvertSkelFileToGame(skelAnimDataFileHeader_t *pHeader, int iBuffLe
         newFrame->radius     = oldFrame->radius;
         newFrame->delta      = oldFrame->delta;
         newFrame->angleDelta = oldFrame->angleDelta;
-        newFrame->pChannels  = NULL;
         AddToBounds(enAnim->bounds, oldFrame->bounds);
 
         oldFrame++;
@@ -313,7 +278,7 @@ skeletor_c::ConvertSkelFileToGame(skelAnimDataFileHeader_t *pHeader, int iBuffLe
     }
 
     enAnim->channelList.PackChannels();
-    EncodeFrames(enAnim, pGameFrame, qfalse, &enAnim->channelList, &m_channelNames);
+    EncodeFrames(enAnim, pHeader, pGameFrame, qfalse, &enAnim->channelList, &m_channelNames);
 
     if (enAnim->channelList.HasChannel(&m_channelNames, "Bip01 pos")
         && enAnim->channelList.HasChannel(&m_channelNames, "Bip01 R Foot pos")
@@ -370,12 +335,6 @@ skeletor_c::ConvertSkelFileToGame(skelAnimDataFileHeader_t *pHeader, int iBuffLe
         enAnim->bHasMorph = true;
     } else {
         enAnim->bHasMorph = false;
-    }
-
-    for (i = 0; i < pHeader->numFrames; i++) {
-        if (pGameFrame[i].pChannels) {
-            delete[] pGameFrame[i].pChannels;
-        }
     }
 
     delete[] pGameFrame;
@@ -637,7 +596,6 @@ skelAnimDataGameHeader_t *skeletor_c::LoadProcessedAnim(const char *path, void *
         newFrame->delta[1]     = MSG_ReadFloat(&msg);
         newFrame->delta[2]     = MSG_ReadFloat(&msg);
         newFrame->angleDelta   = MSG_ReadFloat(&msg);
-        newFrame->pChannels    = NULL;
         newFrame++;
     }
 
@@ -726,7 +684,6 @@ skelAnimDataGameHeader_t *skeletor_c::LoadProcessedAnimEx(const char *path, void
         newFrame->delta[1]     = MSG_ReadFloat(&msg);
         newFrame->delta[2]     = MSG_ReadFloat(&msg);
         newFrame->angleDelta   = MSG_ReadFloat(&msg);
-        newFrame->pChannels    = NULL;
         newFrame++;
     }
 
