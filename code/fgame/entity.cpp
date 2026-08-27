@@ -6385,30 +6385,6 @@ void Entity::SetDepthHack(Event *ev)
 #ifdef OPM_FEATURES
 void Entity::ProcessHint(gentity_t *client, bool bShow)
 {
-    Player *player = (Player *)client->entity;
-
-    if (client->client != NULL) {
-        qboolean is_hidden = bShow && (edict->s.renderfx & RF_INVISIBLE);
-        qboolean can_see   = bShow
-                        && player->canUse(
-                            this, m_bHintRequiresLookAt
-                        ); //( player->IsTouching( this ) || player->CanSee( this, string->fov, 94 ) == 1 );
-
-        if (bShow && can_see && !is_hidden && !player->IsDead() && !player->IsSpectator()) {
-            if (sv_specialgame->integer) {
-                // FIXME: delete
-                /*
-				gi.MSG_SetClient(client - g_entities);
-
-				// Send the hint string once
-				gi.MSG_StartCGM(CGM_HINTSTRING);
-					gi.MSG_WriteString(m_HintString);
-				gi.MSG_EndCGM();
-				*/
-            }
-        } else {
-        }
-    }
 }
 
 void Entity::SetHintRequireLookAt(Event *ev)
