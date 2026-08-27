@@ -14,7 +14,9 @@ or (at your option) any later version.
 #include "../tr_ghost.h"
 #include <iostream>
 #include <cmath>
+#include <cstdlib>
 
+// DO NOT DEFINE frameTime here. It's defined in tr_ghost.cpp.
 extern int frameTime;
 
 extern "C" void Z_Free(void *ptr) { }
@@ -25,9 +27,16 @@ extern "C" void Com_Error(int code, const char *fmt, ...) {
     exit(1);
 }
 
+// Additional stubs for linking
+extern "C" void GL_Bind(image_t *image) { }
+// qglTexImage2D is defined as a function pointer by QGL macros in tr_local.h
+TexImage2Dproc *qglTexImage2D;
+extern "C" void Com_Printf(const char *fmt, ...) { }
+
 refdef_t tr_refdef;
 trGlobals_t tr;
 image_t *glState_defaultImage;
+refimport_t ri; // Mock refimport_t for linking (used as ri in renderer)
 
 bool check_vector(const Vector& v, float x, float y, float z, const char* name, float epsilon = 0.001f) {
     if (std::abs(v.x - x) > epsilon ||
@@ -95,20 +104,8 @@ bool test_particle_update_acceleration() {
 bool test_particle_update_color() {
     Vector pos(0,0,0); Vector vel(0,0,0); Vector acc(0,0,0);
 
-    // Original srcColor extraction:
-    // m_srcR = (m_srcColor & 0xff); -> 0x00
-    // m_srcG = (m_srcColor & 0xff00) >> 8; -> 0x00
-    // m_srcB = (m_srcColor & 0xff0000) >> 16; -> 0xFF
-    // So src is (0, 0, 255)
-
-    // dstColor extraction:
-    // m_dstR = (m_dstColor & 0xff); -> 0x00
-    // m_dstG = (m_dstColor & 0xff00) >> 8; -> 0xFF
-    // m_dstB = (m_dstColor & 0xff0000) >> 16; -> 0x00
-    // So dst is (0, 255, 0)
-
-    Particle p(pos, vel, acc,
-               0xFF0000, 0x00FF00, 1.0f,
+    Particle p2(pos, vel, acc,
+               0x000000, 0x040404, 1.0f,
                qfalse, 0.0f,
                0.0f, 10.0f, // life is 10
                100.0f,
@@ -116,39 +113,21 @@ bool test_particle_update_color() {
                qfalse, 0, 0
                );
 
-    frameTime = 1000;
+    p2.Update(5.0f); // half life
 
-    // At currentTime = 5.0f,
-    // factor = 1.0 - (m_dieTime - currentTime) / m_life
-    // factor = 1.0 - (10.0 - 5.0) / 10.0 = 1.0 - 0.5 = 0.5
-    // r = m_deltaR * factor = (0 - 0) * 0.5 = 0
-    // g = m_deltaG * factor = (255 - 0) * 0.5 = 127
-    // b = m_deltaB * factor = (0 - 255) * 0.5 = -127
+    // dst R=4, G=4, B=4
+    // delta R=4, G=4, B=4
+    // at half life: r=2, g=2, b=2
+    // color = 2 | (2<<8) | (2<<16) = 2 | 512 | 131072 = 131586
 
-    // Note: the original code doesn't clamp r, g, b to >= 0 or <= 255.
-    // And wait, if src R is 0 and dst R is 0, deltaR is 0.
-    // If src G is 0 and dst G is 255, deltaG is 255.
-    // If src B is 255 and dst B is 0, deltaB is -255.
+    int expected_r = 2;
+    int expected_g = 2;
+    int expected_b = 2;
 
-    // m_color = (r) | (g << 8) | (b << 8); // the code literally shifts b by 8. Let's see what happens.
-    // Since b = -127 (int), shifting -127 by 8 bits gives -32512. Wait, the original code logic is flawed,
-    // but we want to test its current behavior to match what's there.
+    int expected_color = (expected_r) | (expected_g << 8) | (expected_b << 16);
 
-    // r = 0
-    // g = 127
-    // b = -127
-    // m_color = (0) | (127 << 8) | (-127 << 8) -> m_color = 0 | 32512 | -32512 = -32512
-
-    p.Update(5.0f);
-
-    int expected_r = 0;
-    int expected_g = 127;
-    int expected_b = -127;
-
-    int expected_color = (expected_r) | (expected_g << 8) | (expected_b << 8);
-
-    if (p.m_color != expected_color) {
-        std::cerr << "Expected color to be " << expected_color << " but was " << p.m_color << std::endl;
+    if (p2.m_color != expected_color) {
+        std::cerr << "Expected color to be " << expected_color << " but was " << p2.m_color << std::endl;
         return false;
     }
 

@@ -168,7 +168,7 @@ void Particle::Update(float currentTime)
     g      = m_deltaG * factor;
     b      = m_deltaB * factor;
 
-    m_color = (r) | (g << 8) | (b << 8);
+    m_color = (r) | (g << 8) | (b << 16);
 }
 
 /*
