@@ -478,7 +478,6 @@ static void RB_SurfaceBeam( void )
 {
 #define NUM_BEAM_SEGS 6
 	refEntity_t *e;
-	shaderProgram_t *sp = &tr.textureColorShader;
 	int	i;
 	vec3_t perpvec;
 	vec3_t direction, normalized_direction;
@@ -513,46 +512,42 @@ static void RB_SurfaceBeam( void )
 		VectorAdd( start_points[i], direction, end_points[i] );
 	}
 
-	GL_BindToTMU( tr.whiteImage, TB_COLORMAP );
-
-	GL_State( GLS_SRCBLEND_ONE | GLS_DSTBLEND_ONE );
-
 	// FIXME: Quake3 doesn't use this, so I never tested it
-	tess.numVertexes = 0;
-	tess.numIndexes = 0;
-	tess.firstIndex = 0;
+	RB_CheckVao(tess.vao);
+
+	RB_CHECKOVERFLOW( 2 * (NUM_BEAM_SEGS + 1), 6 * NUM_BEAM_SEGS );
+
+	int vbase = tess.numVertexes;
 
 	for ( i = 0; i <= NUM_BEAM_SEGS; i++ ) {
-		VectorCopy(start_points[ i % NUM_BEAM_SEGS ], tess.xyz[tess.numVertexes++]);
-		VectorCopy(end_points  [ i % NUM_BEAM_SEGS ], tess.xyz[tess.numVertexes++]);
+		VectorCopy(start_points[ i % NUM_BEAM_SEGS ], tess.xyz[tess.numVertexes]);
+		tess.texCoords[tess.numVertexes][0] = 0;
+		tess.texCoords[tess.numVertexes][1] = 0;
+		tess.color[tess.numVertexes][0] = 255 * 257;
+		tess.color[tess.numVertexes][1] = 0;
+		tess.color[tess.numVertexes][2] = 0;
+		tess.color[tess.numVertexes][3] = 255 * 257;
+		tess.numVertexes++;
+
+		VectorCopy(end_points  [ i % NUM_BEAM_SEGS ], tess.xyz[tess.numVertexes]);
+		tess.texCoords[tess.numVertexes][0] = 1;
+		tess.texCoords[tess.numVertexes][1] = 0;
+		tess.color[tess.numVertexes][0] = 255 * 257;
+		tess.color[tess.numVertexes][1] = 0;
+		tess.color[tess.numVertexes][2] = 0;
+		tess.color[tess.numVertexes][3] = 255 * 257;
+		tess.numVertexes++;
 	}
 
 	for ( i = 0; i < NUM_BEAM_SEGS; i++ ) {
-		tess.indexes[tess.numIndexes++] =       i      * 2;
-		tess.indexes[tess.numIndexes++] =      (i + 1) * 2;
-		tess.indexes[tess.numIndexes++] = 1  +  i      * 2;
+		tess.indexes[tess.numIndexes++] = vbase +      i      * 2;
+		tess.indexes[tess.numIndexes++] = vbase +     (i + 1) * 2;
+		tess.indexes[tess.numIndexes++] = vbase + 1  +  i      * 2;
 
-		tess.indexes[tess.numIndexes++] = 1  +  i      * 2;
-		tess.indexes[tess.numIndexes++] =      (i + 1) * 2;
-		tess.indexes[tess.numIndexes++] = 1  + (i + 1) * 2;
+		tess.indexes[tess.numIndexes++] = vbase + 1  +  i      * 2;
+		tess.indexes[tess.numIndexes++] = vbase +     (i + 1) * 2;
+		tess.indexes[tess.numIndexes++] = vbase + 1  + (i + 1) * 2;
 	}
-
-	// FIXME: A lot of this can probably be removed for speed, and refactored into a more convenient function
-	RB_UpdateTessVao(ATTR_POSITION);
-	
-	GLSL_BindProgram(sp);
-		
-	GLSL_SetUniformMat4(sp, UNIFORM_MODELVIEWPROJECTIONMATRIX, glState.modelviewProjection);
-					
-	GLSL_SetUniformVec4(sp, UNIFORM_COLOR, colorRed);
-
-	GLSL_SetUniformInt(sp, UNIFORM_ALPHATEST, 0);
-
-	R_DrawElements(tess.numIndexes, tess.firstIndex);
-
-	tess.numIndexes = 0;
-	tess.numVertexes = 0;
-	tess.firstIndex = 0;
 }
 
 //================================================================================
