@@ -373,7 +373,7 @@ void Cmd_Alias( const char *s, const char *cmd )
 		cmd_alias = a;
 	}
 
-	strcpy( a->name, s );
+	Q_strncpyz( a->name, s, sizeof(a->name) );
 	a->value = CopyString( cmd );
 
 	// save the alias to config file
@@ -424,7 +424,7 @@ void Cmd_Alias_f( void )
 		cmd_alias = a;
 	}
 
-	strcpy( a->name, s );
+	Q_strncpyz( a->name, s, sizeof(a->name) );
 
 	cmd[ 0 ] = 0;
 
@@ -461,7 +461,7 @@ void Cmd_WriteAliases( fileHandle_t f )
 
 	for( a = cmd_alias; a != NULL; a = a->next )
 	{
-		strcpy( tempbuf, a->value );
+		Q_strncpyz( tempbuf, a->value, sizeof(tempbuf) );
 
 		// remove the line ending
 		tempbuf[ strlen( tempbuf ) - 1 ] = 0;
