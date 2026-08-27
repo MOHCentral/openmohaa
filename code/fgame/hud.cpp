@@ -1156,21 +1156,6 @@ void Hud::ScaleOverTime(float time, short w, short h)
 
     fade_scale_w_target = w;
     fade_scale_h_target = h;
-
-    // FIXME: delete
-    /*
-    width = w;
-    height = h;
-
-    SetBroadcast();
-
-    gi.MSG_StartCGM( BG_MapCGMToProtocol(g_protocol, CGM_HUDDRAW_SCALE ));
-        WriteNumber();
-        gi.MSG_WriteFloat( time );
-        gi.MSG_WriteShort( w );
-        gi.MSG_WriteShort( h );
-    gi.MSG_EndCGM();
-*/
 }
 
 #ifdef GAME_DLL
