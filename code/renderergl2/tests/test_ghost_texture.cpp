@@ -22,14 +22,28 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../tr_ghost.h"
 #include <iostream>
+#include <stdlib.h> // for exit()
 
 trGlobals_t tr;
 
 extern "C" {
     void Z_Free(void *ptr) {}
+    void *Z_Malloc(int size) { return malloc(size); }
     void ri_Error(int level, const char *error, ...) {}
     void ri_Printf(int print_level, const char *fmt, ...) {}
-
+    void Info_RemoveKey(char *s, const char *key) {}
+    void Info_SetValueForKey(char *s, const char *key, const char *value) {}
+    void Info_SetValueForKey_Big(char *s, const char *key, const char *value) {}
+    char *Info_ValueForKey(const char *s, const char *key) { return nullptr; }
+    void Q_strncpyz(char *dest, const char *src, size_t destsize) {}
+    size_t Com_sprintf(char *dest, size_t size, const char *fmt, ...) { return 0; }
+    void Q_strcat(char *dest, int size, const char *src) {}
+    qboolean Q_strreplace(char *dest, int size, const char *src, const char *replace) { return qfalse; }
+    void COM_MatchToken(char **buf_p, char *match) {}
+    void COM_ParseError(char *format, ...) {}
+    void COM_ParseWarning(char *format, ...) {}
+    int Com_AddToGrowList(growList_t *list, void *data) { return 0; }
+    void *Com_GrowListElement(const growList_t *list, int index) { return nullptr; }
 }
 
 int clipAndDrawLineCalls = 0;
