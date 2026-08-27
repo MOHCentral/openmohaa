@@ -13,7 +13,6 @@ target_include_directories(test_ghost_texture PRIVATE
     ${SOURCE_DIR}/renderergl1
     ${SOURCE_DIR}/thirdparty/SDL2-2.32.8/include
 )
-target_compile_definitions(test_ghost_texture PRIVATE -D__linux__)
 add_test(NAME test_ghost_texture COMMAND test_ghost_texture)
 
 add_executable(test_ghost_texture_gl2
@@ -31,5 +30,4 @@ target_include_directories(test_ghost_texture_gl2 PRIVATE
     ${SOURCE_DIR}/renderergl2
     ${SOURCE_DIR}/thirdparty/SDL2-2.32.8/include
 )
-target_compile_definitions(test_ghost_texture_gl2 PRIVATE -D__linux__)
 add_test(NAME test_ghost_texture_gl2 COMMAND test_ghost_texture_gl2)
