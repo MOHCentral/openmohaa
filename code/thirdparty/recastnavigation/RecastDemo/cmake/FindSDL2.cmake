@@ -107,7 +107,7 @@ find_path(SDL2_INCLUDE_DIR
 	HINTS
 	${SDL2_INCLUDE_HINTS}
 	PATHS
-	${SDL2_ROOT_DIR}
+	${SDL2_ROOT_DIR} /usr/include
 	ENV SDL2DIR
 	PATH_SUFFIXES include include/sdl2 include/SDL2 SDL2)
 
