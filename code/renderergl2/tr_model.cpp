@@ -1152,7 +1152,8 @@ void RB_SkelMesh(skelSurfaceGame_t *sf)
 
                 tess.texCoords[baseVertex + vertNum][0] = newVerts->texCoords[0];
                 tess.texCoords[baseVertex + vertNum][1] = newVerts->texCoords[1];
-                // FIXME: fill in lightmapST for completeness?
+                tess.lightCoords[baseVertex + vertNum][0] = 0.0f;
+                tess.lightCoords[baseVertex + vertNum][1] = 0.0f;
 
                 newVerts = (skeletorVertex_t *)((byte *)newVerts + sizeof(skeletorVertex_t)
                                                 + sizeof(skeletorMorph_t) * newVerts->numMorphs
@@ -1209,7 +1210,8 @@ void RB_SkelMesh(skelSurfaceGame_t *sf)
 
                 tess.texCoords[baseVertex + vertNum][0] = newVerts->texCoords[0];
                 tess.texCoords[baseVertex + vertNum][1] = newVerts->texCoords[1];
-                // FIXME: fill in lightmapST for completeness?
+                tess.lightCoords[baseVertex + vertNum][0] = 0.0f;
+                tess.lightCoords[baseVertex + vertNum][1] = 0.0f;
 
                 newVerts = (skeletorVertex_t *)((byte *)newVerts + sizeof(skeletorVertex_t)
                                                 + sizeof(skeletorMorph_t) * newVerts->numMorphs
@@ -1253,7 +1255,8 @@ void RB_SkelMesh(skelSurfaceGame_t *sf)
 
                 tess.texCoords[baseVertex + vertNum][0] = newVerts->texCoords[0];
                 tess.texCoords[baseVertex + vertNum][1] = newVerts->texCoords[1];
-                // FIXME: fill in lightmapST for completeness?
+                tess.lightCoords[baseVertex + vertNum][0] = 0.0f;
+                tess.lightCoords[baseVertex + vertNum][1] = 0.0f;
 
                 newVerts = (skeletorVertex_t *)((byte *)newVerts + sizeof(skeletorVertex_t)
                                                 + sizeof(skeletorMorph_t) * newVerts->numMorphs
@@ -1288,7 +1291,8 @@ void RB_SkelMesh(skelSurfaceGame_t *sf)
 
                 tess.texCoords[baseVertex + vertNum][0] = newVerts->texCoords[0];
                 tess.texCoords[baseVertex + vertNum][1] = newVerts->texCoords[1];
-                // FIXME: fill in lightmapST for completeness?
+                tess.lightCoords[baseVertex + vertNum][0] = 0.0f;
+                tess.lightCoords[baseVertex + vertNum][1] = 0.0f;
 
                 newVerts = (skeletorVertex_t *)((byte *)newVerts + sizeof(skeletorVertex_t)
                                                 + sizeof(skeletorMorph_t) * newVerts->numMorphs
