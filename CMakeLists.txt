@@ -81,6 +81,7 @@ include(renderer_gl2)
 include(client)
 include(basegame)
 #include(missionpack)
+include(tests/all)
 include(launcher)
 
 include(post_configure)
