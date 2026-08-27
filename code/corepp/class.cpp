@@ -481,7 +481,7 @@ bool ClassDef::WaitTillDefined(const_str s)
 
 EventDef *ClassDef::GetDef(int eventnum)
 {
-    ResponseDef<Class> *r = responseLookup[eventnum];
+    ResponseDef<Class> *r = GetResponse(eventnum);
 
     if (r) {
         return r->def;
@@ -521,7 +521,20 @@ void ClassDef::BuildResponseList(void)
     }
     //size will be total event count, because it WAS faster to look for an event via eventnum
     //nowadays there's not much overhead in performance, TODO: change size to appropriate.
-    num            = Event::NumEventCommands();
+    int max_ev = -1;
+    for (c = this; c != NULL; c = c->super) {
+        r = c->responses;
+        if (r) {
+            for (i = 0; r[i].event != NULL; i++) {
+                ev = (int)r[i].event->eventnum;
+                if (ev > max_ev) {
+                    max_ev = ev;
+                }
+            }
+        }
+    }
+
+    num            = max_ev + 1;
     responseLookup = (ResponseDef<Class> **)new char[sizeof(ResponseDef<Class> *) * num];
     memset(responseLookup, 0, sizeof(ResponseDef<Class> *) * num);
 
