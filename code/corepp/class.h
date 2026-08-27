@@ -226,6 +226,7 @@ public:
         int classSize
     );
 
+    inline ResponseDef<Class> *GetResponse(int eventnum) const { return (eventnum >= 0 && eventnum < numEvents) ? responseLookup[eventnum] : NULL; }
     EventDef *GetDef(int eventnum);
     EventDef *GetDef(Event *ev);
     int       GetFlags(Event *event);
