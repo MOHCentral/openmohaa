@@ -266,10 +266,6 @@ R_DlightTrisurf
 ======================
 */
 static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
-	// FIXME: more dlight culling to trisurfs...
-	surf->dlightBits[ tr.smpFrame ] = dlightBits;
-	return dlightBits;
-#if 0
 	int			i;
 	dlight_t	*dl;
 
@@ -278,12 +274,12 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
 			continue;
 		}
 		dl = &tr.refdef.dlights[i];
-		if ( dl->origin[0] - dl->radius > grid->meshBounds[1][0]
-			|| dl->origin[0] + dl->radius < grid->meshBounds[0][0]
-			|| dl->origin[1] - dl->radius > grid->meshBounds[1][1]
-			|| dl->origin[1] + dl->radius < grid->meshBounds[0][1]
-			|| dl->origin[2] - dl->radius > grid->meshBounds[1][2]
-			|| dl->origin[2] + dl->radius < grid->meshBounds[0][2] ) {
+		if ( dl->origin[0] - dl->radius > surf->bounds[1][0]
+			|| dl->origin[0] + dl->radius < surf->bounds[0][0]
+			|| dl->origin[1] - dl->radius > surf->bounds[1][1]
+			|| dl->origin[1] + dl->radius < surf->bounds[0][1]
+			|| dl->origin[2] - dl->radius > surf->bounds[1][2]
+			|| dl->origin[2] + dl->radius < surf->bounds[0][2] ) {
 			// dlight doesn't reach the bounds
 			dlightBits &= ~( 1 << i );
 		}
@@ -293,9 +289,8 @@ static int R_DlightTrisurf( srfTriangles_t *surf, int dlightBits ) {
 		tr.pc.c_dlightSurfacesCulled++;
 	}
 
-	grid->dlightBits[ tr.smpFrame ] = dlightBits;
+	surf->dlightBits[ tr.smpFrame ] = dlightBits;
 	return dlightBits;
-#endif
 }
 
 /*
@@ -324,6 +319,8 @@ static int R_DlightSurface( msurface_t *surf, int dlightBits ) {
         } else {
 			dlightBits = R_FastDlightFace((srfSurfaceFace_t*)surf->data, dlightBits);
 		}
+	} else if ( *surf->data == SF_TRIANGLES ) {
+		dlightBits = R_DlightTrisurf((srfTriangles_t*)surf->data, dlightBits);
 	} else if ( *surf->data == SF_GRID ) {
 		if (!r_fastdlights->integer) {
 			if (surf->shader->lightmapIndex >= 0) {
