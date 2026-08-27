@@ -1,0 +1,7 @@
+🎯 **What:** The public method `GhostTexture::Update` in `code/renderergl1/tr_ghost.cpp` lacked unit tests.
+📊 **Coverage:** Added test coverage for multiple execution paths within the `Update` loop:
+- `IsGravityWell` short-circuiting logic
+- `IsBallLightning` specific logic execution
+- Normal particle emission flags
+- Alive particle retention
+✨ **Result:** Improved codebase test coverage and reliability for the renderer component by validating the ghost texture particle loop in isolation using the CMake `ctest` harness.
