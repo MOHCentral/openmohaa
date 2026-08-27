@@ -85,3 +85,4 @@ include(launcher)
 
 include(post_configure)
 #include(installer)
+include(tests/all)
