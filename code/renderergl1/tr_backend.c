@@ -1069,6 +1069,30 @@ void RE_StretchRaw (int x, int y, int w, int h, int cols, int rows, int componen
 	qglEnd ();
 }
 
+void RE_UploadWebcam(int cols, int rows, const byte *data) {
+	int wrap;
+
+	if (!tr.webcamImage || !data || cols <= 0 || rows <= 0) {
+		return;
+	}
+
+	GL_Bind(tr.webcamImage);
+
+	wrap = haveClampToEdge ? GL_CLAMP_TO_EDGE : GL_CLAMP;
+
+	if (cols != tr.webcamImage->width || rows != tr.webcamImage->height) {
+		tr.webcamImage->width = tr.webcamImage->uploadWidth = cols;
+		tr.webcamImage->height = tr.webcamImage->uploadHeight = rows;
+		qglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, cols, rows, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+		qglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+	} else {
+		qglTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cols, rows, GL_RGBA, GL_UNSIGNED_BYTE, data);
+	}
+}
+
 void RE_UploadCinematic (int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty) {
 
 	GL_Bind( &tr.scratchImage[client] );

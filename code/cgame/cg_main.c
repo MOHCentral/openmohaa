@@ -35,6 +35,66 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 clientGameImport_t        cgi;
 static clientGameExport_t cge;
 
+#ifdef _WIN32
+static void CG_WebcamLog(const char *fmt, ...)
+{
+    char        msg[512];
+    char        line[768];
+    char        path[MAX_OSPATH];
+    const char *appdata;
+    va_list     ap;
+    FILE       *f;
+    SYSTEMTIME  st;
+    DWORD       pid;
+
+    va_start(ap, fmt);
+    Q_vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+
+    cgi.Printf("webcam: %s\n", msg);
+
+    appdata = getenv("APPDATA");
+    if (!appdata || !appdata[0]) {
+        return;
+    }
+    Com_sprintf(path, sizeof(path), "%s\\openmohaa\\webcam.log", appdata);
+    GetLocalTime(&st);
+    pid = GetCurrentProcessId();
+    Com_sprintf(
+        line,
+        sizeof(line),
+        "%04d-%02d-%02d %02d:%02d:%02d.%03d pid=%lu cgame %s\n",
+        st.wYear,
+        st.wMonth,
+        st.wDay,
+        st.wHour,
+        st.wMinute,
+        st.wSecond,
+        st.wMilliseconds,
+        (unsigned long)pid,
+        msg
+    );
+    f = fopen(path, "a");
+    if (!f) {
+        return;
+    }
+    fputs(line, f);
+    fflush(f);
+    fclose(f);
+}
+#else
+static void CG_WebcamLog(const char *fmt, ...)
+{
+    char    msg[512];
+    va_list ap;
+
+    va_start(ap, fmt);
+    Q_vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    cgi.Printf("webcam: %s\n", msg);
+}
+#endif
+
 cvar_t       *paused;
 cvar_t       *developer;
 cg_t          cg;
@@ -117,6 +177,12 @@ cvar_t *ui_timemessage;
 //
 cvar_t *cg_fov;
 cvar_t *cg_cheats;
+cvar_t *cg_webcam;
+cvar_t *cg_webcamPreview;
+cvar_t *cg_webcamBillboard;
+cvar_t *cg_webcamSize;
+cvar_t *cg_webcamForward;
+cvar_t *cg_webcamUp;
 
 /*
 =================
@@ -213,6 +279,12 @@ void CG_RegisterCvars(void)
 
     cg_fov = cgi.Cvar_Get("cg_fov", "80", CVAR_ARCHIVE);
     cg_cheats = cgi.Cvar_Get("cheats", "0", CVAR_USERINFO | CVAR_SERVERINFO | CVAR_LATCH);
+    cg_webcam = cgi.Cvar_Get("cg_webcam", "1", CVAR_ARCHIVE);
+    cg_webcamPreview = cgi.Cvar_Get("cg_webcamPreview", "1", CVAR_ARCHIVE);
+    cg_webcamBillboard = cgi.Cvar_Get("cg_webcamBillboard", "1", CVAR_ARCHIVE);
+    cg_webcamSize = cgi.Cvar_Get("cg_webcamSize", "14", CVAR_ARCHIVE);
+    cg_webcamForward = cgi.Cvar_Get("cg_webcamForward", "8", CVAR_ARCHIVE);
+    cg_webcamUp = cgi.Cvar_Get("cg_webcamUp", "-2", CVAR_ARCHIVE);
 }
 /*
 ===============
@@ -583,6 +655,14 @@ void CG_PrepRefresh(void)
     cgs.media.objectivesBackShader     = cgi.R_RegisterShaderNoMip("textures/hud/objectives_backdrop");
     cgs.media.checkedBoxShader         = cgi.R_RegisterShaderNoMip("textures/objectives/filledbox");
     cgs.media.uncheckedBoxShader       = cgi.R_RegisterShaderNoMip("textures/objectives/emptybox");
+    cgs.media.webcamFaceShader         = cgi.R_RegisterShader("webcamface");
+    CG_WebcamLog(
+        "cgame overlay shader=%d cg_webcam=%d preview=%d ready=%d",
+        cgs.media.webcamFaceShader,
+        cg_webcam ? cg_webcam->integer : -1,
+        cg_webcamPreview ? cg_webcamPreview->integer : -1,
+        cgi.Cvar_Get("cl_webcamReady", "0", 0)->integer
+    );
 
     // go through all the configstrings and process them
     for (i = CS_SYSTEMINFO + 1; i < MAX_CONFIGSTRINGS; i++) {
@@ -768,6 +848,13 @@ void CG_Init(clientGameImport_t *imported, int serverMessageNum, int serverComma
     // HUD setup
     CG_RefreshHudDrawElements();
     cgi.Cmd_Execute(EXEC_NOW, "ui_hud 1\n");
+
+    CG_WebcamLog(
+        "CL_InitCGame done overlay shader=%d cg_webcam=%d ready=%d",
+        cgs.media.webcamFaceShader,
+        cg_webcam ? cg_webcam->integer : -1,
+        cgi.Cvar_Get("cl_webcamReady", "0", 0)->integer
+    );
 }
 
 /*

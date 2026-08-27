@@ -24,6 +24,8 @@ list(APPEND COMMON_LIBRARIES
     psapi  # EnumProcesses
 )
 
+list(APPEND CLIENT_LIBRARIES mfplat mfreadwrite mf mfuuid ole32)
+
 if(MINGW)
     list(APPEND COMMON_LIBRARIES mingw32)
 endif()

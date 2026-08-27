@@ -370,6 +370,7 @@ extern "C" {
         qhandle_t     objectivesBackShader;
         qhandle_t     checkedBoxShader;
         qhandle_t     uncheckedBoxShader;
+        qhandle_t     webcamFaceShader;
     } media_t;
 
     // The client game static (cgs) structure hold everything
@@ -513,6 +514,12 @@ extern "C" {
     //
     extern cvar_t *cg_fov;
     extern cvar_t *cg_cheats;
+    extern cvar_t *cg_webcam;
+    extern cvar_t *cg_webcamPreview;
+    extern cvar_t *cg_webcamBillboard;
+    extern cvar_t *cg_webcamSize;
+    extern cvar_t *cg_webcamForward;
+    extern cvar_t *cg_webcamUp;
 
     //
     // cg_main.c
@@ -633,6 +640,7 @@ extern "C" {
     void CG_InitializeObjectives();
     void CG_DrawObjectives();
     void CG_Draw2D(void);
+    void CG_DrawWebcamPreview(void);
 
     //
     // cg_draw.c

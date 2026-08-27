@@ -209,6 +209,83 @@ void CG_PlayerTeamIcon(refEntity_t *pModel, entityState_t *pPlayerState)
 
 /*
 ===============
+CG_PlayerWebcamFace
+
+Local-only face overlay. Uses the same sprite path as team icons so it actually shows.
+===============
+*/
+static void CG_PlayerWebcamFace(refEntity_t *pModel, entityState_t *es, qboolean thirdPerson)
+{
+    int           i;
+    int           iTag;
+    vec3_t        origin;
+    refEntity_t   face;
+    static int    s_webcamDrew;
+
+    if (!cg_webcam || !cg_webcam->integer) {
+        return;
+    }
+    if (!thirdPerson && es && cg.snap && es->number == cg.snap->ps.clientNum) {
+        return;
+    }
+    if (!pModel || !pModel->tiki) {
+        return;
+    }
+
+    if (!cgs.media.webcamFaceShader) {
+        cgs.media.webcamFaceShader = cgi.R_RegisterShader("webcamface");
+    }
+
+    VectorCopy(pModel->origin, origin);
+    iTag = cgi.Tag_NumForName(pModel->tiki, "eyes bone");
+    if (iTag == -1) {
+        iTag = cgi.Tag_NumForName(pModel->tiki, "Bip01 Head");
+    }
+    if (iTag != -1) {
+        orientation_t oEyes = cgi.TIKI_Orientation(pModel, iTag);
+        for (i = 0; i < 3; i++) {
+            VectorMA(origin, oEyes.origin[i], pModel->axis[i], origin);
+        }
+    } else {
+        origin[2] += 72.0f;
+    }
+
+    /* Pull toward the camera so it sits in front of the helmet, not inside the mesh. */
+    VectorMA(origin, -8.0f, cg.refdef.viewaxis[0], origin);
+
+    memset(&face, 0, sizeof(face));
+    face.reType = RT_SPRITE;
+    face.customShader = cgs.media.webcamFaceShader;
+    face.radius = (cg_webcamSize && cg_webcamSize->value > 1.0f) ? cg_webcamSize->value : 14.0f;
+    face.shaderRGBA[0] = 255;
+    face.shaderRGBA[1] = 255;
+    face.shaderRGBA[2] = 255;
+    face.shaderRGBA[3] = 255;
+    VectorCopy(origin, face.origin);
+    VectorCopy(origin, face.oldorigin);
+    AnglesToAxis(vec3_origin, face.axis);
+
+    if (cgs.media.webcamFaceShader) {
+        cgi.R_AddRefEntityToScene(&face, ENTITYNUM_NONE);
+    } else {
+        face.hModel = cgi.R_RegisterModel("textures/hud/allies_headicon.spr");
+        face.scale = 1.2f;
+        face.reType = RT_SPRITE;
+        cgi.R_AddRefSpriteToScene(&face);
+    }
+
+    if (!s_webcamDrew) {
+        s_webcamDrew = 1;
+        cgi.Printf(
+            "webcam: drawing on heads shader=%d ready=%s\n",
+            cgs.media.webcamFaceShader,
+            cgi.Cvar_Get("cl_webcamReady", "0", 0)->integer ? "yes" : "no"
+        );
+    }
+}
+
+/*
+===============
 CG_InterpolateAnimParms
 
 Interpolate between current and next entity
@@ -1363,6 +1440,7 @@ void CG_ModelAnim(centity_t *cent, qboolean bDoShaderTime)
 
     if (cent->currentState.eType == ET_PLAYER && !(cent->currentState.eFlags & EF_DEAD)) {
         CG_PlayerTeamIcon(&model, &cent->currentState);
+        CG_PlayerWebcamFace(&model, s1, bThirdPerson);
     }
 
     if (s1->number == cg.snap->ps.clientNum) {

@@ -2746,6 +2746,30 @@ void R_CreateBuiltinImages(void) {
 	tr.scratchImage = R_CreateImageOld("*scratch", (byte*)data, DEFAULT_SIZE, DEFAULT_SIZE, 0, 1, r_picmip->integer, qfalse, qfalse, qfalse, GL_CLAMP, GL_CLAMP);
 	tr.scratchImage->r_sequence = -1;
 
+	{
+		byte webcamInit[128 * 128 * 4];
+		int  x, y;
+
+		Com_Memset(webcamInit, 0, sizeof(webcamInit));
+		for (y = 0; y < 128; y++) {
+			for (x = 0; x < 128; x++) {
+				float nx = (x + 0.5f) / 128.0f * 2.0f - 1.0f;
+				float ny = (y + 0.5f) / 128.0f * 2.0f - 1.0f;
+				float d  = nx * nx + ny * ny;
+				int   p  = (y * 128 + x) * 4;
+				if (d >= 1.0f) {
+					continue;
+				}
+				webcamInit[p + 0] = 255;
+				webcamInit[p + 1] = 64;
+				webcamInit[p + 2] = 192;
+				webcamInit[p + 3] = (d > 0.82f) ? (byte)((1.0f - d) / 0.18f * 255.0f) : 255;
+			}
+		}
+		tr.webcamImage = R_CreateImageOld("*webcam", webcamInit, 128, 128, 0, 1, qfalse, qtrue, qtrue, 0, GL_CLAMP, GL_CLAMP);
+		tr.webcamImage->r_sequence = -1;
+	}
+
 	R_CreateDlightImage();
 }
 

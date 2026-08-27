@@ -1322,6 +1322,7 @@ typedef struct {
 
 	image_t					*defaultImage;
 	image_t					*scratchImage;
+	image_t					*webcamImage;
 	image_t					*fogImage;
 	image_t					*dlightImage;	// inverse-quare highlight for projective adding
 	image_t					*flareImage;
@@ -1772,6 +1773,7 @@ void RE_Scissor(int x, int y, int width, int height);
 void DrawLineLoop(const vec2_t* points, int count, int stipple_factor, int stipple_mask);
 void RE_StretchRaw(int x, int y, int w, int h, int cols, int rows, int components, const byte* data);
 void	RE_UploadCinematic (int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty);
+void	RE_UploadWebcam(int cols, int rows, const byte *data);
 
 void		RE_BeginFrame( stereoFrame_t stereoFrame );
 void		RE_BeginRegistration( glconfig_t *glconfig );
