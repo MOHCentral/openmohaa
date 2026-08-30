@@ -62,10 +62,14 @@ typedef struct {
     char md5Expected[33];
 } prDownloadEntry_t;
 
-#define PR_MAX_DOWNLOADS 64
+#define PR_MAX_DOWNLOADS 128
+/* Hard cap per file: 400 MiB. CURLOPT_MAXFILESIZE plus write/progress abort. */
+#define PR_MAX_DOWNLOAD_BYTES (400L * 1024L * 1024L)
 #define PR_DOWNLOAD_LOW_SPEED_LIMIT 1L
 #define PR_DOWNLOAD_LOW_SPEED_TIME 30L
 #define PR_RETRY_DELAY_MS 5000
+#define PR_MAX_RETRIES 4
+#define PR_USERAGENT "OpenMoHAA-pr_downloads/1.0"
 
 static prDownloadEntry_t s_prQueue[PR_MAX_DOWNLOADS];
 static int               s_prQueueCount;
@@ -80,14 +84,24 @@ static char              s_prTempName[MAX_OSPATH];
 static char              s_prCurrentLocalName[MAX_OSPATH];
 static char              s_prCurrentMD5[33];
 static qboolean          s_prWriteFailed;
+static qboolean          s_prSizeExceeded;
 static qboolean          s_prRetryPending;
 static int               s_prRetryAt;
+static int               s_prRetryCount;
+static qboolean          s_prFilelistRetry;
+static qboolean          s_prFailed;
+static size_t            s_prBytesWritten;
 
 static int s_prLastProgressPct = -1;
 
 static double s_prSpeedSampleBytes;
 static int    s_prSpeedSampleTime;
 static float  s_prDisplaySpeed;
+
+static void CL_PR_DeleteTemp(void);
+static void CL_PR_CleanupActiveDownload(void);
+static void CL_PR_SetPendingStatus(qboolean pending);
+static void CL_PR_SetUserErrorStatus(const char *reason);
 
 static qboolean CL_PR_IsHttpUrl(const char *url)
 {
@@ -205,6 +219,35 @@ static void CL_PR_SetHttpOnly(CURL *curl)
                                  (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
 }
 
+static void CL_PR_ApplyEasyOpts(CURL *curl, long maxBytes)
+{
+    CL_PR_SetHttpOnly(curl);
+    curlImport.qcurl_easy_setopt(curl, CURLOPT_USERAGENT, PR_USERAGENT);
+    curlImport.qcurl_easy_setopt(curl, CURLOPT_MAXFILESIZE, maxBytes);
+}
+
+static void CL_PR_GiveUp(const char *reason)
+{
+    char msg[256];
+
+    if (!reason || !reason[0]) {
+        reason = "download failed";
+    }
+
+    s_prFailed       = qtrue;
+    s_prRetryPending = qfalse;
+    s_prFilelistRetry = qfalse;
+
+    CL_PR_DeleteTemp();
+    CL_PR_CleanupActiveDownload();
+    CL_PR_SetUserErrorStatus(reason);
+    CL_PR_SetPendingStatus(qfalse);
+
+    Com_sprintf(msg, sizeof(msg), "Download aborted: %s", reason);
+    Com_Printf("pr_downloads: giving up: %s\n", reason);
+    Com_Error(ERR_DROP, "%s", msg);
+}
+
 static void CL_PR_DeleteTemp(void)
 {
     const char *home;
@@ -289,6 +332,13 @@ static void CL_PR_ScheduleRetry(const char *reason)
         reason = "network error";
     }
 
+    if (s_prRetryCount >= PR_MAX_RETRIES) {
+        Com_sprintf(msg, sizeof(msg), "%s (after %d retries)", reason, PR_MAX_RETRIES);
+        CL_PR_GiveUp(msg);
+        return;
+    }
+
+    s_prRetryCount++;
     s_prRetryPending = qtrue;
     s_prRetryAt      = cls.realtime + PR_RETRY_DELAY_MS;
 
@@ -346,12 +396,19 @@ static size_t CL_PR_FileWriteCB(void *ptr, size_t size, size_t nmemb, void *user
         return 0;
     }
 
+    if (s_prBytesWritten + total > (size_t)PR_MAX_DOWNLOAD_BYTES) {
+        s_prSizeExceeded = qtrue;
+        s_prWriteFailed  = qtrue;
+        return 0;
+    }
+
     wrote = FS_Write(ptr, total, *fh);
     if (wrote != total) {
         s_prWriteFailed = qtrue;
         return 0;
     }
 
+    s_prBytesWritten += wrote;
     return wrote;
 }
 
@@ -363,6 +420,12 @@ static int CL_PR_ProgressCB(void *userp, double dltotal, double dlnow,
 
     (void)ultotal;
     (void)ulnow;
+
+    if (dltotal > (double)PR_MAX_DOWNLOAD_BYTES ||
+        dlnow > (double)PR_MAX_DOWNLOAD_BYTES) {
+        s_prSizeExceeded = qtrue;
+        return 1;
+    }
 
     Cvar_SetValue("cl_downloadSize",  (float)dltotal);
     Cvar_SetValue("cl_downloadCount", (float)dlnow);
@@ -476,6 +539,8 @@ static qboolean CL_PR_StartNextDownload(void)
     Cvar_SetValue("cl_downloadTime", cls.realtime);
     s_prLastProgressPct = -1;
     s_prWriteFailed     = qfalse;
+    s_prSizeExceeded    = qfalse;
+    s_prBytesWritten    = 0;
     s_prRetryPending    = qfalse;
     CL_PR_ResetSpeed();
 
@@ -487,7 +552,7 @@ static qboolean CL_PR_StartNextDownload(void)
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_PROGRESSDATA,     (void *)entry->localName);
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_FOLLOWLOCATION,   1L);
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_MAXREDIRS,        5L);
-    CL_PR_SetHttpOnly(s_prCurl);
+    CL_PR_ApplyEasyOpts(s_prCurl, PR_MAX_DOWNLOAD_BYTES);
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_FAILONERROR,      1L);
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_LOW_SPEED_LIMIT,  PR_DOWNLOAD_LOW_SPEED_LIMIT);
     curlImport.qcurl_easy_setopt(s_prCurl, CURLOPT_LOW_SPEED_TIME,   PR_DOWNLOAD_LOW_SPEED_TIME);
@@ -532,7 +597,7 @@ static qboolean CL_PR_FetchText(const char *url, char *buffer, int bufferSize)
     curlImport.qcurl_easy_setopt(curl, CURLOPT_WRITEDATA,     &buf);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_MAXREDIRS,     5L);
-    CL_PR_SetHttpOnly(curl);
+    CL_PR_ApplyEasyOpts(curl, (long)buf.capacity);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_TIMEOUT,       30L);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_FAILONERROR,   1L);
 
@@ -601,7 +666,9 @@ CL_InitPrDownloads
 Fetch the server's pr_downloads filelist, check MD5s of installed pk3s,
 queue any missing/outdated files, then start asynchronous curl_multi
 downloads so UI can update each frame.
-Called from CL_InitDownloads when cl_allowDownload is enabled.
+Called from CL_InitDownloads only when (cl_allowDownload & DLF_ENABLE).
+If autodownload is off, this must not run — maps will not be fetched.
+Enable with: cl_allowDownload 1
 =================
 */
 qboolean CL_InitPrDownloads(void)
@@ -615,12 +682,25 @@ qboolean CL_InitPrDownloads(void)
     int          queued     = 0;
     int          upToDate   = 0;
 
+    if (!(cl_allowDownload->integer & DLF_ENABLE)) {
+        Com_Printf("pr_downloads: skipped (cl_allowDownload is %d, DLF_ENABLE required)\n",
+                   cl_allowDownload->integer);
+        return qfalse;
+    }
+
     CL_PR_CleanupActiveDownload();
     s_prQueueCount      = 0;
     s_prQueueIndex      = 0;
     s_prHadDownloads    = qfalse;
     s_prRetryPending    = qfalse;
     s_prRetryAt         = 0;
+    s_prFailed          = qfalse;
+    s_prSizeExceeded    = qfalse;
+    s_prBytesWritten    = 0;
+    if (!s_prFilelistRetry) {
+        s_prRetryCount = 0;
+    }
+    s_prFilelistRetry = qfalse;
     s_prCurrentLocalName[0] = '\0';
     s_prCurrentMD5[0]       = '\0';
     Cvar_Set("cl_downloadError", "");
@@ -655,6 +735,7 @@ qboolean CL_InitPrDownloads(void)
 
     if (!CL_PR_FetchText(clc.sv_prDownloadsURL, filelistBuf, sizeof(filelistBuf))) {
         Cvar_Set("cl_downloadError", "Download error: failed to fetch file list");
+        s_prFilelistRetry = qtrue;
         CL_PR_ScheduleRetry("failed to fetch file list");
         return qtrue;
     }
@@ -702,8 +783,10 @@ qboolean CL_InitPrDownloads(void)
         }
 
         if (s_prQueueCount >= PR_MAX_DOWNLOADS) {
-            Com_Printf("pr_downloads: queue full, skipping %s\n", localName);
-            continue;
+            Com_Printf("pr_downloads: queue full (%d), refusing remaining required pak: %s\n",
+                       PR_MAX_DOWNLOADS, localName);
+            CL_PR_GiveUp("too many required paks (queue full)");
+            return qtrue;
         }
 
         Q_strncpyz(s_prQueue[s_prQueueCount].localName, localName,
@@ -766,12 +849,16 @@ void CL_PrDownloadsFrame(void)
     int       msgCount;
 
     /* Keep the UI on the pre-join connect/loading screen while required
-     * pr_downloads work is still in progress. */
+     * pr_downloads work is still in progress. After giving up, do not
+     * refresh connectStartTime — that used to prevent disconnect forever. */
+    if (s_prFailed) {
+        CL_PR_SetPendingStatus(qfalse);
+        return;
+    }
+
     if (CL_PrDownloadsPending()) {
         CL_PR_SetPendingStatus(qtrue);
         clc.state = CA_CONNECTED;
-        /* Refresh the connect-timeout clock so the UI timeout logic doesn't
-         * kick in and disconnect the client while we are still downloading. */
         clc.connectStartTime = cls.realtime;
     } else {
         CL_PR_SetPendingStatus(qfalse);
@@ -824,6 +911,15 @@ void CL_PrDownloadsFrame(void)
         s_prFile = 0;
     }
 
+    if (s_prSizeExceeded || doneMsg->data.result == CURLE_FILESIZE_EXCEEDED) {
+        Com_Printf("pr_downloads: %s exceeds 400 MiB cap, aborting\n",
+                   s_prCurrentLocalName);
+        CL_PR_DeleteTemp();
+        CL_PR_CleanupActiveDownload();
+        CL_PR_GiveUp("file exceeds 400 MiB download cap");
+        return;
+    }
+
     if (doneMsg->data.result == CURLE_OK) {
         const char *gotMD5;
 
@@ -850,6 +946,7 @@ void CL_PrDownloadsFrame(void)
 
         FS_BaseDir_Rename_HomeData(s_prTempName, s_prCurrentLocalName, qfalse);
         s_prHadDownloads = qtrue;
+        s_prRetryCount   = 0;
         Com_Printf("pr_downloads: %s downloaded successfully\n", s_prCurrentLocalName);
     } else {
         const char *errorReason = curlImport.qcurl_easy_strerror(doneMsg->data.result);
@@ -875,8 +972,8 @@ void CL_PrDownloadsFrame(void)
         CL_PR_DeleteTemp();
         CL_PR_CleanupActiveDownload();
 
-        /* Strict mode: never skip required files. Keep retrying same item
-         * until it succeeds or the user exits the game. */
+        /* Required files are not skipped. Retry the same item, then
+         * disconnect after PR_MAX_RETRIES. */
         CL_PR_ScheduleRetry(errorReason);
         return;
     }
@@ -907,11 +1004,18 @@ void CL_PrDownloadsFrame(void)
 void CL_ShutdownPrDownloads(void)
 {
     CL_PR_CleanupActiveDownload();
+    CL_PR_DeleteTemp();
+    s_prTempName[0]     = '\0';
     s_prQueueCount      = 0;
     s_prQueueIndex      = 0;
     s_prHadDownloads    = qfalse;
     s_prRetryPending    = qfalse;
     s_prRetryAt         = 0;
+    s_prRetryCount      = 0;
+    s_prFilelistRetry   = qfalse;
+    s_prFailed          = qfalse;
+    s_prSizeExceeded    = qfalse;
+    s_prBytesWritten    = 0;
     s_prCurrentLocalName[0] = '\0';
     s_prCurrentMD5[0]       = '\0';
     Cvar_Set("cl_downloadError", "");

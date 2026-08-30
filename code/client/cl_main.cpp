@@ -1986,7 +1986,8 @@ and determine if we need to download them
 void CL_InitDownloads(void) {
   char missingfiles[1024];
 
-  if (CL_InitPrDownloads()) {
+  /* pr_downloads only when the user enabled autodownload (DLF_ENABLE). */
+  if ( (cl_allowDownload->integer & DLF_ENABLE) && CL_InitPrDownloads() ) {
     return;
   }
 
