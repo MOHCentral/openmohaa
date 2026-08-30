@@ -981,6 +981,8 @@ void CL_Disconnect() {
 	*clc.downloadTempName = *clc.downloadName = 0;
 	Cvar_Set( "cl_downloadName", "" );
 
+	CL_ShutdownPrDownloads();
+
 	if ( clc.demofile ) {
 		FS_FCloseFile( clc.demofile );
 		clc.demofile = 0;
@@ -1984,6 +1986,10 @@ and determine if we need to download them
 void CL_InitDownloads(void) {
   char missingfiles[1024];
 
+  if (CL_InitPrDownloads()) {
+    return;
+  }
+
   if ( !(cl_allowDownload->integer & DLF_ENABLE) )
   {
     // autodownload is disabled on the client
@@ -2682,6 +2688,8 @@ void CL_Frame ( int msec ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+	CL_PrDownloadsFrame();
 
 #ifdef USE_CURL
 	if(clc.downloadCURLM) {

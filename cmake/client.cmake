@@ -23,6 +23,7 @@ set(CLIENT_SOURCES
     ${SOURCE_DIR}/client/cl_main.cpp
     ${SOURCE_DIR}/client/cl_net_chan.cpp
     ${SOURCE_DIR}/client/cl_parse.cpp
+    ${SOURCE_DIR}/client/cl_prdownloads.c
     ${SOURCE_DIR}/client/cl_scrn.cpp
     ${SOURCE_DIR}/client/cl_ui.cpp
     ${SOURCE_DIR}/client/cl_uibind.cpp

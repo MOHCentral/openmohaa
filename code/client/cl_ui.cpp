@@ -151,6 +151,10 @@ const UColor UGreenChatMessageColor(0.0, 1.0, 0.333, 1.0);
 void UI_MultiplayerMenuWidgetsUpdate(void);
 void UI_MultiplayerMainMenuWidgetsUpdate(void);
 void UI_MainMenuWidgetsUpdate(void);
+static void UI_UpdateConnectingMenuMessage(void);
+static void UI_UpdateLoadingMenuStatus(void);
+static void UI_ConfigureDownloadStatusWidget(UIWidget *messageWidget);
+static void UI_BuildDownloadStatusLine(char *statusLine, size_t statusLineSize, const char *idleText);
 
 static UIRect2D getDefaultGMBoxRectangle(void);
 static UIRect2D getDefaultDMBoxRectangle(void);
@@ -1820,8 +1824,9 @@ Updates the UI.
 */
 void UI_Update(void)
 {
-    Menu    *currentMenu;
-    UIRect2D frame;
+    Menu     *currentMenu;
+    UIRect2D  frame;
+    qboolean  effectiveServerLoading;
 
     re.SetRenderTime(cls.realtime);
     CL_FillUIDef();
@@ -1881,6 +1886,7 @@ void UI_Update(void)
     }
 
     currentMenu = menuManager.CurrentMenu();
+    effectiveServerLoading = server_loading && (Cvar_VariableValue("cl_prdownloads_pending") <= 0.0f);
 
     if (currentMenu == menuManager.FindMenu("main")) {
         UI_MainMenuWidgetsUpdate();
@@ -1891,9 +1897,13 @@ void UI_Update(void)
     // don't care about the intro
     if (!CL_FinishedIntro()) {
         UI_DrawIntro();
-    } else if (!server_loading && (clc.state == CA_CONNECTING || clc.state == CA_CHALLENGING) && ui_pConnectingMenu) {
+    } else if (!effectiveServerLoading
+               && (clc.state == CA_CONNECTING || clc.state == CA_CHALLENGING || clc.state == CA_CONNECTED)
+               && ui_pConnectingMenu) {
         view3d->setShow(false);
         UI_ClearBackground();
+        UI_UpdateConnectingMenuMessage();
+        UI_DrawConnect();
 
         if (UI_BindActive()) {
             Menu *bindMenu = menuManager.FindMenu("controls");
@@ -1919,13 +1929,13 @@ void UI_Update(void)
             Cbuf_AddText("disconnect;pushmenu servertimeout");
         }
     } else {
-        if (currentMenu && currentMenu->isFullscreen() && (!server_loading || !ui_pLoadingMenu)) {
+        if (currentMenu && currentMenu->isFullscreen() && (!effectiveServerLoading || !ui_pLoadingMenu)) {
             if (com_sv_running->integer && clc.state == CA_ACTIVE) {
                 Com_FakePause();
             }
 
             view3d->setShow(false);
-        } else if (!server_loading) {
+        } else if (!effectiveServerLoading) {
             if (clc.state <= CA_PRIMED) {
                 view3d->setShow(false);
                 UI_ClearBackground();
@@ -3045,7 +3055,240 @@ void UI_ForceMenuOff(bool force)
 UI_UpdateConnectionString
 ====================
 */
-void UI_UpdateConnectionString(void) {}
+static char ui_connectionString[256];
+
+static void UI_FormatDownloadRate(char *rate, size_t rateSize)
+{
+    double speed;
+
+    if (!rate || rateSize == 0) {
+        return;
+    }
+
+    rate[0] = '\0';
+    speed   = Cvar_VariableValue("cl_downloadSpeed");
+
+    if (speed <= 0.0) {
+        double downloaded = Cvar_VariableValue("cl_downloadCount");
+        double startTime  = Cvar_VariableValue("cl_downloadTime");
+        double elapsed    = ((double)cls.realtime - startTime) / 1000.0;
+
+        if (elapsed > 0.25 && downloaded > 0.0) {
+            speed = downloaded / elapsed;
+        }
+    }
+
+    if (speed >= 1024.0 * 1024.0) {
+        Com_sprintf(rate, rateSize, " - %.1f MB/s", speed / (1024.0 * 1024.0));
+    } else if (speed >= 1024.0) {
+        Com_sprintf(rate, rateSize, " - %.0f KB/s", speed / 1024.0);
+    } else if (speed > 0.0) {
+        Com_sprintf(rate, rateSize, " - %.0f B/s", speed);
+    }
+}
+
+static void UI_UpdateConnectingMenuMessage(void)
+{
+    UIWidget   *messageWidget;
+    const char *displayName;
+    const char *downloadName;
+    double      downloaded;
+    double      total;
+    int         percent;
+    int         filled;
+    int         i;
+    char        bar[11];
+    char        statusLine[256];
+
+    if (!ui_pConnectingMenu) {
+        return;
+    }
+
+    messageWidget = ui_pConnectingMenu->GetNamedWidget("message");
+    if (!messageWidget) {
+        return;
+    }
+
+    messageWidget->setShow(true);
+
+    if (Cvar_VariableValue("cl_prdownloads_pending") > 0.0f) {
+        UI_ConfigureDownloadStatusWidget(messageWidget);
+        UI_BuildDownloadStatusLine(statusLine, sizeof(statusLine), "Connecting...");
+        messageWidget->setTitle(statusLine);
+        return;
+    }
+
+    downloadName = Cvar_VariableString("cl_downloadName");
+    downloaded   = Cvar_VariableValue("cl_downloadCount");
+    total        = Cvar_VariableValue("cl_downloadSize");
+
+    if (downloadName && downloadName[0] && total > 0.0) {
+        char rate[32];
+
+        if (downloaded < 0.0) {
+            downloaded = 0.0;
+        }
+        if (downloaded > total) {
+            downloaded = total;
+        }
+
+        percent = (int)((downloaded / total) * 100.0);
+        filled  = percent / 10;
+        if (filled < 0) {
+            filled = 0;
+        }
+        if (filled > 10) {
+            filled = 10;
+        }
+
+        for (i = 0; i < 10; i++) {
+            bar[i] = (i < filled) ? '#' : '-';
+        }
+        bar[10] = '\0';
+
+        displayName = COM_SkipPath(downloadName);
+        if (!displayName || !displayName[0]) {
+            displayName = downloadName;
+        }
+
+        UI_FormatDownloadRate(rate, sizeof(rate));
+        Com_sprintf(statusLine, sizeof(statusLine), "%s %d%% [%s]%s", displayName, percent, bar, rate);
+    } else if (downloadName && downloadName[0]) {
+        Q_strncpyz(statusLine, "Starting download...", sizeof(statusLine));
+    } else {
+        Q_strncpyz(statusLine, "Connecting to Server...", sizeof(statusLine));
+    }
+
+    messageWidget->setTitle(statusLine);
+}
+
+static void UI_ConfigureDownloadStatusWidget(UIWidget *messageWidget)
+{
+    float bw;
+    float bh;
+
+    if (!messageWidget) {
+        return;
+    }
+
+    bw = uid.vidWidth - 40.0f;
+    if (bw < 400.0f) {
+        bw = 400.0f;
+    }
+
+    bh = 56.0f;
+
+    messageWidget->setFontHorizontalAlignment(FONT_JUSTHORZ_CENTER);
+    messageWidget->setFontVerticalAlignment(FONT_JUSTVERT_CENTER);
+    messageWidget->setMaterial(NULL);
+    messageWidget->setHoverMaterial(NULL);
+    messageWidget->setPressedMaterial(NULL);
+    messageWidget->setBackgroundColor(UBlack, false);
+    messageWidget->setForegroundColor(UWhite);
+    messageWidget->setBorderStyle(border_none);
+    messageWidget->setBackgroundAlpha(0.9f);
+    messageWidget->setFrame(UIRect2D(20.0f, (uid.vidHeight - bh) * 0.5f, bw, bh));
+}
+
+static void UI_BuildDownloadStatusLine(char *statusLine, size_t statusLineSize, const char *idleText)
+{
+    const char *downloadError;
+    const char *displayName;
+    const char *downloadName;
+    double      downloaded;
+    double      total;
+    int         percent;
+    int         downloadCurrent;
+    int         downloadTotal;
+    char        progressPrefix[32];
+    char        rate[32];
+
+    progressPrefix[0] = '\0';
+    downloadCurrent = (int)Cvar_VariableValue("cl_downloadCurrent");
+    downloadTotal   = (int)Cvar_VariableValue("cl_downloadTotal");
+    if (downloadTotal > 0) {
+        if (downloadCurrent < 1) {
+            downloadCurrent = 1;
+        }
+        if (downloadCurrent > downloadTotal) {
+            downloadCurrent = downloadTotal;
+        }
+        Com_sprintf(progressPrefix, sizeof(progressPrefix), "(%d/%d) ", downloadCurrent, downloadTotal);
+    }
+
+    downloadError = Cvar_VariableString("cl_downloadError");
+    if (downloadError && downloadError[0]) {
+        Com_sprintf(statusLine, statusLineSize, "%s%s", progressPrefix, downloadError);
+        return;
+    }
+
+    downloadName = Cvar_VariableString("cl_downloadName");
+    downloaded   = Cvar_VariableValue("cl_downloadCount");
+    total        = Cvar_VariableValue("cl_downloadSize");
+
+    if (downloadName && downloadName[0] && total > 0.0) {
+        if (downloaded < 0.0) {
+            downloaded = 0.0;
+        }
+        if (downloaded > total) {
+            downloaded = total;
+        }
+
+        percent = (int)((downloaded / total) * 100.0);
+        if (percent < 0) {
+            percent = 0;
+        }
+        if (percent > 100) {
+            percent = 100;
+        }
+
+        displayName = COM_SkipPath(downloadName);
+        if (!displayName || !displayName[0]) {
+            displayName = downloadName;
+        }
+
+        UI_FormatDownloadRate(rate, sizeof(rate));
+        Com_sprintf(statusLine, statusLineSize, "%sDownloading %s (%d%%)%s",
+                    progressPrefix, displayName, percent, rate);
+        return;
+    }
+
+    Com_sprintf(statusLine, statusLineSize, "%s%s", progressPrefix, idleText);
+}
+
+static void UI_UpdateLoadingMenuStatus(void)
+{
+    UIWidget *messageWidget;
+
+    if (!ui_pLoadingMenu) {
+        return;
+    }
+
+    messageWidget = ui_pLoadingMenu->GetNamedWidget("loadingflasher");
+    if (!messageWidget) {
+        return;
+    }
+
+    UI_ConfigureDownloadStatusWidget(messageWidget);
+
+    {
+        char statusLine[256];
+
+        UI_BuildDownloadStatusLine(statusLine, sizeof(statusLine), "LOADING");
+        messageWidget->setTitle(statusLine);
+    }
+}
+
+void UI_UpdateConnectionString(void)
+{
+    const char *server = clc.servername;
+
+    if (!server || !server[0]) {
+        server = "server";
+    }
+
+    Com_sprintf(ui_connectionString, sizeof(ui_connectionString), "Connecting to %s", server);
+}
 
 /*
 ====================
@@ -3059,7 +3302,13 @@ void UI_ParseServerInfoMessage(msg_t *msg) {}
 UI_DrawConnectText
 ====================
 */
-void UI_DrawConnectText(void) {}
+void UI_DrawConnectText(void)
+{
+    vec4_t textColor = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    UI_UpdateConnectionString();
+    SCR_DrawSmallStringExt(24, 24, ui_connectionString, textColor, qtrue, qfalse);
+}
 
 /*
 ====================
@@ -3068,7 +3317,70 @@ UI_DrawConnect
 */
 void UI_DrawConnect(void)
 {
-    Com_Printf("UI_DrawConnect called\n");
+    const char *downloadName;
+    const char *displayName;
+    double      downloaded;
+    double      total;
+    float       fraction;
+    int         percent;
+    vec4_t      textColor  = {1.0f, 1.0f, 1.0f, 1.0f};
+    char        statusLine[256];
+    char        rate[32];
+    int         textX;
+    int         textY;
+    qboolean    effectiveServerLoading;
+
+    downloadName = Cvar_VariableString("cl_downloadName");
+    downloaded   = Cvar_VariableValue("cl_downloadCount");
+    total        = Cvar_VariableValue("cl_downloadSize");
+
+    effectiveServerLoading = server_loading && (Cvar_VariableValue("cl_prdownloads_pending") <= 0.0f);
+
+    if (effectiveServerLoading && ui_pLoadingMenu) {
+        UI_UpdateLoadingMenuStatus();
+        return;
+    }
+
+    if (!downloadName || !downloadName[0] || total <= 0.0) {
+        return;
+    }
+
+    if (downloaded < 0.0) {
+        downloaded = 0.0;
+    }
+    if (downloaded > total) {
+        downloaded = total;
+    }
+
+    fraction = (float)(downloaded / total);
+    percent  = (int)(fraction * 100.0f);
+    if (percent < 0) {
+        percent = 0;
+    }
+    if (percent > 100) {
+        percent = 100;
+    }
+
+    Cvar_SetValue("loadingbar", fraction);
+
+    displayName = COM_SkipPath(downloadName);
+    if (!displayName || !displayName[0]) {
+        displayName = downloadName;
+    }
+
+    UI_FormatDownloadRate(rate, sizeof(rate));
+    Com_sprintf(statusLine, sizeof(statusLine), "Downloading %s (%d%%)%s", displayName, percent, rate);
+    textX = (cls.glconfig.vidWidth - (int)strlen(statusLine) * 8) / 2;
+    if (textX < 10) {
+        textX = 10;
+    }
+
+    textY = cls.glconfig.vidHeight / 2;
+    if (textY < 10) {
+        textY = 10;
+    }
+
+    SCR_DrawSmallStringExt(textX, textY, statusLine, textColor, qtrue, qfalse);
 }
 
 /*
@@ -6054,6 +6366,8 @@ void UI_AbortLoad(void)
         }
         cls.loading = LOAD_PROGRESS_FALSE;
     }
+    server_loading         = qfalse;
+    server_loading_waiting = qfalse;
 }
 
 /*

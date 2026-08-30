@@ -218,6 +218,7 @@ typedef struct {
 	CURL		*downloadCURL;
 	CURLM		*downloadCURLM;
 #endif /* USE_CURL */
+	char		sv_prDownloadsURL[MAX_CVAR_VALUE_STRING]; // pr_downloads URL from server
 	int		sv_allowDownload;
 	char		sv_dlURL[MAX_CVAR_VALUE_STRING];
 	int			downloadNumber;
@@ -555,6 +556,11 @@ void CL_StopRecord_f(void);
 
 void CL_InitDownloads(void);
 void CL_NextDownload(void);
+void CL_DownloadsComplete(void);
+qboolean CL_InitPrDownloads(void);
+qboolean CL_PrDownloadsPending(void);
+void CL_PrDownloadsFrame(void);
+void CL_ShutdownPrDownloads(void);
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );
@@ -567,6 +573,7 @@ qboolean CL_CDKeyValidate( const char *key, const char *checksum );
 int CL_ServerStatus( const char *serverAddress, char *serverStatusString, int maxLen );
 void UI_ClearResource( void );
 void UI_LoadResource( const char *name );
+void UI_AbortLoad( void );
 
 qboolean CL_CheckPaused(void);
 
