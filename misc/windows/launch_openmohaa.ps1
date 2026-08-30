@@ -4,12 +4,19 @@
 # The file the user starts is openmohaa.exe (wrapper). The real engine is
 # openmohaa_game.exe. Official zips also contain openmohaa.exe; that file
 # must be copied onto openmohaa_game.exe, NEVER onto the wrapper.
+#
+# Architecture is chosen by the user (never auto-picked):
+#   first run: "Architectuur? [1] x86  [2] x64"
+#   later: saved arch= in launcher_state
+#   override: -x86 / -x64 (saved)
 
 [CmdletBinding()]
 param(
     [switch]$SkipLaunch,
     [switch]$CheckOnly,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$x86,
+    [switch]$x64
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +29,7 @@ $ApiUrl = if ($env:OPENMOHAA_API_URL) { $env:OPENMOHAA_API_URL } else { 'https:/
 $UserAgent = 'OpenMoHAA-Launcher/1.0'
 $StateDir = Join-Path $env:APPDATA 'openmohaa'
 $StateFile = Join-Path $StateDir 'launcher_state.txt'
+$LocalStateFile = Join-Path $GameDir 'launcher_state.txt'
 $StagingRoot = Join-Path $env:TEMP 'openmohaa_official_update'
 $ApiTimeoutSec = 12
 $DownloadTimeoutSec = 90
@@ -35,6 +43,7 @@ $ProtectedNames = @(
     'launch_openmohaa.ps1'
     'openmohaa_wrapper.c'
     '_build_openmohaa_wrapper.bat'
+    'launcher_state.txt'
 )
 
 function Write-Info([string]$Message) { Write-Host $Message -ForegroundColor Cyan }
@@ -233,15 +242,82 @@ function Compare-VersionParts($Left, $Right) {
     return 0
 }
 
-function Get-LauncherState {
-    $state = @{ Tag = $null; LastCheckUtc = $null; ETag = $null }
-    if (-not (Test-Path -LiteralPath $StateFile)) { return $state }
-    foreach ($line in Get-Content -LiteralPath $StateFile -ErrorAction SilentlyContinue) {
+function Read-StateFile([string]$Path) {
+    $state = @{
+        Tag          = $null
+        LastCheckUtc = $null
+        ETag         = $null
+        Arch         = $null
+        LocalVersion = $null
+    }
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $state }
+    foreach ($line in Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue) {
         if ($line -match '^last_seen_tag=(.+)$') { $state.Tag = $Matches[1].Trim() }
         elseif ($line -match '^last_check_utc=(.+)$') { $state.LastCheckUtc = $Matches[1].Trim() }
         elseif ($line -match '^etag=(.+)$') { $state.ETag = $Matches[1].Trim() }
+        elseif ($line -match '^local_version=(.+)$') { $state.LocalVersion = $Matches[1].Trim() }
+        elseif ($line -match '^arch=(.+)$') {
+            $a = $Matches[1].Trim().ToLowerInvariant()
+            if ($a -eq 'x86' -or $a -eq 'x64') { $state.Arch = $a }
+        }
     }
     return $state
+}
+
+function Get-LauncherState {
+    $state = Read-StateFile $StateFile
+    $local = Read-StateFile $LocalStateFile
+    if ($local.Arch) { $state.Arch = $local.Arch }
+    if (-not $state.Tag -and $local.Tag) { $state.Tag = $local.Tag }
+    if (-not $state.ETag -and $local.ETag) { $state.ETag = $local.ETag }
+    if (-not $state.LastCheckUtc -and $local.LastCheckUtc) { $state.LastCheckUtc = $local.LastCheckUtc }
+    if (-not $state.LocalVersion -and $local.LocalVersion) { $state.LocalVersion = $local.LocalVersion }
+    return $state
+}
+
+function Write-StateFile([string]$Path, $State) {
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $lines = @()
+    if ($State.Tag) { $lines += "last_seen_tag=$($State.Tag)" }
+    if ($State.LocalVersion) { $lines += "local_version=$($State.LocalVersion)" }
+    if ($State.LastCheckUtc) { $lines += "last_check_utc=$($State.LastCheckUtc)" }
+    if ($State.ETag) { $lines += "etag=$($State.ETag)" }
+    if ($State.Arch) { $lines += "arch=$($State.Arch)" }
+    $lines | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Save-LauncherState {
+    param(
+        [string]$Tag,
+        [string]$LocalVersion,
+        [string]$ETag,
+        [string]$Arch,
+        [switch]$TouchedApi
+    )
+    $prev = Get-LauncherState
+    $state = @{
+        Tag          = $(if ($Tag) { $Tag } else { $prev.Tag })
+        LocalVersion = $(if ($LocalVersion) { $LocalVersion } else { $prev.LocalVersion })
+        LastCheckUtc = $prev.LastCheckUtc
+        ETag         = $(if ($PSBoundParameters.ContainsKey('ETag')) { $ETag } else { $prev.ETag })
+        Arch         = $(if ($Arch) { $Arch } else { $prev.Arch })
+    }
+    if ($TouchedApi) {
+        $state.LastCheckUtc = (Get-Date).ToUniversalTime().ToString('o')
+    }
+    $appOk = $false
+    try {
+        Write-StateFile -Path $StateFile -State $state
+        $appOk = $true
+    } catch {
+        $appOk = $false
+    }
+    if ((Test-Path -LiteralPath $LocalStateFile) -or -not $appOk) {
+        Write-StateFile -Path $LocalStateFile -State $state
+    }
 }
 
 function Test-RecentApiCheck($State) {
@@ -258,43 +334,55 @@ function Test-RecentApiCheck($State) {
     }
 }
 
-function Save-LauncherState([string]$Tag, [string]$LocalVersion, [string]$ETag) {
-    if (-not (Test-Path -LiteralPath $StateDir)) {
-        New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+function Read-ArchitectureChoice {
+    Write-Host 'Architectuur? [1] x86  [2] x64'
+    try {
+        if ([Console]::IsInputRedirected) {
+            return $null
+        }
+    } catch {
+        return $null
     }
-    $stamp = (Get-Date).ToUniversalTime().ToString('o')
-    $lines = @(
-        "last_seen_tag=$Tag"
-        "local_version=$LocalVersion"
-        "last_check_utc=$stamp"
-    )
-    if ($ETag) {
-        $lines += "etag=$ETag"
+    while ($true) {
+        $key = [Console]::ReadKey($true)
+        if ($key.Key -eq 'D1' -or $key.Key -eq 'NumPad1' -or $key.KeyChar -eq '1' -or $key.Key -eq 'Enter') {
+            Write-Host 'x86'
+            return 'x86'
+        }
+        if ($key.Key -eq 'D2' -or $key.Key -eq 'NumPad2' -or $key.KeyChar -eq '2') {
+            Write-Host 'x64'
+            return 'x64'
+        }
     }
-    $lines | Set-Content -LiteralPath $StateFile -Encoding UTF8
 }
 
-function Get-PreferredWindowsAsset($Release) {
+function Resolve-Architecture([string]$SavedArch) {
+    if ($x86 -and $x64) {
+        Write-WarnLine 'Both -x86 and -x64 given; using x86.'
+        return 'x86'
+    }
+    if ($x86) { return 'x86' }
+    if ($x64) { return 'x64' }
+    if ($SavedArch -eq 'x86' -or $SavedArch -eq 'x64') { return $SavedArch }
+    return Read-ArchitectureChoice
+}
+
+function Get-WindowsAssetForArch($Release, [string]$Arch) {
     $zips = @($Release.assets | Where-Object {
         $_.name -match '^openmohaa-.*-windows-.+\.zip$' -and
         $_.name -notmatch '-pdb\.zip$'
     })
 
-    $x86 = $zips | Where-Object { $_.name -match 'windows-x86\.zip$' } | Select-Object -First 1
-    if ($x86) {
-        return @{ Asset = $x86; Arch = 'x86'; Note = $null }
+    $asset = $zips | Where-Object { $_.name -match "windows-$Arch\.zip$" } | Select-Object -First 1
+    if ($asset) {
+        return @{ Asset = $asset; Arch = $Arch; Note = $null }
     }
 
-    $x64 = $zips | Where-Object { $_.name -match 'windows-x64\.zip$' } | Select-Object -First 1
-    if ($x64) {
-        return @{
-            Asset = $x64
-            Arch  = 'x64'
-            Note  = 'No official Windows x86 zip in this release; installing x64.'
-        }
+    return @{
+        Asset = $null
+        Arch  = $Arch
+        Note  = "No official Windows $Arch zip."
     }
-
-    return @{ Asset = $null; Arch = $null; Note = 'No official Windows zip found.' }
 }
 
 function Test-GameRunning {
@@ -396,6 +484,15 @@ function Start-OpenMohaa {
 $localVersion = Get-LocalVersion $GameExe
 $localArch = Get-PeArch $GameExe
 $state = Get-LauncherState
+$arch = Resolve-Architecture $state.Arch
+if ($arch) {
+    if ($arch -ne $state.Arch) {
+        Save-LauncherState -Arch $arch
+        $state.Arch = $arch
+    }
+} else {
+    Write-ErrLine 'No architecture chosen.'
+}
 
 $running = Test-GameRunning
 $release = $null
@@ -403,11 +500,17 @@ $needUpdate = $false
 $updateReason = $null
 $tag = $null
 $apiEtag = $state.ETag
+$cliOverride = [bool]($x86 -or $x64)
+$wrongArch = [bool]($localArch -and $arch -and ($localArch -ne $arch))
+$skipCache = $Force -or $cliOverride -or $wrongArch
 
-if (-not $Force -and (Test-RecentApiCheck $state)) {
+if (-not $arch) {
+    Write-Host 'No update.'
+} elseif (-not $skipCache -and (Test-RecentApiCheck $state)) {
     Write-Host "Check skipped (cache < $ApiCacheHours h)."
     if ($CheckOnly) {
         Write-Host "Official (cached): $($state.Tag)"
+        Write-Host "Arch: $arch"
         Write-Host "Local: $localVersion"
         Write-Host 'No update.'
     }
@@ -419,17 +522,19 @@ if (-not $Force -and (Test-RecentApiCheck $state)) {
             $tag = $state.Tag
             if ($CheckOnly) {
                 Write-Host "Official: $tag"
+                Write-Host "Arch: $arch"
                 Write-Host "Local: $localVersion"
             }
             Write-Host 'No update.'
-            Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag
+            Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag -Arch $arch -TouchedApi
         } else {
             $release = $api.Release
             $tag = [string]$release.tag_name
-            $choice = Get-PreferredWindowsAsset $release
+            $choice = Get-WindowsAssetForArch $release $arch
 
             if ($CheckOnly) {
                 Write-Host "Official: $tag"
+                Write-Host "Arch: $arch"
                 if ($choice.Asset) {
                     Write-Host "Asset: $($choice.Asset.name)"
                     $digestSha = Get-AssetSha256 $choice.Asset
@@ -445,25 +550,20 @@ if (-not $Force -and (Test-RecentApiCheck $state)) {
                 Write-Host "Local: $localVersion"
             }
 
-            if ($choice.Note -and -not $choice.Asset) { Write-WarnLine $choice.Note }
-
             if (-not $choice.Asset) {
-                Write-WarnLine 'No update.'
+                Write-ErrLine $(if ($choice.Note) { $choice.Note } else { "No official Windows $arch zip." })
+                Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag -Arch $arch -TouchedApi
             } else {
                 $officialParts = Get-VersionParts $tag
                 $localParts = Get-VersionParts $localVersion
                 $exeMissing = -not (Test-Path -LiteralPath $GameExe)
-                $wrongArch = $false
-                if ($localArch -and $choice.Arch -and $localArch -ne $choice.Arch) {
-                    $wrongArch = $true
-                }
 
                 if ($exeMissing) {
                     $needUpdate = $true
                     $updateReason = 'openmohaa_game.exe is missing'
                 } elseif ($wrongArch) {
                     $needUpdate = $true
-                    $updateReason = "wrong architecture ($localArch instead of $($choice.Arch))"
+                    $updateReason = "wrong architecture ($localArch instead of $arch)"
                 } elseif ($officialParts -and $localParts) {
                     if ((Compare-VersionParts $officialParts $localParts) -gt 0) {
                         $needUpdate = $true
@@ -476,7 +576,7 @@ if (-not $Force -and (Test-RecentApiCheck $state)) {
 
                 if (-not $needUpdate) {
                     Write-Host 'No update.'
-                    Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag
+                    Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag -Arch $arch -TouchedApi
                 } elseif ($CheckOnly) {
                     Write-Host "Update available ($updateReason)."
                 } elseif ($running.Count -gt 0) {
@@ -487,7 +587,7 @@ if (-not $Force -and (Test-RecentApiCheck $state)) {
                     Install-OfficialZip $choice.Asset
                     $localVersion = Get-LocalVersion $GameExe
                     $localArch = Get-PeArch $GameExe
-                    Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag
+                    Save-LauncherState -Tag $tag -LocalVersion $localVersion -ETag $api.ETag -Arch $arch -TouchedApi
                     Write-Ok "Installed: $tag"
                 }
             }
