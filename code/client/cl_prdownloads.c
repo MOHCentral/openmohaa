@@ -666,9 +666,8 @@ CL_InitPrDownloads
 Fetch the server's pr_downloads filelist, check MD5s of installed pk3s,
 queue any missing/outdated files, then start asynchronous curl_multi
 downloads so UI can update each frame.
-Called from CL_InitDownloads only when (cl_allowDownload & DLF_ENABLE).
-If autodownload is off, this must not run — maps will not be fetched.
-Enable with: cl_allowDownload 1
+Called from CL_InitDownloads regardless of cl_allowDownload / DLF_ENABLE.
+pr_downloads is not gated by that unused/broken stock cvar.
 =================
 */
 qboolean CL_InitPrDownloads(void)
@@ -681,12 +680,6 @@ qboolean CL_InitPrDownloads(void)
     char         localName[MAX_OSPATH];
     int          queued     = 0;
     int          upToDate   = 0;
-
-    if (!(cl_allowDownload->integer & DLF_ENABLE)) {
-        Com_Printf("pr_downloads: skipped (cl_allowDownload is %d, DLF_ENABLE required)\n",
-                   cl_allowDownload->integer);
-        return qfalse;
-    }
 
     CL_PR_CleanupActiveDownload();
     s_prQueueCount      = 0;
