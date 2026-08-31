@@ -798,6 +798,9 @@ qboolean CL_InitPrDownloads(void)
 
     if (!s_prQueueCount) {
         CL_PR_SetPendingStatus(qfalse);
+        if (CL_TryFastDLMapFallback()) {
+            return qtrue;
+        }
         CL_DownloadsComplete();
         return qtrue;
     }
@@ -991,6 +994,9 @@ void CL_PrDownloadsFrame(void)
     Cvar_Set("cl_downloadTotal", "0");
     CL_PR_ResetSpeed();
     CL_PR_SetPendingStatus(qfalse);
+    if (CL_TryFastDLMapFallback()) {
+        return;
+    }
     CL_DownloadsComplete();
 }
 

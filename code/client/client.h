@@ -477,6 +477,8 @@ extern	cvar_t	*cl_activeAction;
 
 extern	cvar_t	*cl_allowDownload;
 extern  cvar_t  *cl_downloadMethod;
+extern	cvar_t	*cl_fastdl;
+extern	cvar_t	*cl_fastdl_url;
 extern	cvar_t	*cl_conXOffset;
 extern	cvar_t	*cl_inGameVideo;
 
@@ -561,6 +563,10 @@ qboolean CL_InitPrDownloads(void);
 qboolean CL_PrDownloadsPending(void);
 void CL_PrDownloadsFrame(void);
 void CL_ShutdownPrDownloads(void);
+qboolean CL_TryFastDLMapFallback(void);
+qboolean CL_FastDLPending(void);
+void CL_FastDLFrame(void);
+void CL_ShutdownFastDL(void);
 
 void CL_GetPing( int n, char *buf, int buflen, int *pingtime );
 void CL_GetPingInfo( int n, char *buf, int buflen );

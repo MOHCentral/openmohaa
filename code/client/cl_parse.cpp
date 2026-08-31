@@ -1067,7 +1067,7 @@ loaded. The server may already send snapshots, CGMs, or other cmds.
 =====================
 */
 static qboolean CL_PrDownloadsHoldingParse( void ) {
-	if ( CL_PrDownloadsPending() ) {
+	if ( CL_PrDownloadsPending() || CL_FastDLPending() ) {
 		return qtrue;
 	}
 	return ( clc.sv_prDownloadsURL[0] && Cvar_VariableValue( "cl_prdownloads_pending" ) > 0.0f );

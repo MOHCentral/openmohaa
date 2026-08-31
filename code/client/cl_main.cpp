@@ -106,6 +106,8 @@ cvar_t	*cl_activeAction;
 cvar_t	*cl_motdString;
 
 cvar_t	*cl_allowDownload;
+cvar_t	*cl_fastdl;
+cvar_t	*cl_fastdl_url;
 cvar_t	*cg_gametype;
 cvar_t	*cl_conXOffset;
 cvar_t	*cl_inGameVideo;
@@ -982,6 +984,7 @@ void CL_Disconnect() {
 	Cvar_Set( "cl_downloadName", "" );
 
 	CL_ShutdownPrDownloads();
+	CL_ShutdownFastDL();
 
 	if ( clc.demofile ) {
 		FS_FCloseFile( clc.demofile );
@@ -1991,6 +1994,11 @@ void CL_InitDownloads(void) {
     return;
   }
 
+  /* No pr_downloads URL (or curl unavailable): still allow MOH-DB map fallback. */
+  if (CL_TryFastDLMapFallback()) {
+    return;
+  }
+
   if ( !(cl_allowDownload->integer & DLF_ENABLE) )
   {
     // autodownload is disabled on the client
@@ -2691,6 +2699,7 @@ void CL_Frame ( int msec ) {
 	}
 
 	CL_PrDownloadsFrame();
+	CL_FastDLFrame();
 
 #ifdef USE_CURL
 	if(clc.downloadCURLM) {
@@ -3631,6 +3640,8 @@ void CL_Init( void ) {
 	cl_showMouseRate = Cvar_Get ("cl_showmouserate", "0", 0);
 
 	cl_allowDownload = Cvar_Get ("cl_allowDownload", "0", CVAR_ARCHIVE);
+	cl_fastdl = Cvar_Get ("cl_fastdl", "1", CVAR_ARCHIVE);
+	cl_fastdl_url = Cvar_Get ("cl_fastdl_url", "https://api.moh-db.com/api/v1/fastdl", CVAR_ARCHIVE);
 #ifdef USE_CURL
 	cl_cURLLib = Cvar_Get("cl_cURLLib", DEFAULT_CURL_LIB, CVAR_ARCHIVE);
 #endif

@@ -979,6 +979,34 @@ void FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe
 }
 
 /*
+===========
+FS_Rename_HomeData
+===========
+*/
+void FS_Rename_HomeData( const char *from, const char *to, qboolean safe ) {
+	char			*from_ospath, *to_ospath;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
+	}
+
+	S_ClearSoundBuffer();
+
+	from_ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, from );
+	to_ospath = FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, to );
+
+	if ( fs_debug->integer ) {
+		Com_Printf( "FS_Rename_HomeData: %s --> %s\n", from_ospath, to_ospath );
+	}
+
+	if ( safe ) {
+		FS_CheckFilenameIsMutable( to_ospath, __func__ );
+	}
+
+	rename(from_ospath, to_ospath);
+}
+
+/*
 ==============
 FS_FCloseFile
 
@@ -1883,6 +1911,116 @@ int	FS_FileIsInPAK(const char *filename, int *pChecksum ) {
 		}
 	}
 	return -1;
+}
+
+/*
+=================
+FS_FileExistsAnyPak
+
+Checks if a file exists in any loaded pk3 or search directory.
+=================
+*/
+qboolean FS_FileExistsAnyPak( const char *filename ) {
+	searchpath_t	*search;
+	pack_t			*pak;
+	fileInPack_t	*pakFile;
+	long			hash;
+
+	if ( !fs_searchpaths || !filename || !filename[0] ) {
+		return qfalse;
+	}
+
+	if ( filename[0] == '/' || filename[0] == '\\' ) {
+		filename++;
+	}
+
+	if ( strstr( filename, ".." ) || strstr( filename, "::" ) ) {
+		return qfalse;
+	}
+
+	for ( search = fs_searchpaths ; search ; search = search->next ) {
+		if ( search->pack ) {
+			pak = search->pack;
+			hash = FS_HashFileName( filename, pak->hashSize );
+			if ( pak->hashTable[hash] ) {
+				pakFile = pak->hashTable[hash];
+				do {
+					if ( !FS_FilenameCompare( pakFile->name, filename ) ) {
+						return qtrue;
+					}
+					pakFile = pakFile->next;
+				} while ( pakFile != NULL );
+			}
+		} else if ( search->dir ) {
+			char *netpath = FS_BuildOSPath( search->dir->path, search->dir->gamedir, filename );
+			FILE *fp = Sys_FOpen( netpath, "rb" );
+			if ( fp ) {
+				fclose( fp );
+				return qtrue;
+			}
+		}
+	}
+	return qfalse;
+}
+
+/*
+=================
+FS_MapExists
+
+Whether a map BSP exists in any loaded pk3 or directory.
+Handles AA / Spearhead / Breakthrough layout variants.
+=================
+*/
+qboolean FS_MapExists( const char *mapname ) {
+	searchpath_t *search;
+	const char *baseName;
+	int i;
+
+	if ( !mapname || !*mapname || !fs_searchpaths ) {
+		return qtrue;
+	}
+
+	baseName = COM_SkipPath( mapname );
+
+	if ( FS_FileExistsAnyPak( va( "maps/%s.bsp", mapname ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "%s.bsp", mapname ) ) ||
+		 FS_FileExistsAnyPak( va( "%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/dm/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/obj/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/lib/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/push/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/tow/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/round/%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/dm/sw_dm_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/obj/sw_obj_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/sw_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/sh_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/dm/bt_dm_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/obj/bt_obj_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/lib/bt_lib_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/push/bt_push_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/tow/bt_tow_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/round/bt_round_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/bt_%s.bsp", baseName ) ) ||
+		 FS_FileExistsAnyPak( va( "maps/tt_%s.bsp", baseName ) ) ) {
+		return qtrue;
+	}
+
+	for ( search = fs_searchpaths; search; search = search->next ) {
+		if ( search->pack && search->pack->hashTable ) {
+			for ( i = 0; i < search->pack->hashSize; i++ ) {
+				fileInPack_t *pakFile;
+				for ( pakFile = search->pack->hashTable[i]; pakFile; pakFile = pakFile->next ) {
+					if ( strstr( pakFile->name, ".bsp" ) && Q_stristr( pakFile->name, baseName ) ) {
+						return qtrue;
+					}
+				}
+			}
+		}
+	}
+
+	return qfalse;
 }
 
 /*
