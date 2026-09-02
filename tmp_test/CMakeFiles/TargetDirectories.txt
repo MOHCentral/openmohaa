@@ -1,0 +1,2 @@
+/app/tmp_test/CMakeFiles/edit_cache.dir
+/app/tmp_test/CMakeFiles/rebuild_cache.dir
