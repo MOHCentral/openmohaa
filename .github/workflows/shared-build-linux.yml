@@ -55,7 +55,8 @@ jobs:
       name: Install required packages
       with:
         packages: flex bison ninja-build cmake clang libpulse-dev portaudio19-dev libasound2-dev libjack-dev libpipewire-0.3-dev qtbase5-dev libdbus-1-dev
-        version: "${{ runner.os }}-${{ runner.arch }}-v1"
+        version: "${{ runner.os }}-${{ runner.arch }}-v2"
+        execute_install_scripts: true
 
     - name: Settings
       working-directory: ${{github.workspace}}
@@ -70,7 +71,8 @@ jobs:
       if: env.HOST_TRIPLE != matrix.architecture.triple
       with:
         packages: gcc-12-${{ matrix.architecture.package }} g++-12-${{ matrix.architecture.package }}
-        version: "${{ runner.os }}-${{ runner.arch }}-v1"
+        version: "${{ runner.os }}-${{ runner.arch }}-v2"
+        execute_install_scripts: true
 
     - name: Settings
       working-directory: ${{github.workspace}}

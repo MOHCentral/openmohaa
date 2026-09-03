@@ -24,7 +24,8 @@ jobs:
       name: Install required packages
       with:
         packages: flex bison ninja-build cmake clang libsdl2-dev libopenal-dev
-        version: "${{ runner.os }}-${{ runner.arch }}-unittest-v1"
+        version: "${{ runner.os }}-${{ runner.arch }}-unittest-v2"
+        execute_install_scripts: true
 
     - uses: actions/checkout@v4
       with:
