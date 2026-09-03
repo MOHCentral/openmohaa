@@ -47,11 +47,11 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - uses: awalsh128/cache-apt-pkgs-action@latest
-      name: Install required packages
-      with:
-        packages: libopenal-dev libpulse-dev portaudio19-dev libasound2-dev libjack-dev libpipewire-0.3-dev qtbase5-dev libdbus-1-dev
-        version: "0.1"
+    - name: Update APT package list
+      run: sudo apt-get update
+
+    - name: Install required packages
+      run: sudo apt-get update && sudo apt-get install -y libopenal-dev libpulse-dev portaudio19-dev libasound2-dev libjack-dev libpipewire-0.3-dev qtbase5-dev libdbus-1-dev
 
     # Setup SDL
     - name: Set up SDL
