@@ -43,7 +43,6 @@ typedef struct {
 } intro_stage_t;
 
 static qboolean             ui_hud;
-static class UIFont        *globalFont;
 static UIFloatingConsole   *fakk_console;
 static UIFloatingDMConsole *dm_console;
 static UIFloatingConsole   *developer_console;
@@ -480,36 +479,6 @@ static int LAN_GetServerCount(int source)
 LAN_GetLocalServerAddressString
 ====================
 */
-static void LAN_GetServerAddressString(int source, int n, char *buf, int buflen)
-{
-    switch (source) {
-    case AS_LOCAL:
-        if (n >= 0 && n < MAX_OTHER_SERVERS) {
-            Q_strncpyz(buf, NET_AdrToString(cls.localServers[n].adr), buflen);
-            return;
-        }
-        break;
-    case AS_MPLAYER:
-        if (n >= 0 && n < MAX_OTHER_SERVERS) {
-            Q_strncpyz(buf, NET_AdrToString(cls.mplayerServers[n].adr), buflen);
-            return;
-        }
-        break;
-    case AS_GLOBAL:
-        if (n >= 0 && n < MAX_GLOBAL_SERVERS) {
-            Q_strncpyz(buf, NET_AdrToString(cls.globalServers[n].adr), buflen);
-            return;
-        }
-        break;
-    case AS_FAVORITES:
-        if (n >= 0 && n < MAX_OTHER_SERVERS) {
-            Q_strncpyz(buf, NET_AdrToString(cls.favoriteServers[n].adr), buflen);
-            return;
-        }
-        break;
-    }
-    buf[0] = '\0';
-}
 
 /*
 ====================
@@ -849,16 +818,6 @@ int LAN_GetServerStatus(const char *serverAddress, char *serverStatus, int maxLe
 
 /*
 ====================
-CL_GetGlConfig
-====================
-*/
-static void CL_GetGlconfig(glconfig_t *config)
-{
-    *config = cls.glconfig;
-}
-
-/*
-====================
 CL_GetClipboardData
 ====================
 */
@@ -929,20 +888,6 @@ static int GetConfigString(int index, char *buf, int size)
     Q_strncpyz(buf, cl.gameState.stringData + offset, size);
 
     return qtrue;
-}
-
-/*
-====================
-FloatAsInt
-====================
-*/
-static int FloatAsInt(float f)
-{
-    int temp;
-
-    *(float *)&temp = f;
-
-    return temp;
 }
 
 qboolean UI_usesUniqueCDKey(void)

@@ -2752,7 +2752,6 @@ Field_FindFirstSeparator
 */
 static char* Field_FindFirstSeparator(char* s)
 {
-    // ⚡ Bolt: optimized O(N^2) loop to O(N) by replacing strlen-in-loop with strchr
     return strchr(s, ';');
 }
 

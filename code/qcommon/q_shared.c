@@ -1040,7 +1040,6 @@ int Com_HexStrToInt( const char *str )
 	if( str[ 0 ] == '0' && str[ 1 ] == 'x' )
 	{
 		int i, n = 0;
-		// ⚡ Bolt: cache strlen to avoid O(N^2) complexity in loop
 		size_t len = strlen( str );
 
 		for( i = 2; i < len; i++ )
@@ -2045,7 +2044,6 @@ Com_CharIsOneOfCharset
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
 	int i;
-	// ⚡ Bolt: cache strlen to avoid O(N^2) complexity in loop
 	size_t len = strlen( set );
 
 	for( i = 0; i < len; i++ )

@@ -41,10 +41,10 @@ class strdata
 {
 public:
     strdata()
-        : len(0)
-        , refcount(0)
-        , data(NULL)
+        : data(NULL)
+        , len(0)
         , alloced(0)
+        , refcount(0)
     {}
 
     ~strdata()

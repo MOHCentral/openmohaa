@@ -36,7 +36,7 @@ extern "C" {
     dtiki_t     *TIKI_RegisterTiki(const char *path);
     void         TIKI_FreeAll();
     void        *TIKI_GetSkeletor(dtiki_t *tiki, int entnum);
-    static void  TIKI_DeleteSkeletor(int entnum);
+    void  TIKI_DeleteSkeletor(int entnum);
     void         TIKI_Begin(void);
     void         TIKI_End(void);
     void         TIKI_FinishLoad(void);
