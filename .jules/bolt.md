@@ -1,0 +1,3 @@
+## $(date +%Y-%m-%d) - [Optimized O(N^2) strlen loops in cmdlib.c]
+**Learning:** Found multiple instances in `code/tools/asm/cmdlib.c` and `code/tools/ommap/common/cmdlib.c` where `strlen()` was being evaluated inside `for` loop conditions for iterating character strings (e.g. `for(i=0; i < strlen(s); i++)`). This causes an O(N^2) complexity string traversal, which can drastically increase execution time for longer strings/paths.
+**Action:** Always replace `i < strlen(s)` inside loops with `s[i] != '\0'` (or simply `s[i]`) to reduce the complexity to O(N). Avoid changing coding style (such as indentation) when making these changes, as the codebase heavily relies on standard tab indentation.
