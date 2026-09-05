@@ -1,0 +1,247 @@
+name: "Publish Release"
+
+# One tag-triggered workflow publishes both release channels. The tag is the only input:
+# `v0.83.0` publishes a stable release, `v0.83.0-rc.1` publishes a prerelease. Tags are
+# immutable — never move or reuse one; publishing a new build means cutting a new tag.
+#
+# Consumers (the Reveille launcher among them) read the GitHub Releases API and pick the
+# highest semver tag, so two things must hold for every published release:
+#   * exactly one asset per platform suffix, or asset selection is ambiguous;
+#   * the release is not visible until every asset is attached, or a consumer can observe a
+#     release it cannot install from.
+# Both are enforced below: the release is built as a draft and only published once its asset
+# inventory has been verified.
+
+on:
+  push:
+    tags:
+      # Covers `v0.83.0` and `v0.83.0-rc.1` alike; the prerelease flag is derived from the tag
+      # itself in the `identify` job rather than from a repository variable, so it cannot drift
+      # out of step with what was actually tagged.
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+# Two tags pushed close together must not interleave their uploads into each other's release.
+concurrency:
+  group: publish-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  identify:
+    name: "Identify the release from its tag"
+    runs-on: ubuntu-24.04
+    outputs:
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - name: Read the tag
+        id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Semver: a version carrying a prerelease identifier has a `-` after the version core.
+          if [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${TAG} is a stable release."
+          elif [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${TAG} is a prerelease."
+          else
+            echo "::error::${TAG} is not a semver tag (expected vMAJOR.MINOR.PATCH[-rc.N])."
+            exit 1
+          fi
+
+  build-all:
+    needs: [identify]
+    uses: ./.github/workflows/shared-build.yml
+    with:
+      environment: "release"
+
+  # Created once, by a single job, so the parallel upload jobs below have something to attach
+  # to. It stays a draft — invisible to the Releases API — until `publish` runs.
+  create-draft:
+    name: "Create the draft release"
+    runs-on: ubuntu-24.04
+    environment: "release"
+    needs: [identify, build-all]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.identify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--draft --generate-notes --title "${TAG}")
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "${TAG}" "${flags[@]}"
+
+  upload-archives:
+    name: "Upload ${{ matrix.target_os }}"
+    strategy:
+      # One platform failing must not leave the rest half-uploaded under a draft that a later
+      # run would collide with; fail the whole set instead.
+      fail-fast: true
+      matrix:
+        target_os: [
+          "linux-amd64",
+          "linux-i686",
+          "linux-arm64",
+          "linux-armhf",
+          "linux-powerpc",
+          "linux-ppc64",
+          "linux-ppc64el",
+          "windows-x64",
+          "windows-x64-pdb",
+          "windows-x86",
+          "windows-x86-pdb",
+          "windows-arm64",
+          "windows-arm64-pdb",
+          "macos-multiarch-arm64-x86_64",
+        ]
+
+    runs-on: ubuntu-24.04
+    environment: "release"
+    needs: [create-draft]
+
+    env:
+      # `openmohaa-v0.83.0-rc.1-windows-x64.zip`. The platform suffix is the last thing in the
+      # name, which is what asset selection matches on. `-windows-x64.zip` and
+      # `-windows-x64-pdb.zip` are therefore distinct: the symbol archive can ship alongside the
+      # build without making the choice ambiguous.
+      RELEASE_NAME: ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target_os }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: "out-${{ matrix.target_os }}"
+          path: ${{ github.workspace }}/${{ matrix.target_os }}
+
+      - name: Zip
+        working-directory: "${{ github.workspace }}/${{ matrix.target_os }}"
+        run: zip -9 -r "../${{ env.RELEASE_NAME }}.zip" ./
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        # Uploading through the Releases API is what populates each asset's `digest` field.
+        # Consumers refuse to install an asset without one, so assets must never be attached by
+        # any other route.
+        run: gh release upload "${TAG}" "${{ github.workspace }}/${{ env.RELEASE_NAME }}.zip" --clobber
+
+  upload-installers:
+    name: "Upload ${{ matrix.target_os }} installer"
+    strategy:
+      fail-fast: true
+      matrix:
+        target_os: [
+          "windows-x64",
+          "windows-x86",
+          "windows-arm64",
+        ]
+
+    runs-on: ubuntu-24.04
+    environment: "release"
+    needs: [create-draft]
+
+    env:
+      RELEASE_NAME: ${{ github.event.repository.name }}-${{ github.ref_name }}-${{ matrix.target_os }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: "out-${{ matrix.target_os }}-installer"
+          path: ${{ github.workspace }}/${{ matrix.target_os }}
+
+      - name: Setup
+        working-directory: "${{ github.workspace }}/${{ matrix.target_os }}"
+        run: cp Setup.msi "../${{ env.RELEASE_NAME }}.msi"
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "${TAG}" "${{ github.workspace }}/${{ env.RELEASE_NAME }}.msi" --clobber
+
+  publish:
+    name: "Verify the assets and publish"
+    runs-on: ubuntu-24.04
+    environment: "release"
+    needs: [identify, upload-archives, upload-installers]
+
+    steps:
+      - name: Verify the asset inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        # Checked while the release is still a draft, so a bad release is never visible.
+        #
+        # A missing archive leaves a platform's players with nothing to install. A duplicate
+        # makes the choice between two archives ambiguous, and a consumer that cannot tell which
+        # is meant will refuse both rather than guess. An asset without a digest cannot be
+        # checked after download.
+        #
+        # A draft release is not addressable by tag, so the id is looked up from the listing,
+        # which does include drafts.
+        run: |
+          set -euo pipefail
+          release_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
+            --jq ".[] | select(.tag_name == \"${TAG}\") | .id")
+          # --jq runs once per page. Nonmatching pages must emit nothing, not null.
+          # Require exactly one numeric ID before constructing the assets URL.
+          if [[ ! "${release_id}" =~ ^[0-9]+$ ]]; then
+            echo "::error::expected exactly one release ID for ${TAG}"
+            exit 1
+          fi
+          gh api "repos/${GH_REPO}/releases/${release_id}/assets" --paginate \
+            --jq '.[] | [.name, (.digest // "")] | @tsv' > assets.tsv
+
+          failed=0
+          for suffix in \
+            -linux-amd64.zip \
+            -linux-i686.zip \
+            -linux-arm64.zip \
+            -linux-armhf.zip \
+            -windows-x64.zip \
+            -windows-x86.zip \
+            -windows-arm64.zip \
+            -macos-multiarch-arm64-x86_64.zip
+          do
+            count=$(cut -f1 assets.tsv | grep -c -- "${suffix}\$" || true)
+            if [[ "${count}" -ne 1 ]]; then
+              echo "::error::expected exactly one asset ending in ${suffix}, found ${count}"
+              failed=1
+            fi
+          done
+
+          while IFS=$'\t' read -r name digest; do
+            if [[ -z "${digest}" ]]; then
+              echo "::error::asset ${name} was published without a digest"
+              failed=1
+            fi
+          done < assets.tsv
+
+          if [[ "${failed}" -ne 0 ]]; then
+            echo "::error::the draft is left in place for inspection; delete it before re-tagging"
+            exit 1
+          fi
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        # Until this step the release is a draft and no consumer can see it. After it, treat the
+        # release as immutable: to change anything, cut a new tag.
+        run: gh release edit "${TAG}" --draft=false
