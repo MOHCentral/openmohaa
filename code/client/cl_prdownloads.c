@@ -41,6 +41,14 @@ GNU General Public License for more details.
  * Local names are always main/<safe-basename>.pk3. File URLs must be http(s).
  */
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#endif
+
 #include "client.h"
 #include "../sys/sys_curl.h"
 
@@ -111,6 +119,67 @@ static qboolean CL_PR_IsHttpUrl(const char *url)
 
     return (Q_stricmpn(url, "http://", 7) == 0 ||
             Q_stricmpn(url, "https://", 8) == 0);
+}
+
+static qboolean CL_PR_IsPublicIPv4(const byte *ip)
+{
+    if (ip[0] == 0 || ip[0] == 10 || ip[0] == 127 || ip[0] >= 224 ||
+        (ip[0] == 100 && (ip[1] & 0xc0) == 64) ||
+        (ip[0] == 169 && ip[1] == 254) ||
+        (ip[0] == 172 && (ip[1] & 0xf0) == 16) ||
+        (ip[0] == 192 && ip[1] == 168)) {
+        return qfalse;
+    }
+
+    return qtrue;
+}
+
+/* cURL calls this for every connection, including connections created after
+ * redirects. Validating the resolved address here also closes DNS-rebinding
+ * and hostname-spelling bypasses that a URL-only check cannot catch. */
+static curl_socket_t CL_PR_OpenPublicSocket(void *clientp, curlsocktype purpose,
+                                            struct curl_sockaddr *address)
+{
+    static const byte ipv6Unspecified[16] = {0};
+    static const byte ipv6Loopback[16] = {0, 0, 0, 0, 0, 0, 0, 0,
+                                          0, 0, 0, 0, 0, 0, 0, 1};
+    static const byte ipv4MappedPrefix[12] = {0, 0, 0, 0, 0, 0,
+                                              0, 0, 0, 0, 0xff, 0xff};
+    const byte *ip;
+
+    (void)clientp;
+    (void)purpose;
+
+    if (address->family == AF_INET) {
+        const struct sockaddr_in *sin = (const struct sockaddr_in *)&address->addr;
+        ip = (const byte *)&sin->sin_addr;
+        if (!CL_PR_IsPublicIPv4(ip)) {
+            Com_Printf("pr_downloads: refusing private/local IPv4 destination\n");
+            return CURL_SOCKET_BAD;
+        }
+    } else if (address->family == AF_INET6) {
+        const struct sockaddr_in6 *sin6 = (const struct sockaddr_in6 *)&address->addr;
+        ip = (const byte *)&sin6->sin6_addr;
+
+        if (!memcmp(ip, ipv6Unspecified, sizeof(ipv6Unspecified)) ||
+            !memcmp(ip, ipv6Loopback, sizeof(ipv6Loopback)) ||
+            (ip[0] & 0xfe) == 0xfc ||
+            (ip[0] == 0xfe && (ip[1] & 0xc0) == 0x80) ||
+            ip[0] == 0xff) {
+            Com_Printf("pr_downloads: refusing private/local IPv6 destination\n");
+            return CURL_SOCKET_BAD;
+        }
+
+        if (!memcmp(ip, ipv4MappedPrefix, sizeof(ipv4MappedPrefix)) &&
+            !CL_PR_IsPublicIPv4(ip + 12)) {
+            Com_Printf("pr_downloads: refusing private/local IPv4-mapped destination\n");
+            return CURL_SOCKET_BAD;
+        }
+    } else {
+        return CURL_SOCKET_BAD;
+    }
+
+    return socket(address->family, address->socktype, address->protocol);
 }
 
 static qboolean CL_PR_IsValidMd5(const char *md5)
@@ -222,6 +291,11 @@ static void CL_PR_SetHttpOnly(CURL *curl)
 static void CL_PR_ApplyEasyOpts(CURL *curl, long maxBytes)
 {
     CL_PR_SetHttpOnly(curl);
+    /* Do not let an environment proxy turn a public-looking URL into a
+     * proxy-side request to an internal destination. */
+    curlImport.qcurl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
+    curlImport.qcurl_easy_setopt(curl, CURLOPT_OPENSOCKETFUNCTION,
+                                 CL_PR_OpenPublicSocket);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_USERAGENT, PR_USERAGENT);
     curlImport.qcurl_easy_setopt(curl, CURLOPT_MAXFILESIZE, maxBytes);
 }
@@ -883,9 +957,11 @@ void CL_PrDownloadsFrame(void)
     } while (res == CURLM_CALL_MULTI_PERFORM);
 
     if (res != CURLM_OK) {
-        Com_Printf("pr_downloads: multi_perform failed\n");
+        const char *reason = curlImport.qcurl_multi_strerror(res);
+        Com_Printf("pr_downloads: multi_perform failed: %s\n", reason);
         CL_PR_CleanupActiveDownload();
-        CL_DownloadsComplete();
+        CL_PR_DeleteTemp();
+        CL_PR_ScheduleRetry(reason);
         return;
     }
 
@@ -940,7 +1016,12 @@ void CL_PrDownloadsFrame(void)
             return;
         }
 
-        FS_BaseDir_Rename_HomeData(s_prTempName, s_prCurrentLocalName, qfalse);
+        if (!FS_BaseDir_Replace_HomeData(s_prTempName, s_prCurrentLocalName)) {
+            CL_PR_CleanupActiveDownload();
+            CL_PR_DeleteTemp();
+            CL_PR_ScheduleRetry("failed to install downloaded pak");
+            return;
+        }
         s_prHadDownloads = qtrue;
         s_prRetryCount   = 0;
         Com_Printf("pr_downloads: %s downloaded successfully\n", s_prCurrentLocalName);
@@ -994,6 +1075,13 @@ void CL_PrDownloadsFrame(void)
     Cvar_Set("cl_downloadTotal", "0");
     CL_PR_ResetSpeed();
     CL_PR_SetPendingStatus(qfalse);
+    if (s_prHadDownloads) {
+        /* This restarts the search paths and requests a new gamestate. Only
+         * that gamestate can reliably decide whether an installed pak now
+         * supplies the requested map. */
+        CL_DownloadsComplete();
+        return;
+    }
     if (CL_TryFastDLMapFallback()) {
         return;
     }

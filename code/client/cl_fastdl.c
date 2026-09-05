@@ -38,7 +38,7 @@ GNU General Public License for more details.
 
 #ifdef HAS_LIBCURL
 
-static qboolean     s_fdAttempted;
+static char         s_fdAttemptedMap[MAX_QPATH];
 static qboolean     s_fdActive;
 static qboolean     s_fdRetryPending;
 static qboolean     s_fdWriteFailed;
@@ -315,13 +315,16 @@ static void CL_FD_BuildUrl(const char *remoteName, char *out, int outSize)
     }
 }
 
-static qboolean CL_FD_ExtractNestedPk3s(const char *ospath)
+static qboolean CL_FD_ExtractNestedPk3s(const char *ospath, qboolean *foundNested)
 {
     unzFile         uf;
     unz_global_info gi;
     int             err;
     int             i;
     int             extracted = 0;
+    int             nestedCount = 0;
+
+    *foundNested = qfalse;
 
     uf = unzOpen(ospath);
     if (!uf) {
@@ -334,7 +337,11 @@ static qboolean CL_FD_ExtractNestedPk3s(const char *ospath)
         return qfalse;
     }
 
-    unzGoToFirstFile(uf);
+    if (unzGoToFirstFile(uf) != UNZ_OK) {
+        unzClose(uf);
+        return qfalse;
+    }
+
     for (i = 0; i < (int)gi.number_entry; i++) {
         char          filename_inzip[MAX_OSPATH];
         unz_file_info file_info;
@@ -342,51 +349,74 @@ static qboolean CL_FD_ExtractNestedPk3s(const char *ospath)
 
         err = unzGetCurrentFileInfo(uf, &file_info, filename_inzip,
                                     sizeof(filename_inzip), NULL, 0, NULL, 0);
-        if (err == UNZ_OK) {
-            nlen = strlen(filename_inzip);
-            if (nlen > 4 && !Q_stricmp(filename_inzip + nlen - 4, ".pk3")) {
-                const char *cleanName = COM_SkipPath(filename_inzip);
+        if (err != UNZ_OK) {
+            unzClose(uf);
+            return qfalse;
+        }
 
-                if (CL_FD_IsSafePakBasename(cleanName) &&
-                    unzOpenCurrentFile(uf) == UNZ_OK) {
-                    fileHandle_t outF = FS_FOpenFileWrite_HomeData(cleanName);
+        nlen = strlen(filename_inzip);
+        if (nlen > 4 && !Q_stricmp(filename_inzip + nlen - 4, ".pk3")) {
+            const char *cleanName = COM_SkipPath(filename_inzip);
 
-                    if (outF) {
-                        char   chunk[65536];
-                        int    readBytes;
-                        size_t totalExtracted = 0;
-                        qboolean oversize = qfalse;
+            *foundNested = qtrue;
+            nestedCount++;
 
-                        while ((readBytes = unzReadCurrentFile(uf, chunk, sizeof(chunk))) > 0) {
-                            totalExtracted += (size_t)readBytes;
-                            if (totalExtracted > (size_t)FASTDL_MAX_DOWNLOAD_BYTES) {
-                                Com_Printf("Fast-DL: extracted %s exceeds 400 MiB cap, aborting\n",
-                                           cleanName);
-                                oversize = qtrue;
-                                break;
-                            }
-                            FS_Write(chunk, (size_t)readBytes, outF);
+            if (CL_FD_IsSafePakBasename(cleanName) &&
+                unzOpenCurrentFile(uf) == UNZ_OK) {
+                char stagedName[MAX_OSPATH];
+                fileHandle_t outF;
+
+                Com_sprintf(stagedName, sizeof(stagedName), "%s.fastdl.tmp", cleanName);
+                outF = FS_FOpenFileWrite_HomeData(stagedName);
+
+                if (outF) {
+                    char   chunk[65536];
+                    int    readBytes;
+                    size_t totalExtracted = 0;
+                    qboolean failed = qfalse;
+
+                    while ((readBytes = unzReadCurrentFile(uf, chunk, sizeof(chunk))) > 0) {
+                        totalExtracted += (size_t)readBytes;
+                        if (totalExtracted > (size_t)FASTDL_MAX_DOWNLOAD_BYTES) {
+                            Com_Printf("Fast-DL: extracted %s exceeds 400 MiB cap, aborting\n",
+                                       cleanName);
+                            failed = qtrue;
+                            break;
                         }
-                        FS_FCloseFile(outF);
-                        if (oversize) {
-                            FS_Remove_HomeData(cleanName);
-                        } else {
-                            extracted++;
-                            Com_Printf("Fast-DL: extracted '%s' (%u KB)\n",
-                                       cleanName,
-                                       (unsigned int)(totalExtracted / 1024));
+                        if (FS_Write(chunk, (size_t)readBytes, outF) != (size_t)readBytes) {
+                            failed = qtrue;
+                            break;
                         }
                     }
+                    FS_FCloseFile(outF);
+
+                    if (readBytes < 0 || unzCloseCurrentFile(uf) != UNZ_OK) {
+                        failed = qtrue;
+                    }
+
+                    if (!failed && FS_Replace_HomeData(stagedName, cleanName)) {
+                        extracted++;
+                        Com_Printf("Fast-DL: extracted '%s' (%u KB)\n",
+                                   cleanName,
+                                   (unsigned int)(totalExtracted / 1024));
+                    } else {
+                        FS_Remove_HomeData(stagedName);
+                    }
+                } else {
                     unzCloseCurrentFile(uf);
                 }
             }
         }
-        unzGoToNextFile(uf);
+
+        if (i + 1 < (int)gi.number_entry && unzGoToNextFile(uf) != UNZ_OK) {
+            unzClose(uf);
+            return qfalse;
+        }
     }
 
     unzClose(uf);
 
-    if (extracted > 0) {
+    if (extracted > 0 && extracted == nestedCount) {
         Com_Printf("Fast-DL: archive contained %d PK3 package(s)\n", extracted);
         return qtrue;
     }
@@ -398,18 +428,22 @@ static qboolean CL_FD_InstallDownload(void)
     const char *homedatapath;
     char       *ospath;
     char        ospathCopy[MAX_OSPATH];
+    qboolean    foundNested;
 
     homedatapath = Cvar_VariableString("fs_homedatapath");
     ospath = FS_BuildOSPath(homedatapath, FS_Gamedir(), s_fdTempName);
     Q_strncpyz(ospathCopy, ospath, sizeof(ospathCopy));
 
-    if (CL_FD_ExtractNestedPk3s(ospathCopy)) {
+    if (CL_FD_ExtractNestedPk3s(ospathCopy, &foundNested)) {
         FS_Remove_HomeData(s_fdTempName);
         return qtrue;
     }
 
-    FS_Rename_HomeData(s_fdTempName, s_fdLocalName, qfalse);
-    return qtrue;
+    if (foundNested) {
+        return qfalse;
+    }
+
+    return FS_Replace_HomeData(s_fdTempName, s_fdLocalName);
 }
 
 static void CL_FD_ScheduleRetry(const char *reason)
@@ -525,10 +559,6 @@ qboolean CL_TryFastDLMapFallback(void)
         return qtrue;
     }
 
-    if (s_fdAttempted) {
-        return qfalse;
-    }
-
     if (Cvar_VariableIntegerValue("cl_fastdl") <= 0) {
         return qfalse;
     }
@@ -544,6 +574,10 @@ qboolean CL_TryFastDLMapFallback(void)
         return qfalse;
     }
 
+    if (!Q_stricmp(s_fdAttemptedMap, mapname)) {
+        return qfalse;
+    }
+
     baseName = COM_SkipPath(mapname);
     Com_sprintf(pk3Name, sizeof(pk3Name), "%s.pk3", baseName);
 
@@ -556,7 +590,7 @@ qboolean CL_TryFastDLMapFallback(void)
         return qfalse;
     }
 
-    s_fdAttempted = qtrue;
+    Q_strncpyz(s_fdAttemptedMap, mapname, sizeof(s_fdAttemptedMap));
     Q_strncpyz(s_fdLocalName, pk3Name, sizeof(s_fdLocalName));
     CL_FD_BuildUrl(pk3Name, s_fdUrl, sizeof(s_fdUrl));
 
@@ -614,11 +648,11 @@ void CL_FastDLFrame(void)
     } while (res == CURLM_CALL_MULTI_PERFORM);
 
     if (res != CURLM_OK) {
-        Com_Printf("Fast-DL: multi_perform failed\n");
+        const char *reason = curlImport.qcurl_multi_strerror(res);
+        Com_Printf("Fast-DL: multi_perform failed: %s\n", reason);
         CL_FD_CleanupActive();
         CL_FD_DeleteTemp();
-        CL_FD_ClearUi();
-        CL_DownloadsComplete();
+        CL_FD_ScheduleRetry(reason);
         return;
     }
 
@@ -649,7 +683,12 @@ void CL_FastDLFrame(void)
     }
 
     if (doneMsg->data.result == CURLE_OK) {
-        CL_FD_InstallDownload();
+        if (!CL_FD_InstallDownload()) {
+            CL_FD_CleanupActive();
+            CL_FD_DeleteTemp();
+            CL_FD_ScheduleRetry("failed to install downloaded pak");
+            return;
+        }
         clc.downloadRestart = qtrue;
         s_fdRetryCount = 0;
         Com_Printf("Fast-DL: %s downloaded successfully\n", s_fdLocalName);
@@ -684,7 +723,7 @@ void CL_ShutdownFastDL(void)
     s_fdTempName[0]   = '\0';
     s_fdLocalName[0]  = '\0';
     s_fdUrl[0]        = '\0';
-    s_fdAttempted     = qfalse;
+    s_fdAttemptedMap[0] = '\0';
     s_fdRetryPending  = qfalse;
     s_fdRetryAt       = 0;
     s_fdRetryCount    = 0;

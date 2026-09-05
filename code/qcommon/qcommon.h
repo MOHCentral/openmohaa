@@ -791,6 +791,8 @@ fileHandle_t FS_BaseDir_FOpenFileWrite_HomeState( const char *filename );
 long		FS_BaseDir_FOpenFileRead( const char *filename, fileHandle_t *fp );
 void	FS_BaseDir_Rename_HomeData( const char *from, const char *to, qboolean safe );
 void	FS_Rename_HomeData( const char *from, const char *to, qboolean safe );
+qboolean FS_BaseDir_Replace_HomeData( const char *from, const char *to );
+qboolean FS_Replace_HomeData( const char *from, const char *to );
 void	FS_CanonicalFilename( char *filename );
 
 long	FS_FOpenFileRead(const char* filename, fileHandle_t* file, qboolean uniqueFILE, qboolean quiet);

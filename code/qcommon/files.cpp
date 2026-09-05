@@ -1007,6 +1007,67 @@ void FS_Rename_HomeData( const char *from, const char *to, qboolean safe ) {
 }
 
 /*
+================
+FS_ReplaceOSPath
+
+Installs a fully-written temporary file at its final name. Unlike the
+general-purpose safe file helpers, this is intentionally allowed to replace
+a pk3: callers must only pass engine-generated, validated relative names.
+================
+*/
+static qboolean FS_ReplaceOSPath( const char *from_ospath, const char *to_ospath ) {
+	if ( !COM_CompareExtension( to_ospath, ".pk3" ) ||
+		 COM_CompareExtension( from_ospath, ".pk3" ) ) {
+		Com_Printf( "FS_ReplaceOSPath: refusing invalid package staging paths\n" );
+		return qfalse;
+	}
+
+	/* C rename() replaces an existing file on POSIX, but not on Windows. */
+#ifdef _WIN32
+	if ( FS_FileInPathExists( to_ospath ) && remove( to_ospath ) != 0 ) {
+		Com_Printf( "FS_ReplaceOSPath: could not remove '%s'\n", to_ospath );
+		return qfalse;
+	}
+#endif
+
+	if ( rename( from_ospath, to_ospath ) != 0 ) {
+		Com_Printf( "FS_ReplaceOSPath: could not rename '%s' to '%s'\n",
+			from_ospath, to_ospath );
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+qboolean FS_BaseDir_Replace_HomeData( const char *from, const char *to ) {
+	char from_ospath[MAX_OSPATH];
+	char to_ospath[MAX_OSPATH];
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
+	}
+
+	S_ClearSoundBuffer();
+	Q_strncpyz( from_ospath, FS_BaseDir_BuildOSPath( fs_homedatapath->string, from ), sizeof( from_ospath ) );
+	Q_strncpyz( to_ospath, FS_BaseDir_BuildOSPath( fs_homedatapath->string, to ), sizeof( to_ospath ) );
+	return FS_ReplaceOSPath( from_ospath, to_ospath );
+}
+
+qboolean FS_Replace_HomeData( const char *from, const char *to ) {
+	char from_ospath[MAX_OSPATH];
+	char to_ospath[MAX_OSPATH];
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization\n" );
+	}
+
+	S_ClearSoundBuffer();
+	Q_strncpyz( from_ospath, FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, from ), sizeof( from_ospath ) );
+	Q_strncpyz( to_ospath, FS_BuildOSPath( fs_homedatapath->string, fs_gamedir, to ), sizeof( to_ospath ) );
+	return FS_ReplaceOSPath( from_ospath, to_ospath );
+}
+
+/*
 ==============
 FS_FCloseFile
 
@@ -1974,6 +2035,7 @@ Handles AA / Spearhead / Breakthrough layout variants.
 qboolean FS_MapExists( const char *mapname ) {
 	searchpath_t *search;
 	const char *baseName;
+	char requestedBase[MAX_QPATH];
 	int i;
 
 	if ( !mapname || !*mapname || !fs_searchpaths ) {
@@ -1981,6 +2043,7 @@ qboolean FS_MapExists( const char *mapname ) {
 	}
 
 	baseName = COM_SkipPath( mapname );
+	COM_StripExtension( baseName, requestedBase, sizeof( requestedBase ) );
 
 	if ( FS_FileExistsAnyPak( va( "maps/%s.bsp", mapname ) ) ||
 		 FS_FileExistsAnyPak( va( "maps/%s.bsp", baseName ) ) ||
@@ -2012,8 +2075,14 @@ qboolean FS_MapExists( const char *mapname ) {
 			for ( i = 0; i < search->pack->hashSize; i++ ) {
 				fileInPack_t *pakFile;
 				for ( pakFile = search->pack->hashTable[i]; pakFile; pakFile = pakFile->next ) {
-					if ( strstr( pakFile->name, ".bsp" ) && Q_stristr( pakFile->name, baseName ) ) {
-						return qtrue;
+					const char *pakBase = COM_SkipPath( pakFile->name );
+					char pakBaseNoExt[MAX_QPATH];
+
+					if ( COM_CompareExtension( pakBase, ".bsp" ) ) {
+						COM_StripExtension( pakBase, pakBaseNoExt, sizeof( pakBaseNoExt ) );
+						if ( !Q_stricmp( pakBaseNoExt, requestedBase ) ) {
+							return qtrue;
+						}
 					}
 				}
 			}
