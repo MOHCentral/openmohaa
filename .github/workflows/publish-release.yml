@@ -197,9 +197,11 @@ jobs:
         run: |
           set -euo pipefail
           release_id=$(gh api "repos/${GH_REPO}/releases" --paginate \
-            --jq "[.[] | select(.tag_name == \"${TAG}\")] | first | .id")
-          if [[ -z "${release_id}" || "${release_id}" == "null" ]]; then
-            echo "::error::no release found for ${TAG}"
+            --jq ".[] | select(.tag_name == \"${TAG}\") | .id")
+          # --jq runs once per page. Nonmatching pages must emit nothing, not null.
+          # Require exactly one numeric ID before constructing the assets URL.
+          if [[ ! "${release_id}" =~ ^[0-9]+$ ]]; then
+            echo "::error::expected exactly one release ID for ${TAG}"
             exit 1
           fi
           gh api "repos/${GH_REPO}/releases/${release_id}/assets" --paginate \
