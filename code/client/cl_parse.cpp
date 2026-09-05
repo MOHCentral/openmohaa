@@ -515,15 +515,25 @@ CL_ParseServerInfo
 static void CL_ParseServerInfo(void)
 {
 	const char *serverInfo;
+	const char *systemInfo;
+	const char *prDl;
 
 	serverInfo = cl.gameState.stringData
 		+ cl.gameState.stringOffsets[ CS_SERVERINFO ];
+	systemInfo = cl.gameState.stringData
+		+ cl.gameState.stringOffsets[ CS_SYSTEMINFO ];
 
 	clc.sv_allowDownload = atoi(Info_ValueForKey(serverInfo,
 		"sv_allowDownload"));
 	Q_strncpyz(clc.sv_dlURL,
 		Info_ValueForKey(serverInfo, "sv_dlURL"),
 		sizeof(clc.sv_dlURL));
+
+	prDl = Info_ValueForKey(serverInfo, "pr_downloads");
+	if (!prDl[0]) {
+		prDl = Info_ValueForKey(systemInfo, "pr_downloads");
+	}
+	Q_strncpyz(clc.sv_prDownloadsURL, prDl, sizeof(clc.sv_prDownloadsURL));
 }
 
 /*
@@ -602,6 +612,7 @@ void CL_ParseGamestate( msg_t *msg ) {
 
 	// parse serverId and other cvars
 	CL_SystemInfoChanged();
+	CL_ParseServerInfo();
 
 	// stop recording now so the demo won't have an unnecessary level load at the end.
 	if(cl_autoRecordDemo->integer && clc.demorecording)
@@ -1049,11 +1060,27 @@ void CL_ParseCenterprint( msg_t *msg ) {
 
 /*
 =====================
+CL_PrDownloadsHoldingParse
+
+While required pr_downloads are still in progress the cgame VM is not
+loaded. The server may already send snapshots, CGMs, or other cmds.
+=====================
+*/
+static qboolean CL_PrDownloadsHoldingParse( void ) {
+	if ( CL_PrDownloadsPending() || CL_FastDLPending() ) {
+		return qtrue;
+	}
+	return ( clc.sv_prDownloadsURL[0] && Cvar_VariableValue( "cl_prdownloads_pending" ) > 0.0f );
+}
+
+/*
+=====================
 CL_ParseServerMessage
 =====================
 */
 void CL_ParseServerMessage( msg_t *msg ) {
 	int			cmd;
+	qboolean	skipRest = qfalse;
 //Com_Printf( "ParseServerMessage: %i\n", msg->cursize );
 	if ( cl_shownet->integer == 1 ) {
 		Com_Printf ("%zu ",msg->cursize);
@@ -1097,6 +1124,13 @@ void CL_ParseServerMessage( msg_t *msg ) {
 	// other commands
 		switch ( cmd ) {
 		default:
+			/* Unknown cmd, or a payload byte after an unconsumed CGM.
+			 * During pr_downloads do not drop: discard the rest of this packet. */
+			if ( CL_PrDownloadsHoldingParse() ) {
+				Com_DPrintf( "CL_ParseServerMessage: ignoring unknown cmd %i during pr_downloads\n", cmd );
+				skipRest = qtrue;
+				break;
+			}
 			Com_Error (ERR_DROP,"CL_ParseServerMessage: Illegible server message\n");
 			break;			
 		case svc_nop:
@@ -1105,9 +1139,18 @@ void CL_ParseServerMessage( msg_t *msg ) {
 			CL_ParseCommandString( msg );
 			break;
 		case svc_gamestate:
+			/* A second gamestate while curl is still running would restart
+			 * the download queue and abort the current file. */
+			if ( CL_PrDownloadsHoldingParse() ) {
+				Com_DPrintf( "CL_ParseServerMessage: ignoring gamestate during pr_downloads\n" );
+				skipRest = qtrue;
+				break;
+			}
 			CL_ParseGamestate( msg );
 			break;
 		case svc_snapshot:
+			/* Snapshots have a complete parser and must be consumed so
+			 * later cmds in the same packet stay aligned. */
 			CL_ParseSnapshot( msg );
 			break;
 		case svc_download:
@@ -1121,6 +1164,15 @@ void CL_ParseServerMessage( msg_t *msg ) {
 			break;
 		case svc_cgameMessage:
 			if( !cge ) {
+				if ( CL_PrDownloadsHoldingParse() || clc.sv_prDownloadsURL[0] ) {
+					/* CGM length is unknown without the cgame parser.
+					 * Breaking the switch alone leaves payload bytes as the
+					 * next cmd and triggers "Illegible server message". */
+					Com_DPrintf( "CL_ParseServerMessage: ignoring cg message while cgame is not loaded (pr_downloads)\n" );
+					skipRest = qtrue;
+					break;
+				}
+
 				Com_Error(ERR_DROP,"CL_ParseServerMessage: tried to parse cg message without cgame loaded\n");
 			}
 			CL_ParseCGMessage( msg );
@@ -1134,6 +1186,10 @@ void CL_ParseServerMessage( msg_t *msg ) {
 #ifdef USE_VOIP
 			CL_ParseVoip( msg, !clc.voipEnabled );
 #endif
+			break;
+		}
+
+		if ( skipRest ) {
 			break;
 		}
 	}
