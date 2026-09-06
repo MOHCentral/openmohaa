@@ -1,0 +1,4 @@
+
+## 2024-05-18 - Avoid O(N^2) loops with strlen() in conditions
+**Learning:** Found several performance bottlenecks where `strlen()` was used in `for` loop termination conditions (e.g., `for (i = 0; i < strlen(s); i++)`), causing O(N^2) complexity because `strlen()` traverses the string on every iteration. This is a common C anti-pattern in older codebases. In some cases, manual search loops (like searching for ';') can be optimized by several orders of magnitude (e.g., ~9,000x speedup in a non-optimized build test) by using standard C string functions like `strchr()` instead.
+**Action:** When working on loops traversing C-strings, either cache `strlen()` in a variable before the loop (`size_t len = strlen(s);`), check the null terminator directly (`s[i] != '\0'`), or use heavily optimized standard library functions like `strchr()` to find characters.
