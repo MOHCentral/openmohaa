@@ -123,7 +123,7 @@ static void CON_Hide( void )
 			}
 		}
 		// Delete prompt
-		for (i = strlen(TTY_CONSOLE_PROMPT); i > 0; i--) {
+			for (i = strlen(TTY_CONSOLE_PROMPT); i > 0; i--) {
 			CON_Back();
 		}
 		ttycon_hide++;
