@@ -108,6 +108,29 @@ void BotManager::BroadcastEvent(Entity *originator, Vector origin, int iType, fl
     }
 }
 
+
+void BotManager::ProcessVoiceCommand(Entity *speaker, const char *text, bool teamOnly)
+{
+    if (!speaker || !text) return;
+
+    str s = text;
+    s.tolower();
+
+    const char* cmdStr = NULL;
+    if (strstr(s.c_str(), "follow") || strstr(s.c_str(), "come") || strstr(s.c_str(), "on me")) cmdStr = "follow";
+    else if (strstr(s.c_str(), "stay") || strstr(s.c_str(), "hold") || strstr(s.c_str(), "wait")) cmdStr = "hold";
+    else if (strstr(s.c_str(), "attack") || strstr(s.c_str(), "go")) cmdStr = "attack";
+    else if (strstr(s.c_str(), "report") || strstr(s.c_str(), "status")) cmdStr = "report";
+
+    if (!cmdStr) return;
+
+    const Container<BotController *>& controllers = getControllerManager().getControllers();
+    for (int i = 1; i <= controllers.NumObjects(); i++) {
+        BotController *controller = controllers.ObjectAt(i);
+        controller->ProcessVoiceCommand(cmdStr, speaker, teamOnly);
+    }
+}
+
 BotControllerManager& BotManager::getControllerManager()
 {
     return botControllerManager;

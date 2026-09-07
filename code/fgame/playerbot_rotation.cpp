@@ -151,3 +151,18 @@ void BotRotation::AimAt(Vector vPos)
 
     SetTargetAngles(vTarget);
 }
+
+void BotRotation::TurnTowards(Vector vPos)
+{
+    // Similar to AimAt but we only care about YAW (facing direction)
+    Vector vDelta = vPos - controlledEntity->origin;
+    Vector vTarget;
+
+    VectorNormalize(vDelta);
+    vectoangles(vDelta, vTarget);
+
+    // Keep current PITCH, only change YAW
+    vTarget[PITCH] = m_vTargetAng[PITCH];
+
+    SetTargetAngles(vTarget);
+}

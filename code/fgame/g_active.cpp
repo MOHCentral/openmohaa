@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "g_local.h"
 #include "entity.h"
 #include "game.h"
+#include "g_scriptevents.h"
 
 // FIXME: OLD Q3 CODE
 #if 0
@@ -598,7 +599,13 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 		client->inactivityWarning = qfalse;
 	} else if ( !client->pers.localClient ) {
 		if ( level.time > client->inactivityTime ) {
-			gi.DropClient( client - game.clients, "Dropped due to inactivity" );
+			// HOOK: player_inactivity_drop
+			int clientNum = client - game.clients;
+			gentity_t* ent = &g_entities[clientNum];
+			if (ent && ent->entity) {
+				G_ScriptEvent("player_inactivity_drop", ent->entity);
+			}
+			gi.DropClient( clientNum, "Dropped due to inactivity" );
 			return qfalse;
 		}
 		if ( level.time > client->inactivityTime - 10000 && !client->inactivityWarning ) {

@@ -29,6 +29,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../corepp/container.h"
 #include "animate.h"
 #include "vehicle.h"
+#include <unordered_map>
+#include <string>
 
 extern Event EV_Sentient_Attack;
 extern Event EV_Sentient_Charge;
@@ -95,6 +97,8 @@ class Sentient : public Animate
 {
 protected:
     Container<int>     inventory;
+    std::unordered_multimap<std::string, int> inventoryMap;
+    bool               inventoryMapDirty;
     Container<Ammo *>  ammo_inventory;
     float              LMRF;
     WeaponPtr          newWeapon;
@@ -117,7 +121,10 @@ protected:
     str                m_sHelmetSurface2;
     str                m_sHelmetTiki;
     float              m_fHelmetSpeed;
+    int                m_iHelmetSurfaceIndex;
     bool               m_bDontDropWeapons;
+
+    void         UpdateHelmetSurfaceIndex();
 
     virtual void EventTake(Event *ev);
     virtual void EventGiveAmmo(Event *ev);
@@ -219,6 +226,10 @@ public:
 
     bool m_bFootOnGround_Right;
     bool m_bFootOnGround_Left;
+
+    int m_iRightFootTag;
+    int m_iLeftFootTag;
+
     //
     // Added in OPM
     //
@@ -363,10 +374,14 @@ public:
 
     void FootstepMain(trace_t *trace, int iRunning, int iEquipment);
     void Footstep(const char *szTagName, int iRunning, int iEquipment);
+    void Footstep(int iTagNum, int iRunning, int iEquipment);
     void LandingSound(float volume, int iEquipment);
 
     const Container<int>&    getInventory() const;
     const Container<Ammo *>& getAmmoInventory() const;
+
+    void ItemNameChanged(Item *item, const char *oldName);
+    void RebuildInventoryMap();
 };
 
 typedef SafePtr<Sentient> SentientPtr;

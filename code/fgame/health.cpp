@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "weaputils.h"
 #include "player.h"
 #include "g_phys.h"
+#include "g_scriptevents.h"
 
 Event EV_Health_PostSpawn
 (
@@ -118,6 +119,9 @@ void Health::PickupHealth(Event *ev)
             player->health = player->max_health;
         }
     }
+
+    // HOOK: health_pickup
+    G_ScriptEvent("health_pickup", player, amount);
 
     gi.SendServerCommand(
         player->edict - g_entities,

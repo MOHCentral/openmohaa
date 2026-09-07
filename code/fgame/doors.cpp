@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "mover.h"
 #include "doors.h"
 #include "sentient.h"
+#include "g_scriptevents.h"
 #include "scriptmaster.h"
 #include "scriptexception.h"
 #include "item.h"
@@ -628,6 +629,9 @@ void Door::CloseEnd(Event *ev)
 
 void Door::Close(Event *ev)
 {
+    // HOOK: door_close
+    G_ScriptEvent("door_close", this);
+
     Door *door;
 
     if (!(getContents() & CONTENTS_SOLID)) {
@@ -726,6 +730,9 @@ void Door::Open(Event *ev)
             gi.AdjustAreaPortalState(this->edict, true);
         }
     }
+
+    // HOOK: door_open
+    G_ScriptEvent("door_open", this, other);
 }
 
 void Door::DoorUse(Event *ev)
@@ -1559,89 +1566,44 @@ Event EV_ScriptDoor_DoInit
     "Sets up the script door.",
     EV_NORMAL
 );
-Event EV_ScriptDoor_GetStartorigin
+Event EV_ScriptDoor_SetOpenThread
 (
-    "startorigin",
+    "openthread",
     EV_DEFAULT,
-    NULL,
-    NULL,
-    "Door's startorigin",
-    EV_GETTER
+    "s",
+    "openthread",
+    "Set the thread to run when the door is opened (required).",
+    EV_NORMAL
 );
-Event EV_ScriptDoor_GetStartangles
+Event EV_ScriptDoor_SetCloseThread
 (
-    "startangles",
+    "closethread",
     EV_DEFAULT,
-    NULL,
-    NULL,
-    "Door's startangles",
-    EV_GETTER
+    "s",
+    "closethread",
+    "Set the thread to run when the door is closed (required).",
+    EV_NORMAL
 );
-Event EV_ScriptDoor_GetMovedir
+Event EV_ScriptDoor_SetInitThread
 (
-    "movedir",
+    "initthread",
     EV_DEFAULT,
-    NULL,
-    NULL,
-    "door's movedir",
-    EV_GETTER
-);
-Event EV_ScriptDoor_GetDoorsize
-(
-    "startangles",
-    EV_DEFAULT,
-    NULL,
-    NULL,
-    "door's size",
-    EV_GETTER
-);
-Event EV_ScriptDoor_GetOpendot
-(
-    "opendot",
-    EV_DEFAULT,
-    NULL,
-    NULL,
-    "door's open dot product",
-    EV_GETTER
+    "s",
+    "initthread",
+    "Set the thread to run when the door is initialized (optional).",
+    EV_NORMAL
 );
 
 CLASS_DECLARATION(Door, ScriptDoor, "script_door") {
     {&EV_ScriptDoor_DoInit,         &ScriptDoor::DoInit        },
     {&EV_Door_DoClose,              &ScriptDoor::DoClose       },
     {&EV_Door_DoOpen,               &ScriptDoor::DoOpen        },
+    {&EV_ScriptDoor_SetInitThread,  &ScriptDoor::SetInitThread },
+    {&EV_ScriptDoor_SetOpenThread,  &ScriptDoor::SetOpenThread },
+    {&EV_ScriptDoor_SetCloseThread, &ScriptDoor::SetCloseThread},
     {&EV_SetAngle,                  &ScriptDoor::SetMoveDir    },
-    {&EV_ScriptDoor_GetStartorigin, &ScriptDoor::GetStartorigin},
-    {&EV_ScriptDoor_GetStartangles, &ScriptDoor::GetStartangles},
-    {&EV_ScriptDoor_GetMovedir,     &ScriptDoor::GetMovedir    },
-    {&EV_ScriptDoor_GetDoorsize,    &ScriptDoor::GetDoorsize   },
-    {&EV_ScriptDoor_GetOpendot,     &ScriptDoor::GetOpendot    },
     {NULL,                          NULL                       }
 };
-
-void ScriptDoor::GetStartorigin(Event *ev)
-{
-    ev->AddVector(startorigin);
-}
-
-void ScriptDoor::GetStartangles(Event *ev)
-{
-    ev->AddVector(startangle);
-}
-
-void ScriptDoor::GetMovedir(Event *ev)
-{
-    ev->AddVector(movedir);
-}
-
-void ScriptDoor::GetDoorsize(Event *ev)
-{
-    ev->AddFloat(doorsize);
-}
-
-void ScriptDoor::GetOpendot(Event *ev)
-{
-    ev->AddFloat(diropened);
-}
 
 void ScriptDoor::SetMoveDir(Event *ev)
 {
@@ -1656,14 +1618,32 @@ void ScriptDoor::SetMoveDir(Event *ev)
     dir[1]  = t;
 }
 
+void ScriptDoor::SetOpenThread(Event *ev)
+{
+    openlabel.SetThread(ev->GetValue(1));
+}
+
+void ScriptDoor::SetCloseThread(Event *ev)
+{
+    closelabel.SetThread(ev->GetValue(1));
+}
+
 void ScriptDoor::DoInit(Event *ev)
 {
     startorigin = origin;
     doorsize    = fabs(movedir * size);
+
+    if (initlabel.IsSet()) {
+        initlabel.Execute(this);
+    }
 }
 
 void ScriptDoor::DoOpen(Event *ev)
 {
+    if (openlabel.IsSet()) {
+        openlabel.Execute(this);
+    }
+
     if (previous_state == STATE_CLOSED) {
         diropened = 0;
         if (ev->NumArgs() > 0) {
@@ -1676,13 +1656,18 @@ void ScriptDoor::DoOpen(Event *ev)
             diropened = dir * p;
         }
     }
-
-    Unregister(STRING_OPEN);
 }
 
 void ScriptDoor::DoClose(Event *ev)
 {
-    Unregister(STRING_CLOSE);
+    if (closelabel.IsSet()) {
+        closelabel.Execute(this);
+    }
+}
+
+void ScriptDoor::SetInitThread(Event *ev)
+{
+    initlabel.SetThread(ev->GetValue(1));
 }
 
 ScriptDoor::ScriptDoor()

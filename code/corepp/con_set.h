@@ -101,9 +101,9 @@ public:
     void operator delete(void *ptr) { con_set<k, v>::DeleteEntry(ptr); }
 
     con_set_Entry()
-        : key(k())
+        : next(NULL)
+        , key(k())
         , value(v())
-        , next(NULL)
     {}
 
 #ifdef ARCHIVE_SUPPORTED

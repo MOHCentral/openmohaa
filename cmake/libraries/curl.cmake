@@ -17,3 +17,10 @@ list(APPEND CLIENT_INCLUDE_DIRS ${CURL_INCLUDE_DIRS})
 # For some functions like update checker
 list(APPEND SERVER_DEFINITIONS ${CURL_DEFINITIONS})
 list(APPEND SERVER_INCLUDE_DIRS ${CURL_INCLUDE_DIRS})
+
+# For curl_post/curl_get/curl_custom script commands in game modules
+list(APPEND GAME_DEFINITIONS USE_HTTP ${CURL_DEFINITIONS})
+list(APPEND GAME_INCLUDE_DIRS ${CURL_INCLUDE_DIRS})
+if(CURL_FOUND)
+    list(APPEND GAME_LIBRARIES CURL::libcurl)
+endif()

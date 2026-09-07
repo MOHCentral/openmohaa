@@ -1171,6 +1171,30 @@ qboolean	ParseMapEntity (void) {
   // FIXME: leak!
   if (!strcmp("group_info", ValueForKey (mapent, "classname")))
   {
+    epair_t *e, *next;
+    parseMesh_t *pm, *nextPm;
+
+    for (e = mapent->epairs; e; e = next)
+    {
+      next = e->next;
+      free(e->key);
+      free(e->value);
+      free(e);
+    }
+    mapent->epairs = NULL;
+
+    FreeBrushList(mapent->brushes);
+    mapent->brushes = NULL;
+
+    for (pm = mapent->patches; pm; pm = nextPm)
+    {
+      nextPm = pm->next;
+      if (pm->mesh.verts)
+        free(pm->mesh.verts);
+      free(pm);
+    }
+    mapent->patches = NULL;
+
     num_entities--;
     return qtrue;
   }

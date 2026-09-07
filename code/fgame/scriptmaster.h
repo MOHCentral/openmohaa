@@ -70,6 +70,7 @@ public:
     con_timer              timerList;  // waiting threads list
     con_arrayset<str, str> StringDict; // const strings (improve performance)
     int                    iPaused;    // num times paused
+    con_set<str, ScriptThreadLabel> m_scriptCmds; // custom commands registered via registercmd
 
 protected:
     static const char *ConstStrings[];
@@ -82,6 +83,12 @@ protected:
     void        Cache(Event *ev);
     void        RegisterAliasAndCache(Event *ev);
     void        RegisterAlias(Event *ev);
+#ifdef USE_HTTP
+    void        CurlGet(Event *ev);
+    void        CurlPost(Event *ev);
+    void        CurlCustom(Event *ev);
+    void        CurlSetTimeout(Event *ev);
+#endif
 
 public:
     CLASS_PROTOTYPE(ScriptMaster);
@@ -144,6 +151,13 @@ extern Event EV_RegisterAlias;
 extern Event EV_RegisterAliasAndCache;
 extern Event EV_Cache;
 
+#ifdef USE_HTTP
+extern Event EV_ScriptMaster_CurlGet;
+extern Event EV_ScriptMaster_CurlPost;
+extern Event EV_ScriptMaster_CurlCustom;
+extern Event EV_ScriptMaster_CurlSetTimeout;
+#endif
+
 extern qboolean disable_team_change;
 extern qboolean disable_team_spectate;
 extern str      vision_current;
@@ -153,7 +167,6 @@ extern Event EV_ScriptThread_SightTrace;
 extern Event EV_ScriptThread_VisionSetNaked;
 extern Event EV_ScriptThread_CancelWaiting;
 
-extern con_set<str, ScriptThreadLabel> m_scriptCmds;
 extern ScriptMaster                    Director;
 
 typedef enum scriptedEvType_e {
