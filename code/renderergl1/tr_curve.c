@@ -383,9 +383,6 @@ srfGridMesh_t *R_SubdividePatchToGrid( int width, int height, float subdivide,
 		for ( j = 0 ; j + 2 < width ; j += 2 ) {
 			// check subdivided midpoints against control points
 
-			// FIXME: also check midpoints of adjacent patches against the control points
-			// this would basically stitch all patches in the same LOD group together.
-
 			maxLen = 0;
 			for ( i = 0 ; i < height ; i++ ) {
 				vec3_t		midxyz;
@@ -414,6 +411,46 @@ srfGridMesh_t *R_SubdividePatchToGrid( int width, int height, float subdivide,
 				len = VectorLengthSquared( midxyz2 );			// we will do the sqrt later
 				if ( len > maxLen ) {
 					maxLen = len;
+				}
+
+				// also check midpoints of adjacent patches against the control points
+				// this basically stitches all patches in the same LOD group together.
+				if ( j > 0 ) {
+					vec3_t mid_left, midxyz2_left, projected_left;
+					float d_left, len_left;
+
+					for ( l = 0 ; l < 3 ; l++ ) {
+						mid_left[l] = (ctrl[i][j-2].xyz[l] + ctrl[i][j-1].xyz[l] * 2
+								+ ctrl[i][j].xyz[l] ) * 0.25f;
+					}
+
+					VectorSubtract( mid_left, ctrl[i][j].xyz, mid_left );
+					d_left = DotProduct( mid_left, dirVector );
+					VectorScale( dirVector, d_left, projected_left );
+					VectorSubtract( mid_left, projected_left, midxyz2_left );
+					len_left = VectorLengthSquared( midxyz2_left );
+					if ( len_left > maxLen ) {
+						maxLen = len_left;
+					}
+				}
+
+				if ( j + 4 < width ) {
+					vec3_t mid_right, midxyz2_right, projected_right;
+					float d_right, len_right;
+
+					for ( l = 0 ; l < 3 ; l++ ) {
+						mid_right[l] = (ctrl[i][j+2].xyz[l] + ctrl[i][j+3].xyz[l] * 2
+								+ ctrl[i][j+4].xyz[l] ) * 0.25f;
+					}
+
+					VectorSubtract( mid_right, ctrl[i][j].xyz, mid_right );
+					d_right = DotProduct( mid_right, dirVector );
+					VectorScale( dirVector, d_right, projected_right );
+					VectorSubtract( mid_right, projected_right, midxyz2_right );
+					len_right = VectorLengthSquared( midxyz2_right );
+					if ( len_right > maxLen ) {
+						maxLen = len_right;
+					}
 				}
 			}
 
