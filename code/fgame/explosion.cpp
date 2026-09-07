@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "trigger.h"
 #include "explosion.h"
 #include "weaputils.h"
+#include "g_scriptevents.h"
 
 #define MULTI_USE     (1 << 0)
 #define RANDOM_TIME   (1 << 1)
@@ -134,6 +135,9 @@ void CreateExplosion(
 
     explosion->NewAnim("idle");
     RadiusDamage(inflictor->origin, inflictor, attacker, damage, ignore, MOD_EXPLOSION);
+
+    // HOOK: explosion
+    G_ScriptEvent("explosion", explosion, attacker, damage);
 
     if (explosion->life) {
         ev = new Event(EV_Remove);
