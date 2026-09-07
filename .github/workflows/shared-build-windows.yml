@@ -88,12 +88,12 @@ jobs:
       run: |
         $DownloadPath="$($env:USERPROFILE)\Downloads"
         if ("${{ matrix.architecture.config }}" -ieq "ARM64") {
-          Invoke-WebRequest "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-winarm64.zip" -OutFile "$DownloadPath\ninja-win.zip"
+          Invoke-WebRequest "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-winarm64.zip" -OutFile "$DownloadPath\ninja-win.zip" -MaximumRetryCount 3 -RetryIntervalSec 5
         } else {
-          Invoke-WebRequest "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" -OutFile "$DownloadPath\ninja-win.zip"
+          Invoke-WebRequest "https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip" -OutFile "$DownloadPath\ninja-win.zip" -MaximumRetryCount 3 -RetryIntervalSec 5
         }
         Expand-Archive -Path "$DownloadPath\ninja-win.zip" -DestinationPath "C:\Packages\ninja"
-        Invoke-WebRequest "https://download.qt.io/official_releases/jom/jom.zip" -OutFile "$DownloadPath\jom.zip"
+        Invoke-WebRequest "https://download.qt.io/official_releases/jom/jom.zip" -OutFile "$DownloadPath\jom.zip" -MaximumRetryCount 3 -RetryIntervalSec 5
         Expand-Archive -Path "$DownloadPath\jom.zip" -DestinationPath "C:\Packages\jom"
 
     - name: Setup required packages path
