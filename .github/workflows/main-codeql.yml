@@ -47,6 +47,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Update apt-get
+      run: sudo apt-get update -y
+
     - uses: awalsh128/cache-apt-pkgs-action@latest
       name: Install required packages
       with:

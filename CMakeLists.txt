@@ -85,3 +85,6 @@ include(launcher)
 
 include(post_configure)
 #include(installer)
+if(BUILD_TESTING)
+    include(cmake/tests/all.cmake)
+endif()
