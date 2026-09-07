@@ -27,6 +27,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "scriptmaster.h"
 #include "g_spawn.h"
 #include "g_bot.h"
+#include "g_scriptevents.h"
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -806,6 +807,11 @@ void G_ClientUserinfoChanged(gentity_t *ent, const char *u)
 
     G_SetClientConfigString(ent);
 
+    // HOOK: client_userinfo_changed
+    if (ent->entity) {
+        G_ScriptEvent("client_userinfo_changed", ent->entity);
+    }
+
     if (ent->entity) {
         float fov;
 
@@ -968,6 +974,15 @@ const char *G_ClientConnect(int clientNum, qboolean firstTime, qboolean differen
 
         G_PrintToAllClients(va("%s is preparing for deployment\n", client->pers.netname), 2);
     }
+
+    if (firstTime) {
+        // HOOK: client_connect
+        // Note: ent->entity might be null here, so we might need to pass just the name or index if entity is not available.
+        // But for G_ScriptEvent we usually need an Entity*.
+        // If ent->entity is null, we can't pass it.
+        // Note: Use player_connected event instead (triggers when player entity is ready)
+    }
+
     return NULL;
 }
 
@@ -1032,6 +1047,9 @@ void G_ClientBegin(gentity_t *ent, usercmd_t *cmd)
         if (ent->entity) {
             ent->entity->EndFrame();
         }
+
+        // Note: Use player_spawned event instead
+
     } catch (const char *error) {
         G_ExitWithError(error);
     }
@@ -1082,6 +1100,8 @@ void G_ClientDisconnect(gentity_t *ent)
         if (!ent || (!ent->client) || (!ent->entity)) {
             return;
         }
+
+        // Note: player_disconnecting event is triggered in Player::Disconnect()
 
         G_PrintfClient(ent, "has left the battle\n");
 
