@@ -1282,9 +1282,10 @@ R_SetMode
 ==================
 */
 qboolean R_SetMode(int mode, const glconfig_t* glConfig) {
-    // FIXME: unimplemented
-	ri.Printf(PRINT_WARNING, "R_SetMode is unimplemented. To change the video mode, set the \"r_mode\" variable and execute the \"vid_restart\" command.\n");
-	return qfalse;
+    ri.Cvar_SetValue("r_mode", mode);
+    ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
+    return qtrue;
+
 }
 
 /*
@@ -1293,8 +1294,9 @@ R_SetFullscreen
 ==================
 */
 void R_SetFullscreen(qboolean fullscreen) {
-    // FIXME: unimplemented
-    ri.Printf(PRINT_WARNING, "R_SetFullscreen is unimplemented. To change the fullscreen mode, set the \"r_fullscreen\" variable and execute the \"vid_restart\" command.\n");
+    ri.Cvar_Set("r_fullscreen", fullscreen ? "1" : "0");
+    ri.Cmd_ExecuteText(EXEC_APPEND, "vid_restart\n");
+
 }
 
 /*
