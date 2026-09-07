@@ -633,7 +633,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 	//
 	// OPENMOHAA-specific stuff
 	//=========================
-	int colorBits;
+	int colorBits = 0;
 	int cntBundle = 0;
 	int depthTestBits = 0;
 	int fogBits = 0;
@@ -1810,7 +1810,7 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 		}
 		else if (!Q_stricmp(token, "nofog"))
 		{
-			// FIXME: unimplemented
+			fogBits = GLS_FOG;
 			continue;
 		}
 		else if (!Q_stricmp(token, "depthmask"))
@@ -1942,7 +1942,10 @@ static qboolean ParseStage( shaderStage_t *stage, char **text )
 	stage->stateBits = depthMaskBits | 
 					   blendSrcBits | blendDstBits | 
 					   atestBits | 
-					   depthFuncBits;
+					   depthFuncBits |
+					   depthTestBits |
+					   colorBits |
+					   fogBits;
 
 	return qtrue;
 }
