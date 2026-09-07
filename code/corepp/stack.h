@@ -31,9 +31,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #    include "g_local.h"
 
-#    define STACK_Error          gi.Error
-#    define STACK_DPrintf        gi.DPrintf
-#    define STACK_WDPrintf(text) gi.DPrintf(text)
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+#        define STACK_Error          Com_Error
+#        define STACK_DPrintf        Com_DPrintf
+#        define STACK_WDPrintf(text) Com_DPrintf(text)
+#    else
+#        define STACK_Error          gi.Error
+#        define STACK_DPrintf        gi.DPrintf
+#        define STACK_WDPrintf(text) gi.DPrintf(text)
+#    endif
 
 #elif defined(CGAME_DLL)
 //

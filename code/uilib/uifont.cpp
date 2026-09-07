@@ -22,6 +22,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "ui_local.h"
 
+#ifdef GODOT_GDEXTENSION
+extern "C" float Godot_Renderer_GetFontScale(void);
+#endif
+
 qboolean UI_FontDBCSIsLeadByte(fontheader_t *font, unsigned short uch);
 int      UI_FontCodeSearch(const fontheader_t *font, unsigned short uch);
 int      UI_FontStringMaxWidth(fontheader_t *pFont, const char *pszString, int iMaxLen);
@@ -571,6 +575,11 @@ int UIFont::getCharWidth(unsigned short ch)
         index      = m_font->charTable[code].index;
         indirected = m_font->charTable[code].loc;
     } else {
+#ifdef GODOT_GDEXTENSION
+        if (!m_font->sgl[0] || ch >= 256) {
+            return 0;
+        }
+#endif
         indirected = m_font->sgl[0]->indirection[ch];
         if (indirected < 0 || indirected > 255) {
             return 0;
@@ -579,7 +588,11 @@ int UIFont::getCharWidth(unsigned short ch)
         index = 0;
     }
 
-    return m_font->sgl[index]->locations[indirected].size[0] * 256.0 * widthMul;
+    return m_font->sgl[index]->locations[indirected].size[0] * 256.0 * widthMul
+#ifdef GODOT_GDEXTENSION
+        * Godot_Renderer_GetFontScale()
+#endif
+        ;
 }
 
 int UIFont::getHeight(const char *text, int maxlen, const float *virtualScale)
@@ -614,13 +627,21 @@ int UIFont::getHeight(const float *virtualScale)
 
     if (virtualScale) {
         if (m_font) {
+#ifdef GODOT_GDEXTENSION
+            return (m_font->sgl[0]->height * Godot_Renderer_GetFontScale() * virtualScale[0]);
+#else
             return (m_font->sgl[0]->height * virtualScale[0]);
+#endif
         } else {
             return (16.0 * virtualScale[1]);
         }
     } else {
         if (m_font) {
+#ifdef GODOT_GDEXTENSION
+            return m_font->sgl[0]->height * Godot_Renderer_GetFontScale();
+#else
             return m_font->sgl[0]->height;
+#endif
         } else {
             return 16;
         }
@@ -704,6 +725,11 @@ float UI_FontgetCharWidthf(fontheader_t *font, unsigned short uch)
         index      = font->charTable[code].index;
         indirected = font->charTable[code].loc;
     } else {
+#ifdef GODOT_GDEXTENSION
+        if (!font->sgl[0] || uch >= 256) {
+            return 0.f;
+        }
+#endif
         indirected = font->sgl[0]->indirection[uch];
         if (indirected < 0 || indirected > 255) {
             return 0.f;
@@ -712,7 +738,11 @@ float UI_FontgetCharWidthf(fontheader_t *font, unsigned short uch)
         index = 0;
     }
 
-    return font->sgl[index]->locations[indirected].size[0] * widthMul;
+    return font->sgl[index]->locations[indirected].size[0] * widthMul
+#ifdef GODOT_GDEXTENSION
+        * Godot_Renderer_GetFontScale()
+#endif
+        ;
 }
 
 int UI_FontStringMaxWidth(fontheader_t *pFont, const char *pszString, int iMaxLen)

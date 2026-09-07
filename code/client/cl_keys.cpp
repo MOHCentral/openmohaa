@@ -963,6 +963,7 @@ void Key_CtrlBindlist_f(void)
     }
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 ============
 Key_KeynameCompletion
@@ -976,6 +977,7 @@ void Key_KeynameCompletion(void (*callback)(const char *s))
         callback(keynames[i].name);
     }
 }
+#endif
 
 /*
 ===================
@@ -1352,5 +1354,8 @@ Key_SetCatcher
 */
 void Key_SetCatcher(int catcher)
 {
+    if (cls.keyCatchers != catcher) {
+        // Com_Printf("[MoHAA] Key_SetCatcher: 0x%x -> 0x%x caller=%p\n", cls.keyCatchers, catcher, __builtin_return_address(0));
+    }
     cls.keyCatchers = catcher;
 }

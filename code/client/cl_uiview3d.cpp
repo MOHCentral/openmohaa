@@ -85,6 +85,7 @@ void View3D::FrameInitialized(void)
 
 void View3D::Pressed(Event *ev)
 {
+    // Com_Printf("[MoHAA] View3D::Pressed calling IN_MouseOff\n");
     IN_MouseOff();
     OnActivate(ev);
 }

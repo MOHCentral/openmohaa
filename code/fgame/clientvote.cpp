@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "bg_voteoptions.h"
 #include "level.h"
 #include "game.h"
+#include "g_main.h"
 
 CLASS_DECLARATION(Listener, VoteUpload, NULL) {
     {NULL, NULL}

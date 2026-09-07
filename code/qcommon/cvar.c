@@ -37,6 +37,11 @@ static	cvar_t	*hashTable[FILE_HASH_SIZE];
 
 qboolean cvar_global_force = qfalse;
 
+#ifdef GODOT_GDEXTENSION
+/* Godot bridge hook: notify runtime window mode changes driven by cvars. */
+extern void Godot_NotifyFullscreenCvarChanged(int fullscreen);
+#endif
+
 static void Cvar_FlagsCheck(int flags);
 
 /*
@@ -674,6 +679,14 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 			var->latchedString = CopyString(value);
 			var->modified = qtrue;
 			var->modificationCount++;
+
+#ifdef GODOT_GDEXTENSION
+			/* Godot applies fullscreen immediately, even if the engine cvar is latched. */
+			if (!Q_stricmp(var->name, "r_fullscreen")) {
+				Godot_NotifyFullscreenCvarChanged(atoi(value) ? 1 : 0);
+			}
+#endif
+
 			return var;
 		}
 	}
@@ -697,6 +710,12 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 	var->string = CopyString(value);
 	var->value = atof (var->string);
 	var->integer = atoi (var->string);
+
+#ifdef GODOT_GDEXTENSION
+	if (!Q_stricmp(var->name, "r_fullscreen")) {
+		Godot_NotifyFullscreenCvarChanged(var->integer ? 1 : 0);
+	}
+#endif
 
 	return var;
 }

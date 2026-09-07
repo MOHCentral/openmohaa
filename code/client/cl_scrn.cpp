@@ -485,6 +485,15 @@ void UpdateStereoSide( stereoFrame_t s ) {
 	if( clc.state == CA_CINEMATIC ) {
 		SCR_DrawCinematic();
 	}
+#ifdef GODOT_GDEXTENSION
+	/* Under Godot, the MOHAA UI system's View3D::Display() is the only
+	 * caller of SCR_DrawScreenField(), but it only fires when
+	 * cls.no_menus is transiently set (stufftext).  We must drive
+	 * SCR_DrawScreenField() ourselves so that CL_CGameRendering() runs
+	 * each frame — otherwise CG_DrawActiveFrame() never fires and
+	 * snapshots/entities/2D elements are never processed. */
+	SCR_DrawScreenField();
+#endif
 	UI_Update();
 }
 

@@ -11002,7 +11002,7 @@ void Player::EventDMMessage(Event *ev)
             Event          event;
             ScriptVariable result;
             // sent to everyone (not a team)
-            event.AddString(pStartMessage);
+            event.AddString(sToken);
             event.AddInteger(false);
 
             result = scriptDelegate_textMessage.Trigger(this, event);
@@ -11078,7 +11078,7 @@ void Player::EventDMMessage(Event *ev)
             Event          event;
             ScriptVariable result;
             // sent to team
-            event.AddString(pStartMessage);
+            event.AddString(sToken);
             event.AddInteger(true);
 
             result = scriptDelegate_textMessage.Trigger(this, event);

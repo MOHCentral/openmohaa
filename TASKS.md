@@ -1,0 +1,94 @@
+# Implementation Roadmap: GodotMoHAA
+
+## Phase 1: The Build System & Scaffolding ✅
+- [x] **Task 1.1:** Create a `SConstruct` (SCons) file to build the project as a GDExtension library.
+- [x] **Task 1.2:** Configure `godot-cpp` bindings.
+- [x] **Task 1.3:** Create the GDExtension entry point (`register_types.cpp`).
+- [x] **Task 1.4:** Compile and verify a "Hello World" load in the Godot Editor.
+
+## Phase 2: The Engine Heartbeat ✅
+- [x] **Task 2.1:** Identify the `Com_Frame()` (main loop) in OpenMoHAA.
+- [x] **Task 2.2:** Create a Godot Node class `MoHAARunner` (extends `Node`).
+- [x] **Task 2.3:** Hook Godot's `_process(delta)` to drive the OpenMoHAA frame ticker.
+- [x] **Task 2.4:** Redirect `Com_Printf`/`Sys_Print` to Godot's console.
+- [x] **Task 2.5:** Make `Com_Frame` non-blocking (bypass `NET_Sleep`/`Sys_Sleep` under Godot).
+- [x] **Task 2.6:** Resolve monolithic build symbol conflicts (`Com_Printf`, `Com_Error`, `SV_Malloc`, `SV_Free`, `SV_Error` shadowed by fgame function pointers).
+- [x] **Task 2.7:** Verify dedicated server init + map load (mohdm1 loads, entities spawn, server runs).
+
+### Key technical details (Phase 2):
+- `DEDICATED` and `GODOT_GDEXTENSION` defines active
+- `main()` in sys_main.c guarded with `#ifndef GODOT_GDEXTENSION`
+- `Sys_Print` redirects to `Godot_SysPrint` callback under `GODOT_GDEXTENSION`
+- `Com_Frame` sleep loop bypassed with `break;` under `GODOT_GDEXTENSION`
+- `SV_Frame`'s `Sys_Sleep(-1)` (no-map idle) guarded out under `GODOT_GDEXTENSION`
+- Monolithic build links fgame directly; `Sys_GetGameAPI` calls `GetGameAPI` without dlopen
+- fgame's `Com_Printf`, `Com_Error`, `SV_Malloc`, `SV_Free`, `SV_Error` guarded with `#ifndef GODOT_GDEXTENSION`
+- Comprehensive client/UI/sound/input stubs in `stubs.cpp`
+- Build: `scons platform=linux target=template_debug -j$(nproc) dev_build=yes`
+
+## Phase 2.5: Server Operations ✅
+- [x] **Task 2.5.1:** Expose `execute_command(cmd)` and `load_map(name)` to GDScript.
+- [x] **Task 2.5.2:** Handle `Com_Error` gracefully (ERR_FATAL/Sys_Error no longer kills Godot; uses longjmp + error signal).
+- [x] **Task 2.5.3:** Expose server status (`is_map_loaded`, `get_player_count`, `get_current_map`, `get_server_state`, `get_server_state_string`) to GDScript.
+- [x] **Task 2.5.4:** Signal/notification system (`engine_error`, `map_loaded`, `map_unloaded`, `engine_shutdown_requested`).
+- [x] **Task 2.5.5:** Fix library unload crash (ScriptMaster destructor calling gi.Malloc after engine shutdown — added safe fallbacks for all gi.Malloc/gi.Free call sites + Com_Shutdown in module teardown).
+
+### Key technical details (Phase 2.5):
+- `Sys_Error` under `GODOT_GDEXTENSION`: calls `Godot_SysError()` which stores message + longjmps to `godot_error_jmpbuf` (set up in `_ready` and `_process`)
+- `Sys_Quit` under `GODOT_GDEXTENSION`: calls `Godot_SysQuit()` which sets flag + longjmps back
+- `Sys_SigHandler` under `GODOT_GDEXTENSION`: routes to `Godot_SysError`/`Godot_SysQuit` instead of `Sys_Exit`
+- `Q_NO_RETURN` attribute removed from `Sys_Error`/`Sys_Quit` declarations under `GODOT_GDEXTENSION` (qcommon.h)
+- `gi.Malloc`/`gi.Free` safe wrappers (`gi_Malloc_Safe`/`gi_Free_Safe`) in `g_main.h` — fall back to system `malloc`/`free` when `gi` function pointers are NULL (library teardown)
+- Applied to: `mem_blockalloc.cpp`, `con_arrayset.h`, `con_set.h`, `script.cpp`, `mem_tempalloc.cpp`, `lightclass.cpp`
+- Server state accessors via `godot_server_accessors.c` (avoids header conflicts between engine `server.h` and godot-cpp)
+- `register_types.cpp` calls `Com_Shutdown()` in uninitialize as safety net
+- State-change detection in `_process()` polls `sv.state` and emits signals on transitions
+
+## Phase 3: Script Engine (Morfuse) ✅
+The OpenMoHAA script engine (`code/script/` — ScriptVM, ScriptCompiler, ScriptMaster) is already compiled and functional in the monolithic build (`WITH_SCRIPT_ENGINE` define). When maps load, `.scr` scripts are loaded via `gi.FS_ReadFile`, compiled by ScriptCompiler, and executed by ScriptMaster. No separate integration step was needed.
+
+- [x] **Task 3.1:** Script engine compiled into the GDExtension build (already in `src_dirs` in SConstruct).
+- [x] **Task 3.2:** ScriptMaster global destructors handled safely (gi_Malloc_Safe/gi_Free_Safe — done in Phase 2.5.5).
+- [x] **Task 3.3:** Verified: map load triggers `.scr` script compilation and execution (mohdm1 tested in Phase 2.7).
+
+## Phase 4: Asset Pipeline
+**Constraint:** Full compatibility with existing MOHAA/SH/BT pk3 archives, .scr scripts, .tik files, BSP maps, and shader definitions. The engine's native VFS (`files.cpp`) and script loader must not be replaced — they already handle pk3 mounting, search-path ordering, and game selection for all three titles (`main/`, `mainta/`, `maintt/`).
+
+- [ ] **Task 4.1:** Bridge the VFS so Godot can also read assets via the engine's `FS_*` functions (expose file-read helpers to GDScript). Ensure `fs_basepath` correctly resolves for all three game directories. Do not bypass or re-implement the VFS.
+- [ ] **Task 4.2:** Implement a BSP parser that generates Godot `ArrayMesh` data from map files at runtime, reading BSP data through the engine VFS.
+- [ ] **Task 4.3:** Convert Quake 3 / MOHAA textures and shader definitions to Godot `ShaderMaterial` / `StandardMaterial3D` at runtime.
+
+## Phase 39: VFX Sprite Rendering Rewrite ✅
+Complete rewrite of `godot_vfx.cpp` to fix visual parity issues with sprite effects (bullet smoke, muzzle flash, explosions) and improve rendering performance.
+
+- [x] **Task 39.1:** Trace the real renderer's sprite pipeline (`RB_DrawSprite` in `tr_sprite.c`, `SPR_RegisterSprite` in `tr_model.cpp`) to verify sizing formulas. Confirmed: `full_extent = image_pixels × entity.scale × shader.spritescale` (in engine inches). **Sizing math was already correct.**
+- [x] **Task 39.2:** Identify root cause of "too big" effects appearance: incorrect blend mode. Old code defaulted ALL sprites (including smoke) to ADDITIVE blend. Additive blend on smoke textures creates bright glow extending beyond the intended boundary, making effects appear much larger than in the real renderer.
+- [x] **Task 39.3:** Replace 512-node `MeshInstance3D` pool with `MultiMeshInstance3D` batching (one group per shader handle, up to 256 instances each). One draw call per unique shader instead of per-sprite draw calls.
+- [x] **Task 39.4:** Replace per-RGBA material cache (unique `StandardMaterial3D` per `(shader, RGBA32)` combo — potentially thousands) with per-shader shared materials using `FLAG_ALBEDO_FROM_VERTEX_COLOR` + MultiMesh instance colours for per-sprite tinting.
+- [x] **Task 39.5:** Implement `vfx_detect_blend_mode()`: checks shader props first (ADDITIVE/MULTIPLICATIVE honoured directly), then probes texture alpha for SHADER_OPAQUE sprites — meaningful alpha → alpha blend (smoke), dead/no alpha → additive (fire/flash/corona).
+- [x] **Task 39.6:** Add `R_LoadRawImage` as primary texture loader for engine byte-order parity, with dead-alpha detection (all-zero or all-255 alpha → convert to RGB8).
+- [x] **Task 39.7:** Add diagnostic logging system: `[VFX-DIAG]` one-shot per-sprite log on first frame with sprites (shader name, entity scale, size in metres, blend mode, RGBA, rendering path); `[VFX-GRP]` on group creation; `[VFX-VERIFY]` shader data verification.
+- [x] **Task 39.8:** Verify poly effects (`update_polys()` in MoHAARunner.cpp) already have correct blend mode detection, texture alpha fallback, and vertex colour support — no changes needed.
+
+### Key technical details (Phase 39):
+- **Root cause was visual, not mathematical:** Sprite sizing formulas were correct. The "too big" appearance was caused by additive blend mode on smoke textures — additive blending makes the alpha channel contribute as brightness, creating bright glow halos that extend the visible boundary of the effect.
+- **MultiMesh batching:** `VfxShaderGroup` struct holds `MultiMeshInstance3D` + shared `StandardMaterial3D` + quad `ArrayMesh`. Groups created on-demand, keyed by shader handle. `vfx_update_group()` sets per-instance transform + colour each frame.
+- **Blend mode detection pipeline:** `shader_props.transparency` → if OPAQUE, probe texture alpha via `R_LoadRawImage` → meaningful alpha → alpha blend (smoke), dead alpha → additive (fire/flash).
+- **Two rendering paths preserved:** (1) Engine-vert path via `Godot_ComputeSpriteQuad()` for sprites with pre-computed quad vertices; (2) Fallback billboard path using `BILLBOARD_ENABLED` + uniform scale for sprites without engine verts.
+- **Files changed:** `godot_vfx.cpp` (complete rewrite, ~790 lines). No other files modified.
+- **Poly effects unchanged:** `update_polys()` already uses `apply_shader_props_to_material()` with correct ADDITIVE/MULTIPLICATIVE handling, texture alpha fallback for unknown shaders, `FLAG_ALBEDO_FROM_VERTEX_COLOR`, and `BILLBOARD_DISABLED`.
+
+## Phase 40: Web Map Transition Fix (Z_FreeTags + cgame event system) ✅
+Fixed web (Emscripten) map transitions hanging on second CG_Init after a CG_Shutdown cycle.
+
+- [x] **Task 40.1:** Root cause analysis — `CL_ShutdownCGame()` calls `Z_FreeTags(TAG_CGAME)` which bulk-frees ALL zone memory allocated with `TAG_CGAME`. On Emscripten, `dlclose` is a no-op, so cgame.so is never unloaded and its static data persists — but the underlying zone memory backing `Event::commandList` (hash table entries + table array) is freed. On the next `CG_Init`, `FindEventNum("alias")` reads freed memory and returns 0, causing silent event processing failure and map load hang at `CA_LOADING`.
+- [x] **Task 40.2:** Traced the full allocation chain: `Event::commandList` → `con_arrayset<command_t>` → `Entry_allocator` (MEM_BlockAlloc) → `MEM_Alloc` → `cgi.Malloc` → `CL_CG_Malloc` → `Z_TagMalloc(size, TAG_CGAME)`. Table array: `ARRAYSET_Alloc` → safe wrapper → `cgi.Malloc` → `CL_CG_Malloc` → `Z_TagMalloc(size, TAG_CGAME)`.
+- [x] **Task 40.3:** Fix applied in `code/client/cl_cgame.cpp`: guarded `Z_FreeTags(TAG_CGAME)` with `#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)` to skip the bulk free on Emscripten where cgame.so is never truly unloaded. On native Linux, cgame.so IS properly unloaded via `dlclose`, so `Z_FreeTags` is appropriate there.
+- [x] **Task 40.4:** Verified fix with 10-rotation stress tests on both platforms — web E2E (mohdm1↔mohdm2, 10 rounds) and Linux headless (TestMapRotation.tscn, 10 rounds). Both PASS.
+
+### Key technical details (Phase 40):
+- **The server restart pattern:** During map transition, the server assigns a new `serverId`. On Emscripten, async VFS timing can cause the client to receive a gamestate with the old serverId, triggering a full CG_Shutdown + CG_Init cycle before the new serverId arrives and triggers a second CG_Shutdown + CG_Init. The first CG_Init works (TAG_CGAME memory intact); `CL_ShutdownCGame` frees TAG_CGAME; the second CG_Init fails because the commandList hash table entries are now dangling pointers.
+- **Why only Emscripten:** On native Linux, `dlclose(cgameLib)` truly unloads cgame.so, destroying all static data including `Event::commandList`. On next `dlopen` + `CG_Init`, everything is fresh. On Emscripten, `dlclose` is a no-op — the static `commandList` with its dangling pointers persists across CG_Shutdown/CG_Init cycles.
+- **Existing guards:** `L_ShutdownEvents()` under `GODOT_GDEXTENSION` already preserves `commandList` (skips `clear()`), and `L_InitEvents()` skips `LoadEvents()/BuildEventResponses()` if `NumEventCommands() > 1`. These were correct for the commandList-persistence design but insufficient without the TAG_CGAME memory backing.
+- **Files changed:** `code/client/cl_cgame.cpp` (1 line: guard `Z_FreeTags(TAG_CGAME)`).
+- **Test infrastructure:** `scripts/web-e2e/run-map-transition-e2e.mjs` (updated for `NUM_ROTATIONS` env var), `project/TestMapRotation.gd` + `TestMapRotation.tscn` (new headless Linux test scene).

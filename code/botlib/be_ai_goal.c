@@ -189,7 +189,11 @@ maplocation_t *maplocations = NULL;
 //camp spots
 campspot_t *campspots = NULL;
 //the game type
+#ifdef GODOT_GDEXTENSION
+static int g_gametype = 0;
+#else
 int g_gametype = 0;
+#endif
 //additional dropped item weight
 libvar_t *droppedweight = NULL;
 

@@ -1,8 +1,8 @@
-set(PROJECT_NAME openmohaa)
+set(PROJECT_NAME ShinMOHAA)
 set(PROJECT_VERSION 0.83.0)
 
-set(SERVER_NAME omohaaded)
-set(CLIENT_NAME openmohaa)
+set(SERVER_NAME shinmohaaded)
+set(CLIENT_NAME ShinMOHAA)
 
 set(BASEGAME)
 
@@ -18,4 +18,4 @@ set(MACOS_BUNDLE_ID org.openmohaa.${CLIENT_NAME})
 set(COPYRIGHT "OpenMoHAA Copyright © 2025 OpenMoHAA Team, Inc. All rights reserved.")
 
 set(CONTACT_EMAIL "")
-set(PROTOCOL_HANDLER_SCHEME openmohaa)
+set(PROTOCOL_HANDLER_SCHEME mohaajs)

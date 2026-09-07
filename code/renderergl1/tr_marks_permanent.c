@@ -289,6 +289,7 @@ R_LevelMarksLoad
 Load level marks from a DCL file
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void R_LevelMarksLoad(const char *szBSPName)
 {
     int          i;
@@ -592,6 +593,7 @@ void R_LevelMarksLoad(const char *szBSPName)
     ri.FS_CloseFile(hFile);
     ri.Printf(0, "------ Finished loading DCL file %s -----\n", lm.szDCLFilename);
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_LevelMarksLoad) */
 
 /*
 =============
@@ -1511,6 +1513,7 @@ R_LevelMarksInit
 Initialize the level mark system with variables and commands
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void R_LevelMarksInit()
 {
     memset(&lm, 0, sizeof(lm));
@@ -1612,6 +1615,7 @@ void R_LevelMarksFree()
         }
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_LevelMarksInit, R_LevelMarksFree) */
 
 /*
 =============
@@ -1653,6 +1657,7 @@ R_UpdateLevelMarksSystem
 Draw lines for editing
 =============
 */
+#ifndef GODOT_GDEXTENSION
 void R_UpdateLevelMarksSystem()
 {
     int   iReturn;
@@ -2006,3 +2011,4 @@ void R_AddPermanentMarkFragmentSurfaces(void **pFirstMarkFragment, int iNumMarkF
         R_AddDrawSurf(&pPoly->surf.surfaceType, pPoly->shader, 0);
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_UpdateLevelMarksSystem, R_AddPermanentMarkFragmentSurfaces) */

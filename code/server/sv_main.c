@@ -34,11 +34,20 @@ server_t		sv;					// local server
 //vm_t			*gvm = NULL;				// game virtual machine
 game_export_t	*ge = NULL;
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build these are owned by fgame/gamecvars.cpp. */
+extern cvar_t *sv_fps;
+#else
 cvar_t	*sv_fps;				// time rate for running non-clients
+#endif
 cvar_t	*sv_timeout;			// seconds without any message
 cvar_t	*sv_zombietime;			// seconds to sink messages after disconnect
 cvar_t	*sv_rconPassword;		// password for remote server commands
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_privatePassword;
+#else
 cvar_t	*sv_privatePassword;	// password for the privateClient slots
+#endif
 cvar_t	*sv_allowDownload;
 cvar_t	*sv_maxclients;
 
@@ -59,16 +68,29 @@ cvar_t	*sv_minPing;
 cvar_t	*sv_maxPing;
 cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_maplist;
+#else
 cvar_t	*sv_maplist;
+#endif
 cvar_t	*sv_drawentities;
 cvar_t	*sv_deeptracedebug;
 cvar_t	*sv_netprofile;
 cvar_t	*sv_netprofileoverlay;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *sv_netoptimize;
+#else
 cvar_t	*sv_netoptimize;
+#endif
 cvar_t	*sv_netoptimize_vistime;
 cvar_t	*g_netoptimize;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *g_gametype;
+extern cvar_t *g_gametypestring;
+#else
 cvar_t	*g_gametype;
 cvar_t	*g_gametypestring;
+#endif
 cvar_t	*sv_chatter;
 cvar_t	*sv_gamename;
 cvar_t	*sv_location;
@@ -192,7 +214,7 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	// doesn't cause a recursive drop client
 	if ( client->reliableSequence - client->reliableAcknowledge == MAX_RELIABLE_COMMANDS + 1 ) {
 		if ( client->gamestateMessageNum == -1 )  {
-			// invalid game state message 
+			// invalid game state message
 			// this can occur in SV_DropClient() to avoid calling it more than once
 			return;
 		}
@@ -214,7 +236,7 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 =================
 SV_SendServerCommand
 
-Sends a reliable command string to be interpreted by 
+Sends a reliable command string to be interpreted by
 the client game module: "cp", "print", "chat", etc
 A NULL client will broadcast to all clients
 =================
@@ -228,7 +250,7 @@ void QDECL SV_SendServerCommand(client_t *cl, const char *fmt, ...) {
 	if (!svs.clients) {
 		return;
 	}
-	
+
 	va_start (argptr,fmt);
 	Q_vsnprintf ((char *)message, sizeof(message), fmt,argptr);
 	va_end (argptr);
@@ -399,7 +421,7 @@ static leakyBucket_t *SVC_BucketForAddress( netadr_t address, int burst, int per
 			} else {
 				bucketHashes[ bucket->hash ] = bucket->next;
 			}
-			
+
 			if ( bucket->next != NULL ) {
 				bucket->next->prev = bucket->prev;
 			}
@@ -542,7 +564,7 @@ void SVC_Status( netadr_t from ) {
 		cl = &svs.clients[i];
 		if ( cl->state >= CS_CONNECTED ) {
 			ps = SV_GameClientNum( i );
-			Com_sprintf (player, sizeof(player), "%i \"%s\"\n", 
+			Com_sprintf (player, sizeof(player), "%i \"%s\"\n",
 			// su44: ps->persistant is not avaible in MoHAA
 			//	ps->persistant[PERS_SCORE], cl->ping, cl->name);
 				cl->ping, cl->name);
@@ -617,7 +639,7 @@ void SVC_Info( netadr_t from ) {
 	Info_SetValueForKey( infostring, "hostname", sv_hostname->string );
 	Info_SetValueForKey( infostring, "mapname", sv_mapname->string );
 	Info_SetValueForKey( infostring, "clients", va("%i", count) );
-	Info_SetValueForKey( infostring, "sv_maxclients", 
+	Info_SetValueForKey( infostring, "sv_maxclients",
 		va("%i", svs.iNumClients - sv_privateClients->integer ) );
 	Info_SetValueForKey( infostring, "gametype", va("%i", g_gametype->integer ) );
 	Info_SetValueForKey( infostring, "gametypestring", g_gametypestring->string );
@@ -715,7 +737,7 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 		Com_Printf ("Bad rconpassword.\n");
 	} else {
 		remaining[0] = 0;
-		
+
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=543
 		// get the command directly, "rcon <pass> <command>" to avoid quoting issues
 		// extract the command by walking
@@ -728,9 +750,9 @@ static void SVC_RemoteCommand( netadr_t from, msg_t *msg ) {
 			cmd_aux++;
 		while(cmd_aux[0]==' ')
 			cmd_aux++;
-		
+
 		Q_strcat( remaining, sizeof(remaining), cmd_aux);
-		
+
 		Cmd_ExecuteString (remaining);
 
 	}
@@ -851,7 +873,7 @@ void SV_PacketEvent( netadr_t from, msg_t *msg ) {
 		}
 		return;
 	}
-	
+
 	// if we received a sequenced packet from an address we don't recognize,
 	// send an out of band disconnect packet to it
 	SV_NET_OutOfBandPrint( &svs.netprofile, from, "disconnect" );
@@ -916,7 +938,7 @@ static void SV_CalcPings( void ) {
 ==================
 SV_CheckTimeouts
 
-If a packet has not been received from a client for timeout->integer 
+If a packet has not been received from a client for timeout->integer
 seconds, drop the conneciton.  Server time is used instead of
 realtime to avoid dropping the local client while debugging.
 
@@ -951,7 +973,7 @@ static void SV_CheckTimeouts( void ) {
 			// wait several frames so a debugger session doesn't
 			// cause a timeout
 			if ( ++cl->timeoutCount > 5 ) {
-				SV_DropClient (cl, "timed out"); 
+				SV_DropClient (cl, "timed out");
 				cl->state = CS_FREE;	// don't bother with zombie state
 			}
 		} else {
@@ -979,6 +1001,14 @@ qboolean SV_CheckPaused( void ) {
 		Com_Unpause();
 		return qfalse;
 	}
+
+#ifdef GODOT_GDEXTENSION
+	/* Never pause in multiplayer, even when hosting alone. */
+	if( deathmatch->integer || (g_gametype && g_gametype->integer != GT_SINGLE_PLAYER) ) {
+		Com_Unpause();
+		return qfalse;
+	}
+#endif
 
 	// only pause if there is just a single client connected
 	count = 0;
@@ -1017,9 +1047,9 @@ int SV_FrameMsec(void)
 	if(sv_fps)
 	{
 		int frameMsec;
-		
+
 		frameMsec = 1000.0f / sv_fps->value;
-		
+
 		if(frameMsec < sv.timeResidual)
 			return 0;
 		else
@@ -1051,7 +1081,7 @@ void SV_Frame( int msec ) {
 	if( !com_sv_running->integer )
 	{
 		// Running as a server, but no map loaded
-#ifdef DEDICATED
+#if defined(DEDICATED) && !defined(GODOT_GDEXTENSION)
 		// Block until something interesting happens
 		Sys_Sleep(-1);
 #endif
@@ -1070,7 +1100,7 @@ void SV_Frame( int msec ) {
 	if ( sv_fps->integer < 1 ) {
 		Cvar_Set( "sv_fps", "20" );
 	}
-    
+
 	frameMsec = 1000 / sv_fps->integer;
 	// don't let it scale below 1ms
 	if(frameMsec < 1)
@@ -1177,6 +1207,15 @@ void Com_Pause()
 		return;
 	}
 
+#ifdef GODOT_GDEXTENSION
+	/* In the Godot port the deathmatch cvar is not always explicitly set to 1
+	   by the launcher even when running a multiplayer game type.  MOHAA parity:
+	   never pause in any non-singleplayer game type (GT_SINGLE_PLAYER == 0). */
+	if( g_gametype && g_gametype->integer != 0 ) {
+		return;
+	}
+#endif
+
 	if( !com_sv_running->integer ) {
 		return;
 	}
@@ -1218,6 +1257,15 @@ Com_FakePause
 */
 void Com_FakePause()
 {
+#ifdef GODOT_GDEXTENSION
+	/* Never fake-pause in multiplayer — menus open but the game keeps running. */
+	if( deathmatch->integer ) {
+		return;
+	}
+	if( g_gametype && g_gametype->integer != GT_SINGLE_PLAYER ) {
+		return;
+	}
+#endif
 	if( !paused->integer ) {
 		Cvar_Set( "paused", "2" );
 	}
@@ -1283,7 +1331,7 @@ int SV_RateMsec(client_t *client)
 {
 	int rate, rateMsec;
 	int messageSize;
-	
+
 	messageSize = client->netchan.lastSentSize;
 	rate = client->rate;
 
@@ -1307,10 +1355,10 @@ int SV_RateMsec(client_t *client)
 		messageSize += UDPIP6_HEADER_SIZE;
 	else
 		messageSize += UDPIP_HEADER_SIZE;
-		
+
 	rateMsec = messageSize * 1000 / ((int) (rate * com_timescale->value));
 	rate = Sys_Milliseconds() - client->netchan.lastSentTime;
-	
+
 	if(rate > rateMsec)
 		return 0;
 	else

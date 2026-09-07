@@ -25,6 +25,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "qcommon.h"
 #include "q_version.h"
 #include <setjmp.h>
+
+#ifdef GODOT_GDEXTENSION
+/* In the Godot GDExtension build, the client subsystem is active.
+ * We un-define DEDICATED for this translation unit so that CL_Init,
+ * CL_Frame, S_Init, etc. are called from Com_Init / Com_Frame.
+ * Platform-specific SDL code lives in sys files which retain DEDICATED. */
+#undef DEDICATED
+#endif
 #ifndef _WIN32
 #include <netinet/in.h>
 #include <sys/stat.h> // umask
@@ -53,9 +61,18 @@ qboolean CL_FinishedIntro(void);
 extern "C" {
 #endif
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build these are owned by fgame/gamecvars.cpp.
+ * Keep only extern references here to avoid duplicate global storage on PE/COFF.
+ */
+extern cvar_t *sv_scriptfiles;
+extern cvar_t *g_scriptcheck;
+extern cvar_t *g_showopcodes;
+#else
 cvar_t *sv_scriptfiles;
 cvar_t *g_scriptcheck;
 cvar_t *g_showopcodes;
+#endif
 
 int demo_protocols[] =
 { 0, 0 }; // the first value of the array will be replaced by com_protocol
@@ -67,6 +84,20 @@ char	*com_argv[MAX_NUM_ARGVS+1];
 
 jmp_buf abortframe;		// an ERR_DROP occured, exit the entire frame
 
+#ifdef GODOT_GDEXTENSION
+// ERR_DROP notification for Godot — polled by MoHAARunner after Com_Frame().
+static qboolean godot_error_drop_pending = qfalse;
+static char     godot_error_drop_msg[MAXPRINTMSG];
+
+qboolean Godot_GetErrorDrop(char *buf, int bufsize) {
+	if (!godot_error_drop_pending) return qfalse;
+	godot_error_drop_pending = qfalse;
+	if (buf && bufsize > 0) {
+		Q_strncpyz(buf, godot_error_drop_msg, bufsize);
+	}
+	return qtrue;
+}
+#endif
 
 FILE *debuglogfile;
 static fileHandle_t pipefile;
@@ -79,7 +110,12 @@ cvar_t	*config;
 cvar_t	*fps;
 cvar_t	*fps_location;
 cvar_t	*com_speeds;
+#ifdef GODOT_GDEXTENSION
+/* In monolithic builds these cvar pointers are owned by fgame/gamecvars.cpp. */
+extern cvar_t *developer;
+#else
 cvar_t	*developer;
+#endif
 cvar_t	*com_dedicated;
 cvar_t	*com_timescale;
 cvar_t	*com_fixedtime;
@@ -98,8 +134,13 @@ cvar_t	*com_showtrace;
 cvar_t	*com_shortversion;
 cvar_t	*com_version;
 cvar_t	*autopaused;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *deathmatch;
+extern cvar_t *com_blood;
+#else
 cvar_t	*deathmatch;
 cvar_t	*com_blood;
+#endif
 cvar_t	*com_buildScript;	// for automated data building scripts
 cvar_t	*com_radar_range;
 cvar_t	*console_spam_filter;
@@ -126,7 +167,11 @@ cvar_t	*com_busyWait;
 cvar_t  *con_autochat;
 #endif
 
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *precache;
+#else
 cvar_t	*precache;
+#endif
 
 cvar_t	*com_target_game;
 cvar_t	*com_target_shortversion;
@@ -278,7 +323,7 @@ void QDECL Com_Printf( const char *fmt, ... ) {
 			newtime = localtime( &aclock );
 
 			logfile = FS_FOpenFileWrite_HomeData( "qconsole.log" );
-			
+
             // Remove recursive count as it won't be able to print relevant info
             recursive_count--;
 			if(logfile)
@@ -463,7 +508,9 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 #endif
 
 	// Debug builds should stop on this
+#ifndef GODOT_GDEXTENSION
 	assert(code != ERR_FATAL);
+#endif
 
 	Cvar_Set( "com_errorCode", va( "%i", code ) );
 
@@ -493,6 +540,10 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	Q_vsnprintf (com_errorMessage,sizeof(com_errorMessage),fmt,argptr);
 	va_end (argptr);
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[COM_ERROR] code=%d message=%s\n", code, com_errorMessage);
+#endif
+
 	if (code != ERR_DISCONNECT && code != ERR_NEED_CD)
 		Cvar_Set("com_errorMessage", com_errorMessage);
 
@@ -510,6 +561,11 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 		longjmp (abortframe, -1);
 	} else if (code == ERR_DROP) {
 		Com_Printf ("********************\nERROR: %s\n********************\n", com_errorMessage);
+#ifdef GODOT_GDEXTENSION
+		// Notify Godot of the ERR_DROP — polled by MoHAARunner after Com_Frame().
+		Q_strncpyz(godot_error_drop_msg, com_errorMessage, sizeof(godot_error_drop_msg));
+		godot_error_drop_pending = qtrue;
+#endif
         SV_Shutdown(va("Server crashed: %s", com_errorMessage));
 #ifndef DEDICATED
 		if (com_cl_running && com_cl_running->integer) {
@@ -536,6 +592,12 @@ void QDECL Com_Error( int code, const char *fmt, ... ) {
 	} else {
 		CL_Shutdown (va("Client fatal crashed: %s", com_errorMessage), qtrue, qtrue);
 		SV_Shutdown (va("Server fatal crashed: %s", com_errorMessage));
+#ifdef GODOT_GDEXTENSION
+		/* Under Godot, recover from ERR_FATAL via longjmp rather than aborting. */
+		FS_PureServerSetLoadedPaks("", "");
+		com_errorEntered = qfalse;
+		longjmp(abortframe, -1);
+#endif
 	}
 
 	Com_Shutdown ();
@@ -669,7 +731,7 @@ void Com_StartupVariable( const char *match ) {
 		}
 
 		s = Cmd_Argv(1);
-		
+
 		if(!match || !strcmp(s, match))
 		{
 			if(Cvar_Flags(s) == CVAR_NONEXISTENT)
@@ -1429,13 +1491,13 @@ void Com_Setenv_f(void)
 	if(argc > 2)
 	{
 		char *arg2 = Cmd_ArgsFrom(2);
-		
+
 		Sys_SetEnv(arg1, arg2);
 	}
 	else if(argc == 2)
 	{
 		char *env = getenv(arg1);
-		
+
 		if(env)
 			Com_Printf("%s=%s\n", arg1, env);
 		else
@@ -1490,12 +1552,12 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 		{
 			if(disconnect)
 				CL_Disconnect();
-				
+
 			CL_Shutdown("Game directory changed", disconnect, qfalse);
 		}
 
 		FS_Restart(checksumFeed);
-	
+
 		// Clean out any user and VM created cvars
 		Cvar_Restart(qtrue);
 		Com_ExecuteCfg();
@@ -1513,7 +1575,7 @@ void Com_GameRestart(int checksumFeed, qboolean disconnect)
 			CL_Init();
 			CL_StartHunkUsers(qfalse);
 		}
-		
+
 		com_gameRestarting = qfalse;
 		com_gameClientRestarting = qfalse;
 	}
@@ -1533,6 +1595,104 @@ void Com_GameRestart_f(void)
 
 	Com_GameRestart(0, qtrue);
 }
+
+#ifdef GODOT_GDEXTENSION
+/* Forward declaration — defined later in this file. */
+void Com_InitTargetGameWithType(target_game_e target_game, qboolean bIsDemo);
+
+/*
+ * Game-switch-completed flag — set by Com_SwitchGame_f after
+ * Com_GameRestart finishes.  MoHAARunner checks this after
+ * Com_Frame() to clear Godot-side caches and reload shaders.
+ * -1 = no switch happened.
+ */
+static volatile int godot_game_switch_completed = -1;
+
+int Godot_GetGameSwitchCompleted(void)
+{
+	return godot_game_switch_completed;
+}
+
+void Godot_ClearGameSwitchCompleted(void)
+{
+	godot_game_switch_completed = -1;
+}
+
+/*
+==================
+Com_SwitchGame_f
+
+Switch between Allied Assault (aa/0), Spearhead (sh/1), and Breakthrough (bt/2).
+Uses Com_GameRestart() for a proper engine-level restart: SV_Shutdown,
+CL_Shutdown (renderer, TIKI, sound), FS_Restart, Cvar_Restart, CL_Init.
+==================
+*/
+static void Com_SwitchGame_f(void)
+{
+	const char *arg;
+	int target;
+	char val[4];
+
+	if (Cmd_Argc() < 2) {
+		Com_Printf("Usage: switchgame <aa|sh|bt>\n");
+		Com_Printf("  aa (or 0) — Allied Assault  (main/)\n");
+		Com_Printf("  sh (or 1) — Spearhead       (mainta/)\n");
+		Com_Printf("  bt (or 2) — Breakthrough     (maintt/)\n");
+		Com_Printf("Current: %s (%d)\n",
+			com_target_game->integer == TG_MOH   ? "Allied Assault" :
+			com_target_game->integer == TG_MOHTA ? "Spearhead" :
+			com_target_game->integer == TG_MOHTT ? "Breakthrough" : "unknown",
+			com_target_game->integer);
+		return;
+	}
+
+	arg = Cmd_Argv(1);
+
+	if (!Q_stricmp(arg, "aa") || !Q_stricmp(arg, "0")) {
+		target = TG_MOH;
+	} else if (!Q_stricmp(arg, "sh") || !Q_stricmp(arg, "1")) {
+		target = TG_MOHTA;
+	} else if (!Q_stricmp(arg, "bt") || !Q_stricmp(arg, "2")) {
+		target = TG_MOHTT;
+	} else {
+		Com_Printf("Unknown game '%s'. Use aa, sh, or bt.\n", arg);
+		return;
+	}
+
+	if (target == com_target_game->integer) {
+		Com_Printf("Already running %s.\n",
+			target == TG_MOH   ? "Allied Assault" :
+			target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+		return;
+	}
+
+	Com_Printf("Switching to %s — engine restart via Com_GameRestart...\n",
+		target == TG_MOH   ? "Allied Assault" :
+		target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+
+	/* 1. Force-set com_target_game (overrides CVAR_INIT|CVAR_PROTECTED) */
+	Com_sprintf(val, sizeof(val), "%d", target);
+	Cvar_Set2("com_target_game", val, qtrue);
+
+	/* 2. Reconfigure protocols, version string, fs_basegame for the target game */
+	Com_InitTargetGameWithType((target_game_e)target, com_target_demo->integer);
+
+	/* 3. Perform a proper engine restart:
+	 *    SV_Shutdown → CL_Disconnect → CL_Shutdown (renderer, sound, TIKI)
+	 *    → FS_Restart (remount pk3s for new game dir)
+	 *    → Cvar_Restart → Com_ExecuteCfg
+	 *    → CL_Init (renderer re-init → BeginRegistration → R_Init)
+	 *    → CL_StartHunkUsers */
+	Com_GameRestart(0, qtrue);
+
+	/* 4. Signal the Godot side to clear its caches next frame */
+	godot_game_switch_completed = target;
+
+	Com_Printf("Game switch to %s complete.\n",
+		target == TG_MOH   ? "Allied Assault" :
+		target == TG_MOHTA ? "Spearhead" : "Breakthrough");
+}
+#endif /* GODOT_GDEXTENSION */
 
 #ifndef STANDALONE
 
@@ -1876,6 +2036,9 @@ void Com_Init( char *commandLine ) {
 	Cmd_SetCommandCompletionFunc( "writeconfig", Cmd_CompleteCfgName );
 	Cmd_AddCommand("pause", Com_Pause_f);
 	Cmd_AddCommand("game_restart", Com_GameRestart_f);
+#ifdef GODOT_GDEXTENSION
+	Cmd_AddCommand("switchgame", Com_SwitchGame_f);
+#endif
 
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
@@ -2242,13 +2405,13 @@ void Com_Frame( void ) {
 	int		msec, minMsec;
 	int		timeVal, timeValSV;
 	static int	lastTime = 0, bias = 0;
- 
+
 	int		timeBeforeFirstEvents;
 	int		timeBeforeServer;
 	int		timeBeforeEvents;
 	int		timeBeforeClient;
 	int		timeAfter;
-  
+
 
 	if ( setjmp (abortframe) ) {
 		return;			// an ERR_DROP was thrown
@@ -2275,7 +2438,21 @@ void Com_Frame( void ) {
 	timeAfter = 0;
 
 	// write config file if anything changed
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, defer config writes to reduce per-frame disk I/O.
+	// Write at most every 300 frames (~5 sec at 60 FPS).
+	{
+		static int config_write_countdown = 0;
+		if (cvar_modifiedFlags & CVAR_ARCHIVE) {
+			if (++config_write_countdown >= 300) {
+				config_write_countdown = 0;
+				Com_WriteConfiguration();
+			}
+		}
+	}
+#else
 	Com_WriteConfiguration();
+#endif
 
 #ifndef DEDICATED
     if (com_viewlog->modified) {
@@ -2295,6 +2472,10 @@ void Com_Frame( void ) {
 	}
 
     // Figure out how much time we have
+#ifdef GODOT_GDEXTENSION
+    // Godot drives frame timing; skip FPS cap computation entirely.
+    minMsec = 1;
+#else
     if (!com_timedemo->integer)
     {
         if (com_dedicated->integer)
@@ -2323,6 +2504,7 @@ void Com_Frame( void ) {
     }
     else
         minMsec = 1;
+#endif
 
     do
     {
@@ -2338,10 +2520,16 @@ void Com_Frame( void ) {
         else
             timeVal = Com_TimeVal(minMsec);
 
+#ifdef GODOT_GDEXTENSION
+        // Under Godot, never block — Godot drives the frame rate.
+        NET_Sleep(0);
+        break;
+#else
         if (com_busyWait->integer || timeVal < 1)
             NET_Sleep(0);
         else
             NET_Sleep(timeVal - 1);
+#endif
     } while (Com_TimeVal(minMsec));
 
     IN_Frame();
@@ -2405,6 +2593,18 @@ void Com_Frame( void ) {
 	//
 	// client system
 	//
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, input is injected directly via godot_input_bridge and
+	// local S->C packets are delivered in-process.  Skip the redundant
+	// second event loop pass, but still execute the command buffer to
+	// decrement 'wait' command timers.
+	if ( com_speeds->integer ) {
+		timeBeforeEvents = Sys_Milliseconds ();
+	}
+	if (CL_FinishedIntro()) {
+		Cbuf_Execute(msec);
+	}
+#else
 	//
 	// run event loop a second time to get server to client packets
 	// without a frame of latency
@@ -2416,6 +2616,7 @@ void Com_Frame( void ) {
 	if (CL_FinishedIntro()) {
 		Cbuf_Execute(msec);
 	}
+#endif
 
 
 	//
@@ -2975,12 +3176,12 @@ qboolean Com_IsVoipTarget(uint8_t *voipTargets, int voipTargetsSize, int clientN
 			if(voipTargets[index])
 				return qtrue;
 		}
-		
+
 		return qfalse;
 	}
 
 	index = clientNum >> 3;
-	
+
 	if(index < voipTargetsSize)
 		return (voipTargets[index] & (1 << (clientNum & 0x07)));
 
@@ -3016,7 +3217,7 @@ static qboolean Field_CompletePlayerNameFinal( qboolean whitespace )
 	return qfalse;
 }
 
-static void Name_PlayerNameCompletion( const char **names, int nameCount, void(*callback)(const char *s) ) 
+static void Name_PlayerNameCompletion( const char **names, int nameCount, void(*callback)(const char *s) )
 {
 	int i;
 
@@ -3093,7 +3294,7 @@ qboolean Com_PlayerNameToFieldString( char *str, int length, const char *name )
 			i += 4;
 		} else {
 			str[i] = *p;
-		}		
+		}
 	}
 	str[i] = '\0';
 
@@ -3120,13 +3321,13 @@ void Field_CompletePlayerName( const char **names, int nameCount )
 	//allow to tab player names
 	//if full player name switch to next player name
 	if( completionString[0] != '\0'
-		&& Q_stricmp( shortestMatch, completionString ) == 0 
-		&& nameCount > 1 ) 
+		&& Q_stricmp( shortestMatch, completionString ) == 0
+		&& nameCount > 1 )
 	{
 		int i;
 
 		for( i = 0; i < nameCount; i++ ) {
-			if( Q_stricmp( names[ i ], completionString ) == 0 ) 
+			if( Q_stricmp( names[ i ], completionString ) == 0 )
 			{
 				i++;
 				if( i >= nameCount )
@@ -3143,7 +3344,7 @@ void Field_CompletePlayerName( const char **names, int nameCount )
 	if( matchCount > 1 )
 	{
 		Com_Printf( "]%s\n", completionField->buffer );
-		
+
 		Name_PlayerNameCompletion( names, nameCount, PrintMatches );
 	}
 

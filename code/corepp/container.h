@@ -30,11 +30,23 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 //
 #    include "../fgame/g_local.h"
 
-#    define CONTAINER_Error          gi.Error
-#    define CONTAINER_DPrintf        gi.DPrintf
-#    define CONTAINER_WDPrintf(text) gi.DPrintf(text)
-#    define CONTAINER_Alloc          gi.Malloc
-#    define CONTAINER_Free           gi.Free
+#    ifdef GODOT_GDEXTENSION
+// Monolithic build: use engine functions directly since gi pointers
+// are not populated when corepp code is called from CL_Init.
+extern "C" void *Z_Malloc(int size);
+extern "C" void  Z_Free(void *ptr);
+#        define CONTAINER_Error          Com_Error
+#        define CONTAINER_DPrintf        Com_DPrintf
+#        define CONTAINER_WDPrintf(text) Com_DPrintf(text)
+#        define CONTAINER_Alloc          Z_Malloc
+#        define CONTAINER_Free           Z_Free
+#    else
+#        define CONTAINER_Error          gi.Error
+#        define CONTAINER_DPrintf        gi.DPrintf
+#        define CONTAINER_WDPrintf(text) gi.DPrintf(text)
+#        define CONTAINER_Alloc          gi.Malloc
+#        define CONTAINER_Free           gi.Free
+#    endif
 
 #elif defined(CGAME_DLL)
 //

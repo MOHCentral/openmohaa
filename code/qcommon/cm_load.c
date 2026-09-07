@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "cm_local.h"
 #include "../client/client.h"
+#include "alias.h"
 
 #ifdef BSPC
 
@@ -782,14 +783,38 @@ int CM_LoadLump( fileHandle_t handle, lump_t *lump, gamelump_t *glump, int size 
 	glump->buffer = NULL;
 	glump->length = lump->filelen;
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[CMDBG] CM_LoadLump handle=%d ofs=%d len=%d size=%d\n", (int)handle, lump->fileofs, lump->filelen, size);
+#endif
+
 	if( lump->filelen ) {
 		glump->buffer = Hunk_AllocateTempMemory( lump->filelen );
 
-		if( FS_Seek( handle, lump->fileofs, FS_SEEK_SET ) < 0 ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[CMDBG] CM_LoadLump allocated temp len=%d\n", lump->filelen);
+#endif
+
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[CMDBG] calling FS_Seek handle=%d ofs=%d\n", (int)handle, lump->fileofs);
+		Com_Printf("[CMDBG] pre-seek FS_FTell=%ld\n", (long)FS_FTell(handle));
+		#endif
+		int seek_ret = FS_Seek( handle, lump->fileofs, FS_SEEK_SET );
+		#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[CMDBG] FS_Seek returned %d\n", seek_ret);
+		#endif
+		if( seek_ret < 0 ) {
 			Com_Error( ERR_DROP, "CM_LoadLump: Error seeking to lump." );
 		}
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[CMDBG] CM_LoadLump seek ok ofs=%d\n", lump->fileofs);
+#endif
+
 		FS_Read( glump->buffer, lump->filelen, handle );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+		Com_Printf("[CMDBG] CM_LoadLump read ok len=%d\n", lump->filelen);
+#endif
 
 		if( size ) {
 			return lump->filelen / size;
@@ -838,6 +863,10 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		Com_Error( ERR_DROP, "CM_LoadMap: NULL name" );
 	}
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[CMDBG] enter CM_LoadMap name=%s clientload=%d\n", name, (int)clientload);
+#endif
+
 #ifndef BSPC
 	cm_noAreas = Cvar_Get( "cm_noAreas", "0", CVAR_CHEAT );
 	cm_noCurves = Cvar_Get( "cm_noCurves", "0", CVAR_CHEAT );
@@ -882,7 +911,15 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		Com_Error( ERR_DROP, "Couldn't load %s", name );
 	}
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[CMDBG] opened BSP len=%d\n", length);
+#endif
+
 	FS_Read( &header, sizeof( dheader_t ), h );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[CMDBG] read header checksum(raw)=%d version(raw)=%d\n", header.checksum, header.version);
+#endif
 
 	last_checksum = LittleLong(header.checksum);
 	*checksum = last_checksum;
@@ -900,6 +937,10 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 
 	// load into heap
 	_R( 0 );
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	Com_Printf("[CMDBG] UI_LoadResource *0 done\n");
+#endif
 	CM_LoadLump( h, Q_GetLumpByVersion( &header, LUMP_SHADERS ), &lump, 0);
 	_R( 1 );
 	CMod_LoadShaders( &lump, &shaderSubdivisions );

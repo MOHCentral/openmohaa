@@ -2502,8 +2502,7 @@ void UIWidgetContainer::AlignPosition(void)
     } else if (m_align & WA_RIGHT) {
         m_frame.pos.x = uid.vidWidth - m_frame.size.width;
     } else {
-        // default to center
-        m_frame.pos.x = (uid.vidWidth - m_frame.size.width) * 0.5;
+        m_frame.pos.x = 0;
     }
 
     if (m_align & WA_BOTTOM) {
@@ -2511,8 +2510,7 @@ void UIWidgetContainer::AlignPosition(void)
     } else if (m_align & WA_TOP) {
         m_frame.pos.y = 0;
     } else {
-        // default to center
-        m_frame.pos.y = (uid.vidHeight - m_frame.size.height) * 0.5;
+        m_frame.pos.y = 0;
     }
 
     setFrame(m_frame);

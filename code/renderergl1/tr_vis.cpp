@@ -72,7 +72,13 @@ int             numVisBytes;
 static char     mapname[256];
 static qboolean prev_showportal = qfalse;
 
+#ifdef GODOT_GDEXTENSION
+/* Under GODOT_GDEXTENSION, make AllocWinding static to avoid conflict
+ * with the definition in navigation_bsp_utils.cpp (different allocator). */
+static winding_t *AllocWinding(int points)
+#else
 winding_t *AllocWinding(int points)
+#endif
 {
     winding_t *w;
     int        s;

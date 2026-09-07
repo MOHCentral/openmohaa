@@ -26,10 +26,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef __QGL_H__
 #define __QGL_H__
 
-#ifdef USE_INTERNAL_SDL_HEADERS
-#	include "SDL_opengl.h"
+#ifdef GODOT_GDEXTENSION
+/* Under Godot GDExtension, provide GL types without SDL/OpenGL. */
+#	include "../renderergl1/godot_gl_defs.h"
 #else
-#	include <SDL_opengl.h>
+#	ifdef USE_INTERNAL_SDL_HEADERS
+#		include "SDL_opengl.h"
+#	else
+#		include <SDL_opengl.h>
+#	endif
 #endif
 
 extern void (APIENTRYP qglActiveTextureARB) (GLenum texture);

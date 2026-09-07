@@ -292,6 +292,7 @@ static int R_CullStaticModel(dtiki_t *tiki, float fScale, const vec3_t vLocalOrg
 R_AddStaticModelSurfaces
 ==============
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddStaticModelSurfaces(void)
 {
     cStaticModelUnpacked_t *SM;
@@ -499,6 +500,7 @@ void RB_Static_BuildDLights()
         backEnd.currentStaticModel->useSpecialLighting = qfalse;
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddStaticModelSurfaces, RB_Static_BuildDLights) */
 
 /*
 ==============

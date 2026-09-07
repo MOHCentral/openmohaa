@@ -127,6 +127,7 @@ static int R_RecursiveDlightPatch(patchLightBlock_t *plb)
 R_RealDlightPatch
 ===============
 */
+#ifndef GODOT_GDEXTENSION
 int R_RealDlightPatch(srfGridMesh_t *srf, int dlightBits)
 {
     int         x, y;
@@ -730,6 +731,7 @@ void R_DlightBmodel(bmodel_t *bmodel)
         }
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_RealDlightPatch, R_RealDlightFace, R_RealDlightTerrain, R_TransformDlights, R_DlightBmodel) */
 
 /*
 ===============
@@ -1312,6 +1314,7 @@ static int RB_GetEntityGridLighting()
 RB_SetupEntityGridLighting
 ===============
 */
+#ifndef GODOT_GDEXTENSION
 void RB_SetupEntityGridLighting()
 {
     trRefEntity_t *ent;
@@ -1420,6 +1423,7 @@ void RB_SetupStaticModelGridLighting(trRefdef_t *refdef, cStaticModelUnpacked_t 
     ((byte *)&ent->iGridLighting)[2] = myftol(vLight[2]);
     ((byte *)&ent->iGridLighting)[3] = 0xff;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (RB_SetupEntityGridLighting, RB_SetupStaticModelGridLighting) */
 
 /*
 =============================================================================
@@ -1467,6 +1471,7 @@ static void LogLight(trRefEntity_t *ent)
 R_ClearRealDlights
 ===============
 */
+#ifndef GODOT_GDEXTENSION
 void R_ClearRealDlights()
 {
     memset(dli.allocated, 0, sizeof(dli.allocated));
@@ -1505,6 +1510,7 @@ void R_UploadDlights()
         memset(dli.allocated, 0, sizeof(dli.allocated));
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_ClearRealDlights, R_UploadDlights) */
 
 /*
 ===============

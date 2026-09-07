@@ -55,7 +55,12 @@ typedef struct worknode_s {
     int j2;
 } worknode_t;
 
+#ifdef GODOT_GDEXTENSION
+/* In the monolithic Godot build this is owned by qcommon/cm_terrain.c. */
+extern "C" { extern varnodeIndex_t g_vni[2][8][8][2]; }
+#else
 varnodeIndex_t g_vni[2][8][8][2];
+#endif
 
 static int modeTable[] = {2, 2, 5, 6, 4, 3, 0, 0};
 

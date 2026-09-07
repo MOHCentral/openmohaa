@@ -22,6 +22,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "ui_local.h"
 
+#ifdef GODOT_GDEXTENSION
+extern "C" void  Godot_Renderer_SetFontScale(float scale);
+extern "C" float Godot_Renderer_GetFontScale(void);
+#endif
+
 Event W_Console_ChildSizeChanged
 (
 	"_console_childsizechanged",
@@ -419,6 +424,22 @@ void UIConsole::Draw(void)
 {
 	const UColor *pCurrColor;
 
+#ifdef GODOT_GDEXTENSION
+	/* Apply console font scale for all text rendered by this widget. */
+	float oldScale = Godot_Renderer_GetFontScale();
+	if (ui_console_scale && ui_console_scale->value > 0.0f) {
+		Godot_Renderer_SetFontScale(oldScale * ui_console_scale->value);
+	}
+
+	/* Recalculate page height for scaled font so the scroll widget
+	 * knows how many lines actually fit in the visible area. */
+	{
+		int scaledLinesPerPage = (int)(m_frame.size.height / (float)m_font->getHeight(getHighResScale()));
+		if (scaledLinesPerPage < 2) scaledLinesPerPage = 2;
+		m_scroll->setPageHeight(scaledLinesPerPage - 1);
+	}
+#endif
+
 	m_font->setColor(m_foreground_color);
 	pCurrColor = &m_foreground_color;
 
@@ -438,18 +459,27 @@ void UIConsole::Draw(void)
 		topitem = m_scroll->getTopItem() - 1;
 
 		if (item == -1) {
+#ifdef GODOT_GDEXTENSION
+			Godot_Renderer_SetFontScale(oldScale);
+#endif
 			return;
 		}
 
 		for (i = m_items[item].lines; i < topitem; i += m_items[item].lines) {
 			item = getNextItem(item);
 			if (item == -1) {
+#ifdef GODOT_GDEXTENSION
+				Godot_Renderer_SetFontScale(oldScale);
+#endif
 				return;
 			}
 		}
 
 		if (item == -1) {
 			// no item available
+#ifdef GODOT_GDEXTENSION
+			Godot_Renderer_SetFontScale(oldScale);
+#endif
 			return;
 		}
 
@@ -500,6 +530,10 @@ void UIConsole::Draw(void)
 	}
 
 	DrawBottomLine();
+
+#ifdef GODOT_GDEXTENSION
+	Godot_Renderer_SetFontScale(oldScale);
+#endif
 }
 
 void UIConsole::CharEvent(int ch)
@@ -649,6 +683,46 @@ qboolean UIConsole::KeyEvent(int key, unsigned int time)
 			m_caret++;
 		}
 		break;
+
+	case 'v':
+	case 'V':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			const char *clip = uii.Sys_GetClipboard();
+			if (clip && clip[0]) {
+				if (m_caret >= m_currentline.length()) {
+					m_currentline.append(clip);
+				} else {
+					m_currentline = str(m_currentline, 0, (int)m_caret) + clip + (m_currentline.c_str() + m_caret);
+				}
+				m_caret += strlen(clip);
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
+
+	case 'c':
+	case 'C':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+			}
+			break;
+		}
+		return false;
+
+	case 'x':
+	case 'X':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+				m_currentline             = "";
+				m_caret                   = 0;
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
 
 	case K_DEL:
 		if (m_caret >= m_currentline.length()) {
@@ -1126,6 +1200,46 @@ qboolean UIDMConsole::KeyEvent(int key, unsigned int time)
 			m_caret++;
 		}
 		break;
+
+	case 'v':
+	case 'V':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			const char *clip = uii.Sys_GetClipboard();
+			if (clip && clip[0]) {
+				if (m_caret >= m_currentline.length()) {
+					m_currentline.append(clip);
+				} else {
+					m_currentline = str(m_currentline, 0, (int)m_caret) + clip + (m_currentline.c_str() + m_caret);
+				}
+				m_caret += strlen(clip);
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
+
+	case 'c':
+	case 'C':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+			}
+			break;
+		}
+		return false;
+
+	case 'x':
+	case 'X':
+		if (uii.Sys_IsKeyDown(K_CTRL)) {
+			if (m_currentline.length()) {
+				uii.Sys_SetClipboard(m_currentline.c_str());
+				m_currentline             = "";
+				m_caret                   = 0;
+				m_refreshcompletionbuffer = true;
+			}
+			break;
+		}
+		return false;
 
 	case K_DEL:
 		if (m_caret >= m_currentline.length()) {

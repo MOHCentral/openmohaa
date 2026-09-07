@@ -78,9 +78,14 @@ Player     *g_pPlayer;
 
 gclient_t g_clients[MAX_CLIENTS];
 
+#ifndef GODOT_GDEXTENSION
+// In monolithic Godot builds, the server's SV_Malloc/SV_Free/SV_Error
+// actual function implementations from sv_game.c are used directly.
+// These function pointers would shadow them and start as NULL.
 void (*SV_Error)(int type, const char *fmt, ...);
 void *(*SV_Malloc)(int size);
 void (*SV_Free)(void *ptr);
+#endif
 
 qboolean LevelArchiveValid(Archiver& arc);
 void     ClosePlayerLogFile(void);
@@ -362,6 +367,10 @@ void G_ShutdownGame()
 
 //===================================================================
 
+#ifndef GODOT_GDEXTENSION
+// In monolithic Godot builds, the engine's Com_Error/Com_Printf from
+// common.c are used directly. These wrappers call through the gi import
+// table which isn't populated until later.
 void QDECL Com_Error(int level, const char *error, ...)
 {
     va_list argptr;
@@ -385,6 +394,7 @@ void QDECL Com_Printf(const char *msg, ...)
 
     gi.DPrintf("%s", text);
 }
+#endif
 
 /*
 ================

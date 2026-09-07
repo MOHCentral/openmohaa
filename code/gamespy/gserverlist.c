@@ -42,14 +42,14 @@ Fax(714)549-0757
 #if defined(applec) || defined(THINK_C) || defined(__MWERKS__) && !defined(__KATANA__)
     #include "::nonport.h"
 #else
-    #include "../nonport.h"
+    #include "nonport.h"
 #endif
 #ifdef _MACOS
     #include "::darray.h"
     #include "::hashtable.h"
 #else
-    #include "../darray.h"
-    #include "../hashtable.h"
+    #include "darray.h"
+    #include "hashtable.h"
 #endif
 #include "common/gsPlatformSocket.h"
 #include "gutil.h"

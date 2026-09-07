@@ -24,7 +24,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 #include "../corepp/tiki.h"
 
+#ifndef GODOT_GDEXTENSION
 trGlobals_t		tr;
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (tr) */
 
 static float	s_flipMatrix[16] = {
 	// convert from our coordinate system (looking down X)
@@ -36,7 +38,9 @@ static float	s_flipMatrix[16] = {
 };
 
 
+#ifndef GODOT_GDEXTENSION
 refimport_t	ri;
+#endif /* !GODOT_GDEXTENSION — defined in godot_renderer.c */
 
 // entities that will have procedurally generated surfaces will just
 // point at this for their sorting surface
@@ -231,6 +235,7 @@ R_TransformModelToClip
 
 ==========================
 */
+#ifndef GODOT_GDEXTENSION
 void R_TransformModelToClip( const vec3_t src, const float *modelMatrix, const float *projectionMatrix,
 							vec4_t eye, vec4_t dst ) {
 	int i;
@@ -270,6 +275,7 @@ void R_TransformClipToWindow( const vec4_t clip, const viewParms_t *view, vec4_t
 	window[0] = (int) ( window[0] + 0.5 );
 	window[1] = (int) ( window[1] + 0.5 );
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_TransformModelToClip, R_TransformClipToWindow) */
 
 
 /*
@@ -324,6 +330,7 @@ Does NOT produce any GL calls
 Called by both the front end and the back end
 =================
 */
+#ifndef GODOT_GDEXTENSION
 void R_RotateForEntity( const trRefEntity_t *ent, const viewParms_t *viewParms,
 					   orientationr_t *ori ) {
 	float	glMatrix[16];
@@ -484,6 +491,7 @@ void R_RotateForViewer (void)
 	tr.viewParms.world = tr.ori;
 
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_RotateForEntity, R_RotateForStaticModel, R_RotateForViewer) */
 
 /*
 ** SetFarClip
@@ -1547,6 +1555,7 @@ void R_DebugGraphics( void ) {
 R_DebugCircle
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_DebugCircle(const vec3_t org, float radius, float r, float g, float b, float alpha, qboolean horizontal) {
     int				i;
     float			ang;
@@ -1630,6 +1639,7 @@ void R_DebugLine(const vec3_t start, const vec3_t end, float r, float g, float b
 	line->factor = 1;
 	line->pattern = -1;
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_DebugCircle, R_DebugLine) */
 
 /*
 ================
@@ -1762,6 +1772,7 @@ A view may be either the actual camera view,
 or a mirror / remote location
 ================
 */
+#ifndef GODOT_GDEXTENSION
 void R_RenderView (viewParms_t *parms) {
 	int		firstDrawSurf;
 	int		firstSpriteSurf;
@@ -1803,6 +1814,7 @@ void R_RenderView (viewParms_t *parms) {
 	// draw main system development information (surface outlines, etc)
 	R_DebugGraphics();
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_RenderView) */
 
 
 

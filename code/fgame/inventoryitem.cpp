@@ -80,5 +80,13 @@ void InventoryItem::ActivateItem(Event *ev)
 
 void InventoryItem::ActivatePapers(Event *ev)
 {
+#ifdef GODOT_GDEXTENSION
+    // Fixed: GetOwner() can return NULL if the item has no owner when the event fires.
+    Sentient *pOwner = GetOwner();
+    if (pOwner) {
+        pOwner->m_ShowPapersTime = level.inttime;
+    }
+#else
     GetOwner()->m_ShowPapersTime = level.inttime;
+#endif
 }

@@ -23,6 +23,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+#include "net_ws.h"
+#endif
+
 #ifdef _WIN32
 #	include <winsock2.h>
 #	include <ws2tcpip.h>
@@ -648,6 +652,11 @@ Sys_SendPacket
 ==================
 */
 void Sys_SendPacket( int length, const void *data, netadr_t to ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	/* Route through WebSocket relay — see net_ws.c */
+	NET_WS_SendPacket(length, data, to);
+	return;
+#else
 	int				ret = SOCKET_ERROR;
 	struct sockaddr_storage	addr;
 
@@ -700,6 +709,7 @@ void Sys_SendPacket( int length, const void *data, netadr_t to ) {
 
 		Com_Printf( "Sys_SendPacket: %s\n", NET_ErrorString() );
 	}
+#endif /* !__EMSCRIPTEN__ */
 }
 
 
@@ -1355,6 +1365,11 @@ NET_OpenIP
 ====================
 */
 void NET_OpenIP( void ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	/* WebSocket relay handles all networking — no BSD sockets needed */
+	Com_Printf("NET_OpenIP: Using WebSocket relay transport\n");
+	return;
+#else
 	int		i;
 	int		err;
 	int		port;
@@ -1411,6 +1426,7 @@ void NET_OpenIP( void ) {
 		if(ip_socket == INVALID_SOCKET)
 			Com_Printf( "WARNING: Couldn't bind to a v4 ip address.\n");
 	}
+#endif /* !__EMSCRIPTEN__ */
 }
 
 
@@ -1594,6 +1610,10 @@ void NET_Init( void ) {
 	NET_Config( qtrue );
 	
 	Cmd_AddCommand ("net_restart", NET_Restart_f);
+
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	NET_WS_Init();
+#endif
 }
 
 
@@ -1603,6 +1623,10 @@ NET_Shutdown
 ====================
 */
 void NET_Shutdown( void ) {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	NET_WS_Shutdown();
+#endif
+
 	if ( !networkingEnabled ) {
 		return;
 	}
@@ -1661,6 +1685,11 @@ Sleeps msec or until something happens on the network
 */
 void NET_Sleep(int msec)
 {
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	/* Process WebSocket relay queue instead of BSD select() */
+	NET_WS_Poll();
+	return;
+#else
 	struct timeval timeout;
 	fd_set fdr;
 	int retval;
@@ -1703,6 +1732,7 @@ void NET_Sleep(int msec)
 		Com_Printf("Warning: select() syscall failed: %s\n", NET_ErrorString());
 	else if(retval > 0)
 		NET_Event(&fdr);
+#endif /* !__EMSCRIPTEN__ */
 }
 
 /*

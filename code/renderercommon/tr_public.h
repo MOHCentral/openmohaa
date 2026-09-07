@@ -179,6 +179,11 @@ typedef struct {
     qboolean (*LoadRawImage)(const char *name, byte **pic, int *width, int *height);
     void (*FreeRawImage)(byte *pic);
 
+#ifdef GODOT_GDEXTENSION
+    void (*AddMuzzleFlash)(const vec3_t origin, const vec3_t dir, float intensity);
+    void (*AddShellCasing)(const vec3_t origin, const vec3_t velocity, int type);
+#endif
+
     void (*Set2DInitialShaderTime)(float startTime);
 } refexport_t;
 

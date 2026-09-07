@@ -30,8 +30,8 @@ extern "C" {
     #include "::hashtable.h"
     #include "::nonport.h"
 #else
-    #include "../hashtable.h"
-    #include "../nonport.h"
+    #include "hashtable.h"
+    #include "nonport.h"
 #endif
 
 struct GServerImplementation

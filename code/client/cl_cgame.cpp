@@ -548,7 +548,15 @@ void CL_ShutdownCGame( void ) {
 		re.FreeModels();
 	}
 
+#if defined(GODOT_GDEXTENSION) && defined(__EMSCRIPTEN__)
+	// On Emscripten, cgame.so is never truly unloaded (dlclose is a no-op).
+	// Its static data (Event::commandList, MEM_BlockAlloc blocks) persists
+	// and was allocated via cgi.Malloc → Z_TagMalloc(TAG_CGAME).
+	// Freeing TAG_CGAME here would invalidate those hash table entries,
+	// causing FindEventNum lookups to fail on subsequent map loads.
+#else
 	Z_FreeTags( TAG_CGAME );
+#endif
 }
 
 static int	FloatAsInt( float f ) {
@@ -687,6 +695,11 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->R_GetLightingForDecal			= re.GetLightingForDecal;
 	cgi->R_GetLightingForSmoke			= re.GetLightingForSmoke;
 	cgi->R_GatherLightSources			= re.R_GatherLightSources;
+
+#ifdef GODOT_GDEXTENSION
+	cgi->AddMuzzleFlash					= re.AddMuzzleFlash;
+	cgi->AddShellCasing					= re.AddShellCasing;
+#endif
 
 	cgi->S_StartSound					= S_StartSound;
 	cgi->S_StartLocalSound				= CL_StartLocalSound;
@@ -834,6 +847,7 @@ void CL_InitCGameDLL( clientGameImport_t *cgi, clientGameExport_t **cge ) {
 	cgi->stopWatch					= &cls.stopwatch;
 	// FIXME
 	//cgi->pUnknownVar				= NULL;
+
 
 	cls.cgameStarted = qtrue;
 }
@@ -1004,6 +1018,33 @@ void CL_CGameRendering( stereoFrame_t stereo ) {
 		cl.serverTime = cl.serverStartTime;
 		cl.oldServerTime = cl.serverStartTime;
 	}
+
+#ifdef GODOT_GDEXTENSION
+	// Under Godot, CL_CGameRendering is called twice per frame during
+	// CA_ACTIVE: once from the explicit SCR_DrawScreenField() in
+	// UpdateStereoSide, and again from View3D::Draw().  Only the second
+	// call is followed by CG_Draw2D (via View3D::Draw2D), which needs
+	// cg.frametime to be non-zero for zoom overlay alpha accumulation.
+	//
+	// Running CG_DrawActiveFrame twice with the full delta would double
+	// all time-dependent effects (animation speed, view bob, etc.).
+	// Fix: skip the first (redundant) call during CA_ACTIVE — View3D
+	// will handle it.  During CA_LOADING/CA_PRIMED, View3D doesn't fire,
+	// so we must not skip.
+	{
+		static int lastCalledFrame = -1;
+		if (clc.state == CA_ACTIVE && cls.framecount == lastCalledFrame) {
+			// Second call this frame — this is the View3D path.
+			// Run normally; the delta is correct because we skipped
+			// the first call (oldServerTime was NOT updated).
+		} else if (clc.state == CA_ACTIVE) {
+			// First call this frame during active gameplay — skip it.
+			// View3D::Draw() → SCR_DrawScreenField() will call us again.
+			lastCalledFrame = cls.framecount;
+			return;
+		}
+	}
+#endif
 
 	cge->CG_DrawActiveFrame( cl.serverTime, cl.serverTime - cl.oldServerTime, stereo, clc.demoplaying );
 

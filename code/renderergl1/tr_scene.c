@@ -98,6 +98,7 @@ DISCRETE POLYS
 ===========================================================================
 */
 
+#ifndef GODOT_GDEXTENSION
 /*
 =====================
 R_AddPolygonSurfaces
@@ -105,6 +106,7 @@ R_AddPolygonSurfaces
 Adds all the scene's polys into this view's drawsurf list
 =====================
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddPolygonSurfaces( void ) {
 	int			i;
 	shader_t	*sh;
@@ -118,6 +120,8 @@ void R_AddPolygonSurfaces( void ) {
 		R_AddDrawSurf( ( void * )poly, sh, qfalse );
 	}
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddPolygonSurfaces) */
+#endif
 
 /*
 =====================
@@ -151,11 +155,13 @@ qboolean RE_AddPolyToScene(qhandle_t hShader, int numVerts, const polyVert_t* ve
 	return qtrue;
 }
 
+#ifndef GODOT_GDEXTENSION
 /*
 =====================
 R_AddTerrainMarkSurfaces
 =====================
 */
+#ifndef GODOT_GDEXTENSION
 void R_AddTerrainMarkSurfaces(void) {
     srfMarkFragment_t* terMark;
     int j;
@@ -170,6 +176,8 @@ void R_AddTerrainMarkSurfaces(void) {
         R_AddDrawSurf(&terMark->surfaceType, shader, 0);
     }
 }
+#endif /* !GODOT_GDEXTENSION — stub in tr_godot_gl_stubs.c (R_AddTerrainMarkSurfaces) */
+#endif
 
 /*
 =====================

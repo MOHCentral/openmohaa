@@ -36,6 +36,12 @@ extern cvar_t *ui_health_start;
 extern cvar_t *ui_health_end;
 extern cvar_t *sound_overlay;
 extern cvar_t *cl_movieaudio;
+#ifdef GODOT_GDEXTENSION
+extern cvar_t *ui_dmbox_scale;
+extern cvar_t *ui_gmbox_scale;
+extern cvar_t *ui_console_scale;
+extern cvar_t *ui_minicon_scale;
+#endif
 
 //
 // initialization
