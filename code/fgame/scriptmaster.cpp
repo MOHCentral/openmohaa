@@ -24,15 +24,23 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "g_local.h"
 #include "scriptmaster.h"
+#include "dapserver.h"
 #include "scriptthread.h"
 #include "scriptclass.h"
 #include "gamescript.h"
+#include "scriptvariable.h"
 #include "game.h"
 #include "g_spawn.h"
 #include "object.h"
 #include "worldspawn.h"
 #include "scriptcompiler.h"
 #include "scriptexception.h"
+
+#ifdef USE_HTTP
+#include "curlworker.h"
+#endif
+
+#include <cstdio>
 
 #ifdef WIN32
 #    include <direct.h>
@@ -115,10 +123,59 @@ Event EV_Cache
     "pre-cache the given resource."
 );
 
+#ifdef USE_HTTP
+// Default timeout for curl requests (in seconds)
+static int s_curlTimeout = 30;
+
+Event EV_ScriptMaster_CurlGet(
+    "curl_get",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP GET request asynchronously.\n"
+    "Usage: curl_get url headers callback\n"
+    "Calls the callback label with (success, data, http_code)."
+);
+
+Event EV_ScriptMaster_CurlPost(
+    "curl_post",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP POST request asynchronously.\n"
+    "Usage: curl_post url headers data callback\n"
+    "Calls the callback label with (success, data, http_code)."
+);
+
+Event EV_ScriptMaster_CurlCustom(
+    "curl_custom",
+    EV_DEFAULT,
+    NULL,
+    NULL,
+    "Performs an HTTP custom request asynchronously.\n"
+    "Usage: curl_custom method url headers data callback\n"
+    "Calls the callback label with (success, data, http_code)."
+);
+
+Event EV_ScriptMaster_CurlSetTimeout(
+    "curl_set_timeout",
+    EV_DEFAULT,
+    "i",
+    "timeout",
+    "Sets the default timeout for curl requests in seconds."
+);
+#endif
+
 CLASS_DECLARATION(Listener, ScriptMaster, NULL) {
     {&EV_RegisterAliasAndCache, &ScriptMaster::RegisterAliasAndCache},
     {&EV_RegisterAlias,         &ScriptMaster::RegisterAlias        },
     {&EV_Cache,                 &ScriptMaster::Cache                },
+#ifdef USE_HTTP
+    {&EV_ScriptMaster_CurlGet,  &ScriptMaster::CurlGet              },
+    {&EV_ScriptMaster_CurlPost, &ScriptMaster::CurlPost             },
+    {&EV_ScriptMaster_CurlCustom, &ScriptMaster::CurlCustom         },
+    {&EV_ScriptMaster_CurlSetTimeout, &ScriptMaster::CurlSetTimeout },
+#endif
     {NULL,                      NULL                                }
 };
 
@@ -411,6 +468,10 @@ const char *ScriptMaster::ConstStrings[] = {
 
 ScriptMaster::~ScriptMaster()
 {
+#ifdef USE_HTTP
+    g_CurlWorker.Stop();
+    curl_global_cleanup();
+#endif
     Reset(false);
 }
 
@@ -573,6 +634,211 @@ void ScriptMaster::Cache(Event *ev)
     CacheResource(ev->GetString(1));
 }
 
+#ifdef USE_HTTP
+
+static void ExtractHeaders(Event *ev, int argIndex, std::vector<std::string>& headers) {
+    if (ev->NumArgs() >= argIndex && !ev->IsNilAt(argIndex)) {
+        ScriptVariable& var = ev->GetValue(argIndex);
+        gi.Printf("ExtractHeaders: arg %d type=%d\n", argIndex, var.GetType());
+        if (var.GetType() == VARIABLE_ARRAY || var.GetType() == VARIABLE_CONSTARRAY) {
+             var.CastConstArrayValue();
+             int size = var.arraysize();
+             gi.Printf("ExtractHeaders: array size=%d\n", size);
+             
+             // makearray creates nested arrays: each element is [key, value]
+             // So headers[1] = ["Content-Type", "application/json"], headers[2] = ["X-Server-Token", "xxx"]
+             for (int i = 1; i <= size; i++) {
+                 ScriptVariable* elemVar = var[i];
+                 if (!elemVar) continue;
+                 
+                 gi.Printf("ExtractHeaders: element %d type=%d\n", i, elemVar->GetType());
+                 
+                 // Check if this element is a sub-array (the makearray format)
+                 if (elemVar->GetType() == VARIABLE_ARRAY || elemVar->GetType() == VARIABLE_CONSTARRAY) {
+                     elemVar->CastConstArrayValue();
+                     int subSize = elemVar->arraysize();
+                     gi.Printf("ExtractHeaders: sub-array size=%d\n", subSize);
+                     
+                     if (subSize >= 2) {
+                         ScriptVariable* keyVar = (*elemVar)[1];
+                         ScriptVariable* valVar = (*elemVar)[2];
+                         
+                         if (keyVar && valVar) {
+                             std::string key = keyVar->stringValue().c_str();
+                             std::string value = valVar->stringValue().c_str();
+                             if (!key.empty()) {
+                                 gi.Printf("ExtractHeaders: header '%s: %s'\n", key.c_str(), value.c_str());
+                                 headers.push_back(key + ": " + value);
+                             }
+                         }
+                     }
+                 } else {
+                     // Flat array format: key1, value1, key2, value2, ...
+                     // Process pairs
+                     if (i % 2 == 1 && i + 1 <= size) {
+                         ScriptVariable* valVar = var[i + 1];
+                         if (valVar && valVar->GetType() != VARIABLE_ARRAY && valVar->GetType() != VARIABLE_CONSTARRAY) {
+                             std::string key = elemVar->stringValue().c_str();
+                             std::string value = valVar->stringValue().c_str();
+                             if (!key.empty()) {
+                                 gi.Printf("ExtractHeaders: header '%s: %s'\n", key.c_str(), value.c_str());
+                                 headers.push_back(key + ": " + value);
+                             }
+                         }
+                     }
+                 }
+             }
+        }
+    }
+}
+
+void ScriptMaster::CurlGet(Event *ev)
+{
+    gi.Printf("ScriptMaster::CurlGet: Called with %d args\n", ev->NumArgs());
+
+    if (ev->NumArgs() < 3) {
+        throw ScriptException("curl_get requires 3 arguments: url headers callback");
+    }
+
+    str url = ev->GetString(1);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        throw ScriptException("curl_get: Invalid URL protocol (must be http or https): %s", url.c_str());
+    }
+
+    CurlTask task;
+    task.url = url.c_str();
+    
+    ExtractHeaders(ev, 2, task.headers);
+
+    gi.Printf("ScriptMaster::CurlGet: URL='%s'\n", task.url.c_str());
+    if (!task.headers.empty()) {
+        gi.Printf("ScriptMaster::CurlGet: Headers:\n");
+        for (const auto& header : task.headers) {
+            gi.Printf("  %s\n", header.c_str());
+        }
+    }
+
+    task.callbackLabel = ev->GetString(3).c_str();
+
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+    
+    // Use default timeout
+    task.timeout = s_curlTimeout;
+
+    task.isPost = false;
+    
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptMaster::CurlPost(Event *ev)
+{
+    gi.Printf("ScriptMaster::CurlPost: Called with %d args\n", ev->NumArgs());
+
+    if (ev->NumArgs() < 4) {
+        throw ScriptException("curl_post requires 4 arguments: url headers body callback");
+    }
+
+    // Debug: print types of all arguments
+    for (int i = 1; i <= ev->NumArgs(); i++) {
+        ScriptVariable& var = ev->GetValue(i);
+        gi.Printf("  Arg %d: type=%d\n", i, var.GetType());
+    }
+   
+    // Arg 1: URL (string)
+    ScriptVariable& urlVar = ev->GetValue(1);
+    str url = urlVar.stringValue();
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        throw ScriptException("curl_post: Invalid URL protocol (must be http or https): %s", url.c_str());
+    }
+
+    CurlTask task;
+    task.url = url.c_str();
+
+    // Arg 2: Headers (array)
+    ExtractHeaders(ev, 2, task.headers);
+    
+    // Arg 3: POST data (string)
+    ScriptVariable& bodyVar = ev->GetValue(3);
+    task.postData = bodyVar.stringValue().c_str();
+    
+    // Arg 4: Callback label (string)
+    ScriptVariable& callbackVar = ev->GetValue(4);
+    task.callbackLabel = callbackVar.stringValue().c_str();
+
+    gi.Printf("ScriptMaster::CurlPost: URL='%s'\n", task.url.c_str());
+    gi.Printf("ScriptMaster::CurlPost: PostData='%s'\n", task.postData.c_str());
+    if (!task.headers.empty()) {
+        gi.Printf("ScriptMaster::CurlPost: Headers:\n");
+        for (const auto& header : task.headers) {
+            gi.Printf("  %s\n", header.c_str());
+        }
+    }
+
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+    
+    // Use default timeout
+    task.timeout = s_curlTimeout;
+
+    task.isPost = true;
+
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptMaster::CurlCustom(Event *ev)
+{
+    gi.Printf("ScriptMaster::CurlCustom: Called with %d args\n", ev->NumArgs());
+
+    if (ev->NumArgs() < 5) {
+        throw ScriptException("curl_custom requires 5 arguments: method url headers body callback");
+    }
+
+    str method = ev->GetString(1);
+    str url = ev->GetString(2);
+    if (Q_stricmpn(url.c_str(), "http://", 7) != 0 && Q_stricmpn(url.c_str(), "https://", 8) != 0) {
+        throw ScriptException("curl_custom: Invalid URL protocol (must be http or https): %s", url.c_str());
+    }
+
+    CurlTask task;
+    task.customMethod = method.c_str();
+    task.url = url.c_str();
+
+    ExtractHeaders(ev, 3, task.headers);
+
+    task.postData = ev->GetString(4).c_str();
+    task.callbackLabel = ev->GetString(5).c_str();
+
+    // Get source script from current thread context
+    if (Director.CurrentThread()) {
+        task.sourceScript = Director.CurrentThread()->FileName();
+    }
+
+    // Use default timeout
+    task.timeout = s_curlTimeout;
+
+    // curl_post and curl_get set isPost automatically, but for custom, we rely on customMethod.
+    // However, if postData is present, libcurl might default to POST if we don't handle it carefully.
+    // In CurlWorker, we set CUSTOMREQUEST.
+    task.isPost = false; // We rely on postData presence in CurlWorker for custom methods
+
+    g_CurlWorker.AddTask(task);
+}
+
+void ScriptMaster::CurlSetTimeout(Event *ev)
+{
+    s_curlTimeout = ev->GetInteger(1);
+    if (s_curlTimeout < 1) {
+        s_curlTimeout = 1;
+    }
+    gi.Printf("Curl timeout set to %d seconds\n", s_curlTimeout);
+}
+#endif
+
 void ScriptMaster::InitConstStrings(void)
 {
     EventDef                       *eventDef;
@@ -583,7 +849,7 @@ void ScriptMaster::InitConstStrings(void)
 
     static_assert(ARRAY_LEN(ConstStrings) == (STRING_LENGTH_ - 1), "Constant strings don't match. Make sure the 'const_str' enum match with the 'ConstStrings' string array");
 
-    for (i = 0; i < ARRAY_LEN(ConstStrings); i++) {
+    for (i = 0; (unsigned int)i < ARRAY_LEN(ConstStrings); i++) {
         AddString(ConstStrings[i]);
     }
 
@@ -709,7 +975,7 @@ ScriptThread *ScriptMaster::CreateScriptThread(ScriptClass *scriptClass, const_s
 
     if (!m_pCodePos) {
         throw ScriptException(
-            "ScriptMaster::CreateScriptThread: label '%s' does not exist in '%s'.",
+            "ScriptMaster::CreateScriptThread [DEBUG-CHECK]: label '%s' does not exist in '%s'.",
             Director.GetString(label).c_str(),
             scriptClass->Filename().c_str()
         );
@@ -734,6 +1000,10 @@ ScriptThread *ScriptMaster::CreateScriptThread(ScriptClass *scriptClass, str lab
 
 ScriptMaster::ScriptMaster()
 {
+#ifdef USE_HTTP
+    curl_global_init(CURL_GLOBAL_ALL);
+    g_CurlWorker.Start();
+#endif
 }
 
 void ScriptMaster::Reset(qboolean samemap)
@@ -762,6 +1032,7 @@ void ScriptMaster::Reset(qboolean samemap)
 
         CloseGameScript();
         StringDict.clear();
+        m_scriptCmds.clear();
         InitConstStrings();
     }
 
@@ -776,20 +1047,86 @@ void ScriptMaster::ExecuteRunning(void)
     str fileName;
     str sourcePosString;
 
+    g_DAPServer.RunFrame();
+
+#ifdef USE_HTTP
+    // Process Curl Results
+    CurlResult result;
+    while (g_CurlWorker.GetResult(result)) {
+        if (!result.callbackLabel.empty()) {
+            str scriptName = result.sourceScript.empty() ? level.m_mapscript : str(result.sourceScript.c_str());
+            str label = result.callbackLabel.c_str();
+            GameScript *script = GetScript(scriptName);
+
+            const char *p = strstr(label.c_str(), "::");
+            if (p) {
+                // Safely extract the script name substring
+                scriptName = str(label.c_str(), p - label.c_str());
+                // Use a temporary string for the label part to avoid UAF on label buffer
+                str labelPart = p + 2;
+                label = labelPart;
+
+                script = GetScript(scriptName);
+            }
+
+            if (script) {
+               // Use CreateThread as defined in ScriptMaster header
+               // ScriptThread *CreateThread(GameScript *scr, str label, Listener *self = NULL);
+               ScriptThread* thread = CreateThread(script, label);
+               if (thread) {
+                   // Pass parameters directly using ScriptVariable array (like registercmd)
+                   ScriptVariable *parms = new ScriptVariable[3];
+                   parms[0].setIntValue(result.success);
+                   parms[1].setStringValue(result.data.c_str());
+                   parms[2].setIntValue(result.httpCode);
+
+                   // Execute the thread with parameters
+                   thread->Execute(parms, 3);
+
+                   delete[] parms;
+               }
+            } else {
+                 gi.DPrintf("Curl Callback Error: Could not load script '%s'\n", scriptName.c_str());
+            }
+        }
+    }
+#endif
+
+    //static int execRunningCount = 0;
+    //execRunningCount++;
+    //if (execRunningCount % 100 == 1) {  // Log every 100th call to avoid spam
+    //    gi.Printf("ScriptMaster: ExecuteRunning #%d - stackCount=%d\n", execRunningCount, stackCount);
+    //}
+    
     if (stackCount) {
+        //if (execRunningCount % 100 == 1) {
+        //    gi.Printf("ScriptMaster: Returning early - stackCount=%d (non-zero!)\n", stackCount);
+        //}
         return;
     }
 
     if (!timerList.IsDirty()) {
+        //if (execRunningCount % 100 == 1) {
+        //    gi.Printf("ScriptMaster: Returning early - timerList not dirty\n");
+        //}
         return;
     }
+    
+    //if (execRunningCount % 100 == 1) {
+    //    gi.Printf("ScriptMaster: Processing timerList... (current time=%d)\n", level.svsTime);
+    //}
 
     cmdTime   = 0;
     cmdCount  = 0;
     startTime = level.svsTime;
 
+    int threadCount = 0;
     try {
         while ((m_CurrentThread = (ScriptThread *)timerList.GetNextElement(i))) {
+            threadCount++;
+            //if (execRunningCount % 100 == 1) {
+            //    gi.Printf("ScriptMaster: Found thread #%d at time %d\n", threadCount, i);
+            //}
             if (g_timescripts->integer) {
                 fileName        = m_CurrentThread->FileName();
                 sourcePosString = m_CurrentThread->m_ScriptVM->GetSourcePos();
@@ -799,6 +1136,10 @@ void ScriptMaster::ExecuteRunning(void)
             level.setTime(level.svsStartTime + i);
 
             m_CurrentThread->m_ScriptVM->m_ThreadState = THREAD_RUNNING;
+            //if (execRunningCount % 100 == 1) {
+            //    gi.Printf("ScriptMaster: Calling Execute() for thread %p, state=%d\n", 
+            //              m_CurrentThread->m_ScriptVM, m_CurrentThread->m_ScriptVM->state);
+            //}
             m_CurrentThread->m_ScriptVM->Execute();
 
             if (g_timescripts->integer) {
@@ -1266,11 +1607,11 @@ void ScriptMaster::PrintThread(int iThreadNum)
     if (!vm->m_Thread->m_WaitForList) {
         status += "(none)\n";
     } else {
-        con_set_enum<const_str, ConList>    en = *vm->m_Thread->m_WaitForList;
+        con_set_enum<const_str, ConList>    waitListEnum = *vm->m_Thread->m_WaitForList;
         con_set<const_str, ConList>::Entry *entry;
         int                                 i = 0;
 
-        for (entry = en.NextElement(); entry != NULL; entry = en.NextElement()) {
+        for (entry = waitListEnum.NextElement(); entry != NULL; entry = waitListEnum.NextElement()) {
             str& name = Director.GetString(entry->GetKey());
 
             if (i > 0) {
