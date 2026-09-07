@@ -507,6 +507,10 @@ void SV_GetChallenge(netadr_t from);
 
 void SV_DirectConnect( netadr_t from );
 
+void SV_InitVpnBlock(void);
+void SV_ShutdownVpnBlock(void);
+qboolean SV_VpnBlockShouldRefuse(netadr_t from, char *reason, int reasonSize);
+
 void SV_AuthorizeIpPacket( netadr_t from );
 
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg );
