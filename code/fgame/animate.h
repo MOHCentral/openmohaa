@@ -133,8 +133,6 @@ public:
 
     void ClientSound(Event *ev);
 
-    // FIXME: delete this, fakk2 remnant
-    int NumFrames(int slot = 0);
 };
 
 inline void Animate::SetWeight(int slot, float weight)
@@ -208,7 +206,3 @@ inline Event *Animate::AnimDoneEvent(int slot)
     return doneEvents[slot];
 }
 
-inline int Animate::NumFrames(int slot)
-{
-    return gi.Anim_NumFrames(edict->tiki, edict->s.frameInfo[slot].index);
-}

@@ -576,7 +576,7 @@ void Viewthing::ThinkEvent(Event *ev)
         if (f != lastframe) {
             float time;
             lastframe = f;
-            time      = f * AnimTime() / NumFrames();
+            time      = f * AnimTime() / gi.Anim_NumFrames(edict->tiki, CurrentAnim());
             gi.Printf("current frame %d time %.2f\n", f, time);
             gi.cvar_set("viewmodeltime", va("%.2f", time));
             gi.cvar_set("viewmodelframe", va("%d", f));
@@ -636,7 +636,7 @@ void Viewthing::NextFrameEvent(Event *ev)
 {
     int numframes;
 
-    numframes = NumFrames();
+    numframes = gi.Anim_NumFrames(edict->tiki, CurrentAnim());
     if (numframes) {
         frame = (frame + 1) % numframes;
         SetFrame();
@@ -649,7 +649,7 @@ void Viewthing::PrevFrameEvent(Event *ev)
 {
     int numframes;
 
-    numframes = NumFrames();
+    numframes = gi.Anim_NumFrames(edict->tiki, CurrentAnim());
     if (numframes) {
         frame = (frame - 1) % numframes;
         SetFrame();
