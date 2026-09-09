@@ -2037,6 +2037,7 @@ Resend a connect message if the last one has timed out
 */
 void CL_CheckForResend( void ) {
 	int		port, i;
+	size_t	len;
 	char	info[MAX_INFO_STRING];
 	char	data[MAX_INFO_STRING];
 
@@ -2110,7 +2111,9 @@ wombat: sending conect here: an example connect string from MOHAA looks like thi
     //   (Com_TokenizeString tokenizes around spaces)
     data[8] = '"';
 
-		for(i=0;i<strlen(info);i++) {
+		// Bolt: Cache strlen(info) to turn O(N^2) loop into O(N)
+		len = strlen(info);
+		for(i=0;i<len;i++) {
 			data[9+i] = info[i];	// + (clc.challenge)&0x3;
 		}
     data[9+i] = '"';
