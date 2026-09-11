@@ -2752,15 +2752,8 @@ Field_FindFirstSeparator
 */
 static char* Field_FindFirstSeparator(char* s)
 {
-    int i;
-
-    for (i = 0; i < strlen(s); i++)
-    {
-        if (s[i] == ';')
-            return &s[i];
-    }
-
-    return NULL;
+    // Optimize: Use strchr instead of a loop that calls strlen(s) on every iteration (O(N^2) -> O(N))
+    return strchr(s, ';');
 }
 
 /*
