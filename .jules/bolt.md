@@ -1,0 +1,3 @@
+## 2026-09-13 - O(N^2) loops with strlen() in conditions
+**Learning:** Found an $O(N^2)$ bottleneck pattern in `code/qcommon/common.c` where `Field_FindFirstSeparator` looped over characters with `strlen(s)` inside the condition. Replaced it with the highly optimized standard library `strchr(s, ';')` function.
+**Action:** Always check `for` loops parsing strings to ensure `strlen()` is either cached before the loop or standard C library functions (like `strchr`) are used instead. Ensure test output and temporary directories (like CMake's `Testing/`) are not accidentally committed when creating performance patches.
