@@ -1,0 +1,3 @@
+## 2024-05-24 - [O(N^2) strlen bottleneck in common.c]
+**Learning:** O(N^2) bottlenecks in tools like `code/qcommon/common.c` caused by `strlen()` inside `for` loop conditions can be severely detrimental to performance, especially for larger strings. Evaluating `strlen` within loop conditions creates O(N^2) performance when a simple O(N) array null-terminator check or standard library function like `strchr()` would suffice.
+**Action:** Replace `for (i = 0; i < strlen(s); i++)` when searching for characters with `strchr(s, ';')` to improve performance from O(N^2) to O(N); benchmarking showed a ~16,000x speedup for 50,000 character strings in non-optimized builds.

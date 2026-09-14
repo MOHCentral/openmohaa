@@ -62,6 +62,9 @@ set(SOURCE_DIR ${CMAKE_SOURCE_DIR}/code)
 
 # Enable unit testing
 include(CTest)
+if(BUILD_TESTING)
+    include(cmake/tests/all.cmake)
+endif()
 
 if(DEFINED ENV{SOURCE_DATE_EPOCH})
     string(TIMESTAMP PRODUCT_DATE "%b %d %Y" UTC)
