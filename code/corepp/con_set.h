@@ -246,7 +246,7 @@ void con_set<key, value>::clear()
 }
 
 template<typename key, typename value>
-void con_set<key, value>::resize(int count)
+void con_set<key, value>::resize(int new_count)
 {
     Entry      **oldTable = table;
     Entry       *e, *old;

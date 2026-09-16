@@ -106,10 +106,10 @@ inline UIPoint2D UIRect2D::getLowerRight(void) const
     return UIPoint2D(getMaxX(), getMaxY());
 }
 
-inline bool UIRect2D::contains(const UIPoint2D& pos) const
+inline bool UIRect2D::contains(const UIPoint2D& other_pos) const
 {
-    return pos.x >= this->pos.x && pos.x <= this->pos.x + size.width && pos.y >= this->pos.y
-        && pos.y <= this->pos.y + size.height;
+    return other_pos.x >= this->pos.x && other_pos.x <= this->pos.x + size.width && other_pos.y >= this->pos.y
+        && other_pos.y <= this->pos.y + size.height;
 }
 
 inline bool UIRect2D::contains(float x, float y) const
@@ -122,13 +122,13 @@ inline bool UIRect2D::contains(int x, int y) const
     return x >= this->pos.x && x <= this->pos.x + size.width && y >= this->pos.y && y <= this->pos.y + size.height;
 }
 
-inline bool UIRect2D::contains(const UIRect2D& pos) const
+inline bool UIRect2D::contains(const UIRect2D& other_rect) const
 {
-    return pos.pos.x >= this->pos.x && pos.pos.x <= this->pos.x + size.width && pos.pos.y >= this->pos.y
-        && pos.pos.y <= this->pos.y + size.height;
+    return other_rect.pos.x >= this->pos.x && other_rect.pos.x <= this->pos.x + size.width && other_rect.pos.y >= this->pos.y
+        && other_rect.pos.y <= this->pos.y + size.height;
 }
 
-inline bool UIRect2D::intersects(const UIRect2D& pos) const
+inline bool UIRect2D::intersects(const UIRect2D& other_rect) const
 {
     // FIXME: stub
     return false;

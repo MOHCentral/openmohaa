@@ -352,7 +352,7 @@ void *TIKI_GetSkeletor(dtiki_t *tiki, int entnum)
 TIKI_DeleteSkeletor
 ===============
 */
-static void TIKI_DeleteSkeletor(int entnum)
+void TIKI_DeleteSkeletor(int entnum)
 {
     skeletor_c *skel;
     int         i;

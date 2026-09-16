@@ -188,7 +188,7 @@ con_arrayset<key, value>::~con_arrayset()
 }
 
 template<typename key, typename value>
-void con_arrayset<key, value>::resize(int count)
+void con_arrayset<key, value>::resize(int new_count)
 {
     Entry      **oldReverseTable = reverseTable;
     Entry      **oldTable        = table;

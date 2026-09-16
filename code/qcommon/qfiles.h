@@ -515,7 +515,7 @@ typedef struct {
 	lump_t		lumps[ HEADER_LUMPS ];
 } dheader_t;
 
-static lump_t *Q_GetLumpByVersion(dheader_t *header, int lump)
+ID_INLINE lump_t *Q_GetLumpByVersion(dheader_t *header, int lump)
 {
 	if (header->version <= 18) {
 		if (lump > LUMP_BRUSHES) {
