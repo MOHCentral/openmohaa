@@ -2042,15 +2042,14 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
-
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
+	// ⚡ Bolt: strchr is optimized and doesn't calculate strlen every iteration
+	// Explicitly check for '\0' because strchr will match the null terminator,
+	// whereas the original loop (i < strlen(set)) did not.
+	if ( c == '\0' ) {
+		return qfalse;
 	}
 
-	return qfalse;
+	return strchr( set, c ) != NULL ? qtrue : qfalse;
 }
 
 /*
