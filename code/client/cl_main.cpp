@@ -2110,9 +2110,13 @@ wombat: sending conect here: an example connect string from MOHAA looks like thi
     //   (Com_TokenizeString tokenizes around spaces)
     data[8] = '"';
 
-		for(i=0;i<strlen(info);i++) {
-			data[9+i] = info[i];	// + (clc.challenge)&0x3;
-		}
+    {
+        // Cache strlen(info) to avoid O(N^2) complexity in the loop condition
+        size_t info_len = strlen(info);
+        for(i=0;i<info_len;i++) {
+            data[9+i] = info[i];	// + (clc.challenge)&0x3;
+        }
+    }
     data[9+i] = '"';
 		data[10+i] = 0;
 
