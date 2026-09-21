@@ -1,0 +1,3 @@
+## 2024-05-18 - [Optimize Field_FindFirstSeparator to O(N) using strchr]
+**Learning:** Found an O(N^2) bottleneck in `code/qcommon/common.c` caused by a manual `for` loop that called `strlen(s)` inside its loop condition on every iteration while checking for the separator character `';'`. This caused a severe performance penalty on unoptimized builds for long strings, demonstrating that manual string searching loops can easily become quadratic if not caching the length properly.
+**Action:** Always prefer standard string manipulation functions like `strchr` over manual character-by-character loops, as they are intrinsically O(N), safer, and frequently benefit from compiler and standard library vectorization.
