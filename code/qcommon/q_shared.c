@@ -1040,8 +1040,9 @@ int Com_HexStrToInt( const char *str )
 	if( str[ 0 ] == '0' && str[ 1 ] == 'x' )
 	{
 		int i, n = 0;
+		size_t len = strlen( str ); // Bolt: Cache strlen to avoid O(N^2)
 
-		for( i = 2; i < strlen( str ); i++ )
+		for( i = 2; i < len; i++ )
 		{
 			char digit;
 
@@ -2042,15 +2043,11 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
-
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
+	// Bolt: Optimize O(N^2) search (calling strlen each iteration) to O(N) by using strchr
+	if ( c == '\0' ) {
+		return qfalse; // strchr matches null-terminator, original loop didn't
 	}
-
-	return qfalse;
+	return strchr( set, c ) != NULL;
 }
 
 /*
