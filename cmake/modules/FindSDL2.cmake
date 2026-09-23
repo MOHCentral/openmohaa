@@ -1,3 +1,13 @@
+if(SDL2_DIR)
+    # When SDL2_DIR is provided, use the config mode
+    find_package(SDL2 CONFIG QUIET)
+    if(TARGET SDL2::SDL2)
+        get_target_property(SDL2_INCLUDE_DIRS SDL2::SDL2 INTERFACE_INCLUDE_DIRECTORIES)
+        set(SDL2_LIBRARIES SDL2::SDL2)
+        return()
+    endif()
+endif()
+
 find_package(PkgConfig QUIET)
 pkg_check_modules(PC_SDL2 QUIET sdl2)
 find_path(SDL2_INCLUDE_DIRS
