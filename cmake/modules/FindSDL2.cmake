@@ -17,6 +17,8 @@ if(SDL2_DIR)
 
     if(SDL2_LIBRARIES)
         set(SDL2_FOUND TRUE)
+        include(FindPackageHandleStandardArgs)
+        find_package_handle_standard_args(SDL2 REQUIRED_VARS SDL2_LIBRARIES)
         return()
     endif()
 endif()
