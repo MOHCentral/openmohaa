@@ -56,6 +56,13 @@ else()
     find_package(SDL2 REQUIRED)
 endif()
 
+if (NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2::SDL2-static)
+  # CMake < 3.28 does not provide FindSDL2.cmake natively.
+  # So we will try finding it using PkgConfig.
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(SDL2 REQUIRED sdl2)
+endif()
+
 list(APPEND CLIENT_LIBRARIES ${SDL2_LIBRARIES})
 list(APPEND CLIENT_INCLUDE_DIRS ${SDL2_INCLUDE_DIRS})
 list(APPEND CLIENT_COMPILE_OPTIONS ${SDL2_CFLAGS_OTHER})
