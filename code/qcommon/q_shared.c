@@ -1039,15 +1039,16 @@ int Com_HexStrToInt( const char *str )
 	// check for hex code
 	if( str[ 0 ] == '0' && str[ 1 ] == 'x' )
 	{
-		int i, n = 0;
+			int n = 0;
+			const char *p;
 
-		for( i = 2; i < strlen( str ); i++ )
+			for( p = str + 2; *p; p++ )
 		{
 			char digit;
 
 			n *= 16;
 
-			digit = tolower( str[ i ] );
+				digit = tolower( *p );
 
 			if( digit >= '0' && digit <= '9' )
 				digit -= '0';
@@ -2042,13 +2043,11 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
+	if (c == '\0')
+		return qfalse;
 
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
-	}
+	if (strchr(set, c) != NULL)
+		return qtrue;
 
 	return qfalse;
 }
