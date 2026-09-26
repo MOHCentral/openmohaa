@@ -1,0 +1,3 @@
+## $(date +%Y-%m-%d) - Optimize Field_FindFirstSeparator with strchr
+**Learning:** Found an O(N^2) "Schlemiel the Painter" string performance bottleneck in `Field_FindFirstSeparator` where `strlen(s)` was evaluated inside the condition of a `for` loop on every iteration. This is a common performance anti-pattern in C codebases.
+**Action:** Replace manual character scanning loops that use `strlen` in their loop conditions with appropriate standard C library functions like `strchr`, `strrchr`, or `strpbrk`, which provide optimized O(N) performance. Ensure that if checking for characters other than '\0', `strchr` is functionally equivalent.
