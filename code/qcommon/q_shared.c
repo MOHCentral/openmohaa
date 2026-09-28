@@ -1041,7 +1041,8 @@ int Com_HexStrToInt( const char *str )
 	{
 		int i, n = 0;
 
-		for( i = 2; i < strlen( str ); i++ )
+		// Optimized: Replaced strlen() in condition with direct null-terminator check.
+		for( i = 2; str[ i ]; i++ )
 		{
 			char digit;
 
@@ -2042,13 +2043,12 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
+	// Optimized: Replaced manual O(N^2) loop (caused by strlen in condition) with O(N) strchr.
+	if( c == '\0' )
+		return qfalse;
 
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
-	}
+	if( strchr( set, c ) != NULL )
+		return qtrue;
 
 	return qfalse;
 }
