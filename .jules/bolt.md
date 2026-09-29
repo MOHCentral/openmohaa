@@ -1,0 +1,3 @@
+## 2024-09-29 - O(N^2) Bottlenecks from `strlen()` inside `for` Loop Conditions
+**Learning:** In C codebases, placing `strlen(s)` inside the termination condition of a `for` loop (e.g., `for (i = 0; i < strlen(s); i++)`) recalculates the length of the string on every single iteration, resulting in an O(N^2) time complexity. This pattern is particularly detrimental for string parsing functions like `Field_FindFirstSeparator`.
+**Action:** Always replace O(N^2) loops searching for a specific character by using direct `strchr(s, char)` calls for O(N) performance, or cache the result of `strlen` before the loop.
