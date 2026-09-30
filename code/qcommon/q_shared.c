@@ -1041,7 +1041,7 @@ int Com_HexStrToInt( const char *str )
 	{
 		int i, n = 0;
 
-		for( i = 2; i < strlen( str ); i++ )
+		for( i = 2; str[ i ] != '\0'; i++ )
 		{
 			char digit;
 
