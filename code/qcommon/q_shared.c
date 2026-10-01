@@ -1041,7 +1041,7 @@ int Com_HexStrToInt( const char *str )
 	{
 		int i, n = 0;
 
-		for( i = 2; i < strlen( str ); i++ )
+		for( i = 2; str[ i ] != '\0'; i++ )
 		{
 			char digit;
 
@@ -2042,15 +2042,9 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
-
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
-	}
-
-	return qfalse;
+	if ( c == '\0' )
+		return qfalse;
+	return strchr( set, c ) != NULL ? qtrue : qfalse;
 }
 
 /*
