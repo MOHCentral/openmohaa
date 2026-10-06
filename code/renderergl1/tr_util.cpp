@@ -291,7 +291,8 @@ void R_DrawDebugNumber(const vec3_t org, float number, float scale, float r, flo
     VectorMA(org, 5 - 5 * (int)text.length(), right, start);
 
     // Draw each character/digit of the text
-    for (i = 0; i < text.length(); i++) {
+    size_t text_len = text.length();
+    for (i = 0; i < text_len; i++) {
         if (text[i] == '.') {
             num = 10;
         } else if (text[i] == '-') {

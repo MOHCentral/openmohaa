@@ -445,7 +445,8 @@ void G_DrawDebugNumber(Vector org, float number, float scale, float r, float g, 
 
     start = org + (text.length() - 1) * 5 * left;
 
-    for (i = 0; i < text.length(); i++) {
+    size_t text_len = text.length();
+    for (i = 0; i < text_len; i++) {
         if (text[i] == '.') {
             num = 10;
         } else if (text[i] == '-') {

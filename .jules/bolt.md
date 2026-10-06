@@ -1,0 +1,10 @@
+## 2024-05-30 - O(N^2) Performance Bottleneck with `str::length()` in Loops
+**Learning:** `str::operator[]` in `code/corepp/str.h` internally calls `EnsureDataWritable()`. This potential state mutation prevents the compiler from hoisting the `str::length()` out of the condition in `for(int i = 0; i < str.length(); i++)` loops, causing `length()` (which is just an inline field lookup but the whole process prevents optimization) to be evaluated each iteration. Worse, when `EnsureDataWritable()` triggers allocation checks, the loop becomes extremely slow.
+**Action:** When iterating over custom `str` objects character by character in a tight loop, always cache the string length into a local variable before the loop instead of checking `.length()` in the loop condition, or use the `c_str()` pointer if modifying characters isn't needed.
+
+I will replace `.length()` inside the condition of `for` loops across the codebase with cached variables.
+## 2024-05-30 - O(N^2) Performance Bottleneck with `str::length()` in Loops
+**Learning:** `str::operator[]` in `code/corepp/str.h` internally calls `EnsureDataWritable()`. This potential state mutation prevents the compiler from hoisting the `str::length()` out of the condition in `for(int i = 0; i < str.length(); i++)` loops. Even with `-O2` optimizations, the compiler considers `str::length()` as having side effects (because `operator[]` modifies internal ref counts) or it just can't prove `length()` doesn't change when `EnsureDataWritable()` is called. This results in the length being re-evaluated every iteration. The same issue occurs with `strlen()` on C strings if the string is modified or the compiler cannot prove it isn't. When `EnsureDataWritable()` or `strlen()` is executed N times in a loop of size N, the time complexity becomes O(N^2).
+**Action:** When iterating over custom `str` objects or C strings using `strlen()` character by character in a tight loop, always cache the string length into a local variable before the loop instead of checking `.length()` or `strlen()` in the loop condition.
+
+I will fix the `.length()` and `strlen()` inside `for` loop conditions across the codebase.
