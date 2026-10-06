@@ -809,7 +809,8 @@ void UIMultiLineEdit::PasteSelection(void)
 
     DeleteSelection();
 
-    for (i = 0; i < sel.length(); i++) {
+    size_t sel_len = sel.length();
+    for (i = 0; i < sel_len; i++) {
         if (sel[i] == '\n') {
             CharEvent('\r');
         } else if (sel[i] == '\r') {
