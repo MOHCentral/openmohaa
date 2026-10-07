@@ -1,0 +1,3 @@
+## 2025-02-28 - O(N^2) strlen in loop conditions
+**Learning:** Found a common pattern in C/C++ string processing where `strlen(set)` is used inside the `for` loop condition checking if characters are present in a charset. This makes the operation O(N^2). This codebase has multiple instances of this (e.g., `Com_CharIsOneOfCharset`). `strchr()` provides an O(1)/O(N) highly optimized SIMD alternative but matching its exact semantics requires care (handling `\0`).
+**Action:** When replacing `strlen` loop checks with `strchr`, always add an explicit `if (c == '\0') return qfalse;` since `strchr` evaluates `\0` as a match while the `strlen` boundary `i < strlen(set)` typically skipped it.
