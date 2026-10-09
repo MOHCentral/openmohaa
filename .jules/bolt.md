@@ -1,0 +1,3 @@
+## 2025-02-18 - Avoid O(N^2) strlen in loops
+**Learning:** Found an `O(N^2)` bottleneck where `strlen` was used in `for` loop conditions (e.g., `for (i = 0; i < strlen(s); i++)`). Modern compilers often cannot automatically hoist `strlen` out of loop conditions, even for `const char*`, due to potential aliasing or lack of guaranteed purity.
+**Action:** Replace loop conditions checking for character matches with a direct `strchr(set, c)` call for `O(1)` character lookup, or cache `strlen` results in local variables (e.g., `size_t len = strlen(s);`). When replacing with `strchr`, explicitly verify if `c == '\0'` first (e.g., `if (c == '\0') return qfalse;`) since `strchr` successfully matches the null terminator, but the original `strlen`-based loop condition excluded it.
