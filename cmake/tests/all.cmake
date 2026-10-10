@@ -1,3 +1,3 @@
 enable_testing()
 
-include(tests/lz77)
+include(cmake/tests/lz77.cmake)
