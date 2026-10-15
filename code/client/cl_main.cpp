@@ -2110,17 +2110,20 @@ wombat: sending conect here: an example connect string from MOHAA looks like thi
     //   (Com_TokenizeString tokenizes around spaces)
     data[8] = '"';
 
-		for(i=0;i<strlen(info);i++) {
-			data[9+i] = info[i];	// + (clc.challenge)&0x3;
-		}
-    data[9+i] = '"';
-		data[10+i] = 0;
+		{
+			size_t info_len = strlen(info);
+			for(i=0;i<info_len;i++) {
+				data[9+i] = info[i];	// + (clc.challenge)&0x3;
+			}
+			data[9+i] = '"';
+			data[10+i] = 0;
 
-    // NOTE TTimo don't forget to set the right data length!
-		NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) &data[0], i+10 );
-		// the most current userinfo has been sent, so watch for any
-		// newer changes to userinfo variables
-		cvar_modifiedFlags &= ~CVAR_USERINFO;
+			// NOTE TTimo don't forget to set the right data length!
+			NET_OutOfBandData( NS_CLIENT, clc.serverAddress, (byte *) &data[0], i+10 );
+			// the most current userinfo has been sent, so watch for any
+			// newer changes to userinfo variables
+			cvar_modifiedFlags &= ~CVAR_USERINFO;
+		}
 		break;
 
 	default:

@@ -699,9 +699,10 @@ char *Script::EvaluateMacroString(const char *theMacroString)
     bool        haveoper = false;
     int         i;
     float       value = 0.0f, val = 0.0f;
+    size_t      len = strlen(theMacroString);
     memset(buffer, 0, 255);
 
-    for (i = 0; i <= strlen(theMacroString); i++) {
+    for (i = 0; i <= len; i++) {
         if (theMacroString[i] == '+') {
             haveoper = true;
             newoper  = '+';
