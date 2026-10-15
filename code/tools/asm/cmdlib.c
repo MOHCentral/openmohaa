@@ -255,7 +255,8 @@ void SetQdirFromPath( const char *path )
       }
 			strncpy (qdir, path, c+len+count-path);
 			qprintf ("qdir: %s\n", qdir);
-			for ( i = 0; i < strlen( qdir ); i++ )
+			size_t qdir_len = strlen(qdir);
+			for ( i = 0; i < qdir_len; i++ )
 			{
 				if ( qdir[i] == '\\' ) 
 					qdir[i] = '/';
@@ -268,7 +269,8 @@ void SetQdirFromPath( const char *path )
 				{
 					strncpy (gamedir, path, c+1-path);
 
-					for ( i = 0; i < strlen( gamedir ); i++ )
+					size_t gamedir_len = strlen(gamedir);
+					for ( i = 0; i < gamedir_len; i++ )
 					{
 						if ( gamedir[i] == '\\' ) 
 							gamedir[i] = '/';
