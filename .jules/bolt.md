@@ -1,0 +1,3 @@
+## 2024-05-24 - Replacing O(N^2) strlen in loops with strchr
+**Learning:** Checking for character matches using `for(i = 0; i < strlen(set); i++)` is an O(N^2) operation because `strlen` is evaluated on every iteration, leading to significant performance degradation on large strings. `strchr` provides an O(N) alternative, but careful consideration is required for null terminator matches.
+**Action:** Replace `for (i = 0; i < strlen(set); i++)` character search loops with `strchr(set, c)`. Remember to explicitly check for the null terminator (e.g., `if (c == '\0') return qfalse;`) since `strchr` will successfully match it, whereas the original loop bounded by `strlen` intentionally excluded the null terminator.
