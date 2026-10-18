@@ -238,6 +238,8 @@ void SetQdirFromPath( const char *path )
 	for (c=path+strlen(path)-1 ; c != path ; c--)
 	{
 		int i;
+		int qdirLen;
+		int gamedirLen;
 
 		if (!Q_strncasecmp (c, BASEDIRNAME, len))
 		{
@@ -255,7 +257,9 @@ void SetQdirFromPath( const char *path )
       }
 			strncpy (qdir, path, c+len+count-path);
 			qprintf ("qdir: %s\n", qdir);
-			for ( i = 0; i < strlen( qdir ); i++ )
+			// ⚡ Bolt: Cache length locally to avoid O(N^2) evaluation within loop condition.
+			qdirLen = strlen(qdir);
+			for ( i = 0; i < qdirLen; i++ )
 			{
 				if ( qdir[i] == '\\' ) 
 					qdir[i] = '/';
@@ -268,7 +272,9 @@ void SetQdirFromPath( const char *path )
 				{
 					strncpy (gamedir, path, c+1-path);
 
-					for ( i = 0; i < strlen( gamedir ); i++ )
+					// ⚡ Bolt: Cache length locally to avoid O(N^2) evaluation within loop condition.
+					gamedirLen = strlen(gamedir);
+					for ( i = 0; i < gamedirLen; i++ )
 					{
 						if ( gamedir[i] == '\\' ) 
 							gamedir[i] = '/';
