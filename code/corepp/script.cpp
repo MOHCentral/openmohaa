@@ -698,10 +698,13 @@ char *Script::EvaluateMacroString(const char *theMacroString)
     char        buffer[255], *bufferptr = buffer, oper = '+', newoper = '+';
     bool        haveoper = false;
     int         i;
+    size_t      len;
     float       value = 0.0f, val = 0.0f;
     memset(buffer, 0, 255);
 
-    for (i = 0; i <= strlen(theMacroString); i++) {
+    // ⚡ Bolt: Cache length locally to avoid O(N^2) evaluation within loop condition.
+    len = strlen(theMacroString);
+    for (i = 0; i <= len; i++) {
         if (theMacroString[i] == '+') {
             haveoper = true;
             newoper  = '+';

@@ -1,0 +1,3 @@
+## 2026-10-18 - C/C++ Loop Condition Optimization
+**Learning:** `strlen()` inside `for` loop conditions degrades execution to O(N^2), as compilers cannot reliably optimize it out due to potential aliasing (especially if strings are modified inside the loop or lack guaranteed purity). `strchr()` provides a fast, native O(1) character lookup alternative if matching single characters.
+**Action:** When matching characters, replace `for (... i < strlen(...))` loops with native `strchr(...)`. In other standard `for` loops, always manually extract and cache `strlen` in a local variable before the loop.
