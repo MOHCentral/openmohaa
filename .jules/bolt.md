@@ -1,0 +1,3 @@
+## 2024-05-18 - Replacing `strlen` check with `strchr` inside `for` loops
+**Learning:** `strlen`-based loop logic for looking up characters explicitly excludes the null-terminator `\0`. When migrating such loops to O(1) searches using `strchr()`, you must explicitly check for the null-terminator (e.g. `if (c == '\0') return qfalse;`), since `strchr` will successfully match the null-terminator if the character variable is `\0`, resulting in a semantic difference.
+**Action:** When refactoring O(N^2) matching loops into standard library functions like `strchr`, always analyze edge cases involving loop bounds, particularly null terminators, to ensure behavior is exactly identical.
