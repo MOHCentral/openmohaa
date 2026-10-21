@@ -1,0 +1,3 @@
+## 2024-05-24 - Avoiding semantic bugs when replacing strlen loop with strchr
+**Learning:** When replacing a `for (i = 0; i < strlen(set); i++)` loop checking for character matches with a direct `strchr(set, c)` call for O(1) character lookup, explicitly verify if `c == '\0'` first (e.g., `if (c == '\0') return qfalse;`). `strchr` successfully matches the null terminator, but the original `strlen`-based loop condition excluded it, causing semantic differences and potential infinite loops.
+**Action:** Always check `c == '\0'` when switching from a bounded `strlen` loop to `strchr` for character checks.

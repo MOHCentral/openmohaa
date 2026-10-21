@@ -2042,12 +2042,14 @@ Com_CharIsOneOfCharset
 */
 static qboolean Com_CharIsOneOfCharset( char c, const char *set )
 {
-	int i;
+	// O(1) character lookup, explicit check for '\0' because strchr
+	// would match it whereas the original strlen loop did not
+	if (c == '\0') {
+		return qfalse;
+	}
 
-	for( i = 0; i < strlen( set ); i++ )
-	{
-		if( set[ i ] == c )
-			return qtrue;
+	if (strchr(set, c) != NULL) {
+		return qtrue;
 	}
 
 	return qfalse;
