@@ -235,7 +235,8 @@ void SetQdirFromPath( const char *path )
 	// search for "quake2" in path
 
 	len = strlen(BASEDIRNAME);
-	for (c=path+strlen(path)-1 ; c != path ; c--)
+	int pathLen = strlen(path);
+	for (c=path+pathLen-1 ; c != path ; c--)
 	{
 		int i;
 
@@ -255,7 +256,8 @@ void SetQdirFromPath( const char *path )
       }
 			strncpy (qdir, path, c+len+count-path);
 			qprintf ("qdir: %s\n", qdir);
-			for ( i = 0; i < strlen( qdir ); i++ )
+			int qdirLen = strlen(qdir);
+			for ( i = 0; i < qdirLen; i++ )
 			{
 				if ( qdir[i] == '\\' ) 
 					qdir[i] = '/';
@@ -268,7 +270,8 @@ void SetQdirFromPath( const char *path )
 				{
 					strncpy (gamedir, path, c+1-path);
 
-					for ( i = 0; i < strlen( gamedir ); i++ )
+					int gamedirLen = strlen(gamedir);
+					for ( i = 0; i < gamedirLen; i++ )
 					{
 						if ( gamedir[i] == '\\' ) 
 							gamedir[i] = '/';
