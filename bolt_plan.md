@@ -1,0 +1,5 @@
+1. **Identify Performance Opportunity**: O(N^2) bottleneck in `Com_CharIsOneOfCharset` in `code/qcommon/q_shared.c` because `strlen` is called on the charset string on every iteration of the loop, which searches for characters. For a string length M and charset length N, this creates an O(M * N^2) operation.
+2. **Implement Fix**: Replace the `for` loop that calls `strlen` on every iteration with a fast O(1) character lookup using `strchr`. I must explicitly verify `c == '\0'` first since `strchr` matches the null terminator but the old loop did not.
+3. **Verify Optimization**: Compile the changes (`make -j$(nproc)`) and run the test suite (`ctest --test-dir build`). The change reduces `Com_CharIsOneOfCharset` execution time drastically.
+4. **Log Journal Entry**: Record the specific learning about `strlen` loop conditions and `strchr` matching the null terminator in `.jules/bolt.md`.
+5. **Pre-commit and PR**: Complete pre-commit steps to ensure proper testing, verification, review, and reflection are done, then create a PR in Bolt's format.
