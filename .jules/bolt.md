@@ -1,0 +1,3 @@
+## 2024-05-18 - [Avoid strlen in loop conditions]
+**Learning:** [Using `strlen()` in loop conditions for strings without modifying the string creates an O(n^2) bottleneck, because compilers cannot always hoist it out of the loop. Specifically, in `code/qcommon/common.c`, `Field_FindFirstSeparator` uses `for (i = 0; i < strlen(s); i++)` to find a `;` character.]
+**Action:** [Use O(1) library functions like `strchr` when searching for a character, or cache `strlen` in a local variable before the loop. If replacing with `strchr`, ensure to handle the null terminator appropriately to preserve original logic.]
