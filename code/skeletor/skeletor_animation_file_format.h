@@ -53,7 +53,6 @@ typedef struct {
     float    radius;
     SkelVec3 delta;
     float    angleDelta;
-    vec4_t  *pChannels; // FIXME: must delete
 } skelAnimGameFrame_t;
 
 typedef struct {
