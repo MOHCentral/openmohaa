@@ -3242,7 +3242,7 @@ EventQueueNode *Listener::PostEventInternal(Event *ev, float delay, int flags)
     }
 #endif
 
-    if (!classinfo()->responseLookup[ev->eventnum]) {
+    if (!classinfo()->GetResponse(ev->eventnum)) {
         if (!ev->eventnum) {
 #ifdef _DEBUG
             EVENT_DPrintf("^~^~^ Failed execution of event '%s' for class '%s'\n", ev->name, getClassname());
@@ -3439,7 +3439,7 @@ ScriptVariable& Listener::ProcessEventReturn(Event *ev)
         return m_Return;
     }
 
-    responses = c->responseLookup[ev->eventnum];
+    responses = c->GetResponse(ev->eventnum);
 
     if (responses == NULL) {
         EVENT_DPrintf(
@@ -3500,7 +3500,7 @@ bool Listener::ProcessScriptEvent(Event& ev)
         return false;
     }
 
-    responses = c->responseLookup[ev.eventnum];
+    responses = c->GetResponse(ev.eventnum);
 
     if (responses == NULL) {
         return true;
