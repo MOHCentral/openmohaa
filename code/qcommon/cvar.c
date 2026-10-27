@@ -83,6 +83,36 @@ static qboolean Cvar_ValidateString( const char *s ) {
 
 /*
 ============
+Cvar_ValidateValue
+============
+*/
+static qboolean Cvar_ValidateValue( const char *s ) {
+	const char *p;
+	if ( !s ) {
+		return qfalse;
+	}
+	if ( strchr( s, '\"' ) ) {
+		return qfalse;
+	}
+
+	for ( p = s; *p; p++ ) {
+		if ( *p == '\\' ) {
+			// backslash at the end is invalid because it would escape the quote in the config file
+			if ( !p[1] ) {
+				return qfalse;
+			}
+			// backslash followed by n is invalid because it is parsed as a newline
+			if ( p[1] == 'n' ) {
+				return qfalse;
+			}
+		}
+	}
+
+	return qtrue;
+}
+
+/*
+============
 Cvar_FindVar
 ============
 */
@@ -402,12 +432,10 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 		var_name = "BADNAME";
 	}
 
-#if 0		// FIXME: values with backslash happen
-	if ( !Cvar_ValidateString( var_value ) ) {
+	if ( !Cvar_ValidateValue( var_value ) ) {
 		Com_Printf("invalid cvar value string: %s\n", var_value );
 		var_value = "BADVALUE";
 	}
-#endif
 
 	Cvar_FlagsCheck(flags);
 
@@ -592,12 +620,10 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 		var_name = "BADNAME";
 	}
 
-#if 0	// FIXME
-	if ( value && !Cvar_ValidateString( value ) ) {
+	if ( value && !Cvar_ValidateValue( value ) ) {
 		Com_Printf("invalid cvar value string: %s\n", value );
-		var_value = "BADVALUE";
+		value = "BADVALUE";
 	}
-#endif
 
 	var = Cvar_FindVar (var_name);
 	if (!var) {
