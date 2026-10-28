@@ -267,7 +267,8 @@ qboolean SetQdirFromPath_BaseDir(const char *path, const char *baseDirName) {
       }
 			strncpy (qdir, path, c+len+count-path);
 			qprintf ("qdir: %s\n", qdir);
-			for ( i = 0; i < strlen( qdir ); i++ )
+			size_t qdirLen = strlen( qdir );
+			for ( i = 0; i < qdirLen; i++ )
 			{
 				if ( qdir[i] == '\\' ) 
 					qdir[i] = '/';
@@ -280,7 +281,8 @@ qboolean SetQdirFromPath_BaseDir(const char *path, const char *baseDirName) {
 				{
 					strncpy (gamedir, path, c+1-path);
 
-					for ( i = 0; i < strlen( gamedir ); i++ )
+					size_t gamedirLen = strlen( gamedir );
+					for ( i = 0; i < gamedirLen; i++ )
 					{
 						if ( gamedir[i] == '\\' ) 
 							gamedir[i] = '/';
